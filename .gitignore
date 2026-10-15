@@ -8,16 +8,29 @@ dist/
 data/
 *.db
 *.db-journal
+*.sqlite
+*.sqlite3
 
-# Secrets & environment
-.env
+# Secrets, SSH keys & private configs
+.env*
+!.env.example
 control-panel-config.json
+*.key
+*.pem
+*.ppk
+id_rsa*
 
-# Logs
+# Logs & temp files
 logs/
 *.log
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# OS artifacts
+# OS & Editor artifacts
 .DS_Store
 Thumbs.db
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
