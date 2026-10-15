@@ -10,7 +10,6 @@ const { db } = await import("../dist/db.js");
 const { CONFIG, validateConfig } = await import("../dist/config.js");
 const { openfrontApi } = await import("../dist/api.js");
 const { ClanSyncService } = await import("../dist/clanSync.js");
-const { adminCommand } = await import("../dist/commands/admin.js");
 const { clanCommand } = await import("../dist/commands/clan.js");
 after(() => db.close());
 
@@ -35,7 +34,7 @@ test("configuration rejects missing credentials and invalid intervals", () => {
 
 test("admin and clan mutations reject absent or insufficient permissions", async () => {
   for (const permissions of [null, { has: () => false }]) {
-    for (const [command, sub] of [[adminCommand, "link"], [clanCommand, "setup"], [clanCommand, "remove"]]) {
+    for (const [command, sub] of [[clanCommand, "link"], [clanCommand, "unlink"], [clanCommand, "setup"], [clanCommand, "remove"]]) {
       let reply;
       await command.execute({ guild: { id: "guild" }, memberPermissions: permissions,
         options: { getSubcommand: () => sub }, reply: async (value) => { reply = value; } });

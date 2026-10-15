@@ -38,7 +38,7 @@ export const whoisCommand = {
 
     if (targetUser) {
       // ── Lookup by Discord user ──────────────────────────────
-      link = db.getUserByDiscordId(targetUser.id);
+      link = interaction.guild ? db.getEffectiveLink(interaction.guild.id, targetUser.id) : db.getUserByDiscordId(targetUser.id);
       if (!link) {
         await interaction.editReply({
           content: `ℹ️ Discord user <@${targetUser.id}> is not linked to any OpenFront account.`,
@@ -51,7 +51,7 @@ export const whoisCommand = {
 
       if (maybeDiscordId) {
         // The input is a Discord snowflake / mention. Check if this Discord user is linked.
-        const discordLink = db.getUserByDiscordId(maybeDiscordId);
+        const discordLink = interaction.guild ? db.getEffectiveLink(interaction.guild.id, maybeDiscordId) : db.getUserByDiscordId(maybeDiscordId);
         if (discordLink) {
           link = discordLink;
         } else {
@@ -72,7 +72,7 @@ export const whoisCommand = {
         }
       } else {
         const resolvedId = resolveOpenFrontId(rawOpenfrontInput);
-        link = db.getUserByOpenFrontId(resolvedId);
+        link = interaction.guild ? db.getEffectiveLinkByOpenFrontId(interaction.guild.id, resolvedId) : db.getUserByOpenFrontId(resolvedId);
 
         if (!link) {
           // Not in local DB, but check if the OpenFront profile exists on API

@@ -118,7 +118,7 @@ export const linkCommand = {
     const isVerified = verificationMethod === "identity_token" || isDiscordMatch;
 
     if (isVerified) {
-      db.linkUser(discordId, resolvedOpenFrontId, profile.username || null, verificationMethod);
+      db.linkUser(discordId, resolvedOpenFrontId, profile.username || null, verificationMethod, interaction.guildId);
 
       const embed = new EmbedBuilder()
         .setTitle("✅ Accounts Linked Successfully!")
@@ -152,7 +152,7 @@ export const linkCommand = {
           `   \`/link token:<paste_token_here>\`\n\n` +
           `### 🛡️ Method 2: Clan Officer Approval\n` +
           `Ask a clan officer in this server to run:\n` +
-          `\`/admin link user:@${interaction.user.username} openfront_id:${resolvedOpenFrontId}\``
+          `\`/clan link user:@${interaction.user.username} openfront_id:${resolvedOpenFrontId}\``
       );
 
     await interaction.editReply({ embeds: [embed] });

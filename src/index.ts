@@ -12,7 +12,6 @@ import { linkCommand } from "./commands/link.js";
 import { unlinkCommand } from "./commands/unlink.js";
 import { whoisCommand } from "./commands/whois.js";
 import { clanCommand } from "./commands/clan.js";
-import { adminCommand } from "./commands/admin.js";
 
 validateConfig();
 
@@ -37,7 +36,7 @@ client.once(Events.ClientReady, (c) => {
 // Auto-sync roles when a member joins the Discord server
 client.on(Events.GuildMemberAdd, async (member) => {
   try {
-    const link = db.getUserByDiscordId(member.id);
+    const link = db.getEffectiveLink(member.guild.id, member.id);
     if (link) {
       console.log(`[Bot] Linked user ${member.user.tag} joined guild ${member.guild.name}. Syncing roles...`);
       await clanSyncService.syncMember(member);
@@ -81,10 +80,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       case "clan":
         await clanCommand.execute(interaction, clanSyncService);
-        break;
-
-      case "admin":
-        await adminCommand.execute(interaction, clanSyncService);
         break;
 
       default:

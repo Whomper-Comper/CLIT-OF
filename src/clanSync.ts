@@ -1,6 +1,7 @@
 import { Client, Guild, GuildMember, TextChannel, EmbedBuilder } from "discord.js";
 import { db, GuildClanConfig, LinkedUser } from "./db.js";
 import { openfrontApi } from "./api.js";
+import { MemberLocks, PacedQueue } from "./queues.js";
 
 export interface SyncResult {
   discordId: string;
@@ -24,6 +25,10 @@ export class ClanSyncService {
   private client: Client;
   private timer: NodeJS.Timeout | null = null;
   private isSyncing = false;
+  private cleanupTimer: NodeJS.Timeout | null = null;
+  private cleaning = false;
+  private readonly memberLocks = new MemberLocks();
+  private readonly cleanupPacer = new PacedQueue(1000);
 
   constructor(client: Client) {
     this.client = client;
@@ -42,6 +47,11 @@ export class ClanSyncService {
       });
     }, 60 * 1000);
 
+    this.cleanupTimer = setInterval(() => {
+      void this.processRoleCleanupQueue();
+    }, 250);
+    void this.processRoleCleanupQueue();
+
     console.log("[ClanSync] Periodic sync scheduler started.");
   }
 
@@ -49,6 +59,84 @@ export class ClanSyncService {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+    }
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
+  }
+
+  private async processRoleCleanupQueue() {
+    if (this.cleaning) return;
+    this.cleaning = true;
+    try {
+      while (true) {
+        const job = db.nextJob();
+        if (!job) break;
+        const key = `${job.guild_id}:${job.discord_id}`;
+        try {
+          await this.memberLocks.run(key, async () => {
+            const latest = db.getJob(job.guild_id, job.discord_id);
+            if (!latest || latest.version !== job.version) return;
+            const guild = this.client.guilds.cache.get(job.guild_id);
+            if (!guild) {
+              db.finishJob(job);
+              return;
+            }
+            const member = await guild.members.fetch(job.discord_id).catch((error) => {
+              const code = error && typeof error === "object" && "code" in error ? error.code : null;
+              if (code === 10007) return null; // Discord Unknown Member: no roles remain to clean up.
+              throw error;
+            });
+            if (!member) {
+              db.finishJob(job);
+              return;
+            }
+
+            // Reconcile against a replacement link, or remove roles if no link remains.
+            const currentLink = db.getEffectiveLink(job.guild_id, job.discord_id);
+            if (currentLink) {
+              const configs = db.getGuildConfigs(job.guild_id);
+              for (const config of configs) {
+                const result = await this.syncMemberForClanLocked(member, currentLink, config);
+                if (result.error) throw new Error(result.error);
+                if (result.rolesAdded.length || result.rolesRemoved.length) {
+                  await this.logRoleChange(guild, config, member, result);
+                }
+              }
+              const stillManaged = new Set(db.getGuildConfigs(job.guild_id)
+                .flatMap((config) => [config.member_role_id, config.officer_role_id, config.leader_role_id]
+                  .filter((roleId): roleId is string => Boolean(roleId))));
+              for (const roleId of JSON.parse(job.role_ids) as string[]) {
+                if (stillManaged.has(roleId)) continue;
+                await this.cleanupPacer.run(async () => {
+                  const current = db.getJob(job.guild_id, job.discord_id);
+                  if (current?.version === job.version && member.roles.cache.has(roleId)) {
+                    await member.roles.remove(roleId);
+                  }
+                });
+              }
+              db.finishJob(job);
+              return;
+            }
+
+            for (const roleId of JSON.parse(job.role_ids) as string[]) {
+              await this.cleanupPacer.run(async () => {
+                if (db.getEffectiveLink(job.guild_id, job.discord_id)) return;
+                if (member.roles.cache.has(roleId)) await member.roles.remove(roleId);
+              });
+            }
+            db.finishJob(job);
+          });
+        } catch (error) {
+          db.retryJob(job, error instanceof Error ? error.message : String(error));
+          console.warn(`[ClanSync] Role cleanup for ${job.discord_id} in guild ${job.guild_id} will retry:`, error);
+          // Retry after backoff without blocking other queued removals.
+          break;
+        }
+      }
+    } finally {
+      this.cleaning = false;
     }
   }
 
@@ -109,7 +197,7 @@ export class ClanSyncService {
     for (const [memberId, member] of members) {
       if (member.user.bot) continue;
 
-      const link = db.getUserByDiscordId(memberId);
+      const link = db.getEffectiveLink(guild.id, memberId);
       if (!link) {
         // Even if not linked, check for join_role mismatch (they have the role but no link)
         if (config.join_role_id && member.roles.cache.has(config.join_role_id)) {
@@ -146,7 +234,7 @@ export class ClanSyncService {
       await this.logJoinRoleMismatches(guild, config, mismatches);
     }
 
-    db.updateClanLastSync(guild.id, config.clan_tag);
+    if (!results.some((result) => result.error)) db.updateClanLastSync(guild.id, config.clan_tag);
     return results;
   }
 
@@ -157,7 +245,7 @@ export class ClanSyncService {
     const configs = db.getGuildConfigs(member.guild.id);
     if (configs.length === 0) return [];
 
-    const link = db.getUserByDiscordId(member.id);
+    const link = db.getEffectiveLink(member.guild.id, member.id);
     if (!link) return [];
 
     const results: SyncResult[] = [];
@@ -179,6 +267,16 @@ export class ClanSyncService {
     link: LinkedUser,
     config: GuildClanConfig
   ): Promise<SyncResult> {
+    return this.memberLocks.run(`${config.guild_id}:${member.id}`, () =>
+      this.syncMemberForClanLocked(member, link, config)
+    );
+  }
+
+  private async syncMemberForClanLocked(
+    member: GuildMember,
+    link: LinkedUser,
+    config: GuildClanConfig
+  ): Promise<SyncResult> {
     const result: SyncResult = {
       discordId: member.id,
       openfrontId: link.openfront_id,
@@ -195,9 +293,15 @@ export class ClanSyncService {
         return result;
       }
 
+      const currentLink = db.getEffectiveLink(config.guild_id, member.id);
+      if (!currentLink || currentLink.openfront_id !== link.openfront_id) {
+        result.error = "Link changed while sync was running; skipped stale role updates";
+        return result;
+      }
+
       // Update stored username if changed
       if (profile.username && profile.username !== link.openfront_username) {
-        db.updateUsername(link.discord_id, profile.username);
+        db.updateUsername(link.discord_id, profile.username, config.guild_id);
       }
 
       const targetClanTag = config.clan_tag.toUpperCase();
@@ -207,6 +311,13 @@ export class ClanSyncService {
 
       const targetRolesToAdd: string[] = [];
       const rolesToRemove: string[] = [];
+      const protectedRoleIds = new Set(
+        db.getGuildConfigs(config.guild_id)
+          .filter((other) => other.clan_tag.toUpperCase() !== targetClanTag &&
+            profile.clans?.some((clan) => clan.tag.toUpperCase() === other.clan_tag.toUpperCase()))
+          .flatMap((other) => [other.member_role_id, other.officer_role_id, other.leader_role_id]
+            .filter((roleId): roleId is string => Boolean(roleId)))
+      );
 
       const memberRoleId = config.member_role_id;
       const officerRoleId = config.officer_role_id;
@@ -222,26 +333,26 @@ export class ClanSyncService {
         // Officer role
         if (clanMembership.role === "officer" || clanMembership.role === "leader") {
           if (officerRoleId) targetRolesToAdd.push(officerRoleId);
-        } else if (officerRoleId && member.roles.cache.has(officerRoleId)) {
+        } else if (officerRoleId && member.roles.cache.has(officerRoleId) && !protectedRoleIds.has(officerRoleId)) {
           rolesToRemove.push(officerRoleId);
         }
 
         // Leader role
         if (clanMembership.role === "leader") {
           if (leaderRoleId) targetRolesToAdd.push(leaderRoleId);
-        } else if (leaderRoleId && member.roles.cache.has(leaderRoleId)) {
+        } else if (leaderRoleId && member.roles.cache.has(leaderRoleId) && !protectedRoleIds.has(leaderRoleId)) {
           rolesToRemove.push(leaderRoleId);
         }
       } else {
         // Player is NOT in this clan (or left)
         result.inClan = false;
-        if (memberRoleId && member.roles.cache.has(memberRoleId)) {
+        if (memberRoleId && member.roles.cache.has(memberRoleId) && !protectedRoleIds.has(memberRoleId)) {
           rolesToRemove.push(memberRoleId);
         }
-        if (officerRoleId && member.roles.cache.has(officerRoleId)) {
+        if (officerRoleId && member.roles.cache.has(officerRoleId) && !protectedRoleIds.has(officerRoleId)) {
           rolesToRemove.push(officerRoleId);
         }
-        if (leaderRoleId && member.roles.cache.has(leaderRoleId)) {
+        if (leaderRoleId && member.roles.cache.has(leaderRoleId) && !protectedRoleIds.has(leaderRoleId)) {
           rolesToRemove.push(leaderRoleId);
         }
       }
@@ -253,6 +364,7 @@ export class ClanSyncService {
             await member.roles.add(roleId);
             result.rolesAdded.push(roleId);
           } catch (err) {
+            result.error = `Failed to add role ${roleId}: ${err instanceof Error ? err.message : String(err)}`;
             console.error(`[ClanSync] Failed to add role ${roleId} to ${member.id}:`, err);
           }
         }
@@ -265,6 +377,7 @@ export class ClanSyncService {
             await member.roles.remove(roleId);
             result.rolesRemoved.push(roleId);
           } catch (err) {
+            result.error = `Failed to remove role ${roleId}: ${err instanceof Error ? err.message : String(err)}`;
             console.error(`[ClanSync] Failed to remove role ${roleId} from ${member.id}:`, err);
           }
         }
@@ -310,7 +423,7 @@ export class ClanSyncService {
       if (member.user.bot) continue;
       if (!member.roles.cache.has(config.join_role_id)) continue;
 
-      const link = db.getUserByDiscordId(member.id);
+      const link = db.getEffectiveLink(member.guild.id, member.id);
       if (!link) {
         pendingList.push({
           member,
@@ -357,7 +470,7 @@ export class ClanSyncService {
       // Triggered when join_role is newly added to the member
       if (!hadRole && hasRole) {
         console.log(`[ClanSync] Member ${newMember.user.tag} was given join_role for [${config.clan_tag}]`);
-        const link = db.getUserByDiscordId(newMember.id);
+        const link = db.getEffectiveLink(newMember.guild.id, newMember.id);
 
         if (!link) {
           // Alert in log channel that they need to link

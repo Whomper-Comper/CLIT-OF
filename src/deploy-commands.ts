@@ -4,7 +4,6 @@ import { linkCommand } from "./commands/link.js";
 import { unlinkCommand } from "./commands/unlink.js";
 import { whoisCommand } from "./commands/whois.js";
 import { clanCommand } from "./commands/clan.js";
-import { adminCommand } from "./commands/admin.js";
 
 validateConfig();
 
@@ -13,7 +12,6 @@ const commands = [
   unlinkCommand.data.toJSON(),
   whoisCommand.data.toJSON(),
   clanCommand.data.toJSON(),
-  adminCommand.data.toJSON(),
 ];
 
 const rest = new REST({ version: "10" }).setToken(CONFIG.DISCORD_TOKEN);

@@ -9,7 +9,7 @@ import { CONFIG } from "../config.js";
 import { db } from "../db.js";
 import { openfrontApi } from "../api.js";
 import { ClanSyncService } from "../clanSync.js";
-import { toEpochSeconds } from "../utils.js";
+import { resolveOpenFrontId, toEpochSeconds } from "../utils.js";
 
 /**
  * Consolidated /clan command with subcommands: setup, config, remove, sync, pending.
@@ -90,6 +90,25 @@ export const clanCommand = {
         .addStringOption((opt) =>
           opt.setName("clan_tag").setDescription("Specific clan tag to check (omit for all)").setRequired(false)
         )
+    )
+    .addSubcommand((sub) =>
+      sub.setName("roster").setDescription("Show linked members of a configured OpenFront clan")
+        .addStringOption((opt) => opt.setName("clan_tag").setDescription("Clan tag to list").setRequired(true))
+        .addIntegerOption((opt) => opt.setName("page").setDescription("Page number").setMinValue(1).setRequired(false))
+    )
+    .addSubcommand((sub) =>
+      sub.setName("audit").setDescription("View link changes made in this server")
+        .addUserOption((opt) => opt.setName("user").setDescription("Member to inspect (Manage Server required for others)").setRequired(false))
+        .addIntegerOption((opt) => opt.setName("page").setDescription("Page number").setMinValue(1).setRequired(false))
+    )
+    .addSubcommand((sub) =>
+      sub.setName("link").setDescription("Link a member in this server only (requires Manage Server)")
+        .addUserOption((opt) => opt.setName("user").setDescription("Member to link").setRequired(true))
+        .addStringOption((opt) => opt.setName("openfront_id").setDescription("OpenFront public ID or profile URL").setRequired(true))
+    )
+    .addSubcommand((sub) =>
+      sub.setName("unlink").setDescription("Remove a server-only member link (requires Manage Server)")
+        .addUserOption((opt) => opt.setName("user").setDescription("Member to unlink").setRequired(true))
     ),
 
   async execute(interaction: ChatInputCommandInteraction, clanSync: ClanSyncService) {
@@ -106,6 +125,14 @@ export const clanCommand = {
         return handleSync(interaction, clanSync);
       case "pending":
         return handlePending(interaction, clanSync);
+      case "roster":
+        return handleRoster(interaction);
+      case "audit":
+        return handleAudit(interaction);
+      case "link":
+        return handleGuildLink(interaction, clanSync);
+      case "unlink":
+        return handleGuildUnlink(interaction);
     }
   },
 };
@@ -142,6 +169,7 @@ async function handleSetup(interaction: ChatInputCommandInteraction) {
 
   // Verify clan exists on OpenFront
   const clanInfo = await openfrontApi.getClanInfo(clanTag);
+  const guildMembers = await interaction.guild.members.fetch().catch(() => interaction.guild!.members.cache);
 
   db.setGuildClanConfig({
     guild_id: interaction.guild.id,
@@ -153,7 +181,7 @@ async function handleSetup(interaction: ChatInputCommandInteraction) {
     log_channel_id: logChannel?.id || null,
     sync_interval_mins: syncInterval,
     last_sync_at: null,
-  });
+  }, [...guildMembers.keys()]);
 
   const embed = new EmbedBuilder()
     .setTitle(`⚙️ Clan Sync Configured: [${clanTag}]`)
@@ -258,7 +286,8 @@ async function handleRemove(interaction: ChatInputCommandInteraction) {
   }
 
   const clanTag = interaction.options.getString("clan_tag", true).toUpperCase().trim();
-  const removed = db.deleteGuildClanConfig(interaction.guild.id, clanTag);
+  const guildMembers = await interaction.guild.members.fetch().catch(() => interaction.guild!.members.cache);
+  const removed = db.deleteGuildClanConfig(interaction.guild.id, clanTag, [...guildMembers.keys()]);
 
   await interaction.reply({
     content: removed
@@ -317,7 +346,7 @@ async function handleSync(interaction: ChatInputCommandInteraction, clanSync: Cl
       return;
     }
 
-    const link = db.getUserByDiscordId(targetUser.id);
+    const link = db.getEffectiveLink(interaction.guild.id, targetUser.id);
     if (!link) {
       await interaction.editReply({
         content: `ℹ️ <@${targetUser.id}> is not linked to any OpenFront account. They can link using \`/link\`.`,
@@ -492,4 +521,101 @@ async function handlePending(interaction: ChatInputCommandInteraction, clanSync:
   }
 
   await interaction.editReply({ embeds });
+}
+
+async function handleRoster(interaction: ChatInputCommandInteraction) {
+  if (!interaction.guild) return void await interaction.reply({ content: "This command must be used in a server.", ephemeral: true });
+  const tag = interaction.options.getString("clan_tag", true).trim().toUpperCase();
+  if (!db.getGuildClanConfig(interaction.guild.id, tag)) {
+    return void await interaction.reply({ content: `No configuration found for [${tag}] in this server.`, ephemeral: true });
+  }
+  await interaction.deferReply();
+  const guild = interaction.guild;
+  const [members, links] = await Promise.all([
+    guild.members.fetch().catch(() => guild.members.cache),
+    Promise.resolve(db.getEffectiveLinks(guild.id)),
+  ]);
+  const eligible = links.filter((link) => members.has(link.discord_id));
+  const profiles: { link: typeof eligible[number]; username: string; role: string }[] = [];
+  let next = 0;
+  let unavailable = 0;
+  await Promise.all(Array.from({ length: Math.min(4, eligible.length) }, async () => {
+    while (next < eligible.length) {
+      const link = eligible[next++];
+      const profile = await openfrontApi.getPlayerProfile(link.openfront_id);
+      if (!profile) {
+        unavailable++;
+        continue;
+      }
+      const clan = profile?.clans?.find((entry) => entry.tag.toUpperCase() === tag);
+      if (clan) profiles.push({ link, username: profile.username || link.openfront_username || link.openfront_id, role: clan.role });
+    }
+  }));
+  profiles.sort((a, b) => a.username.localeCompare(b.username));
+  const size = 15;
+  const page = interaction.options.getInteger("page") ?? 1;
+  const pages = Math.max(1, Math.ceil(profiles.length / size));
+  if (page > pages) return void await interaction.editReply({ content: `That page is out of range. This roster has ${pages} page(s).` });
+  const rows = profiles.slice((page - 1) * size, page * size);
+  const embed = new EmbedBuilder().setTitle(`OpenFront Clan Roster: [${tag}]`).setColor(0x3b82f6)
+    .setDescription(rows.length
+      ? rows.map((entry) => `• <@${entry.link.discord_id}> — **[${entry.username}](https://openfront.io/player/${entry.link.openfront_id})** · ${entry.role}`).join("\n")
+      : unavailable
+        ? `OpenFront could not load ${unavailable} linked profile(s), so the roster may be incomplete.`
+        : "No linked members of this clan were found among this server's members.")
+    .setFooter({ text: `${profiles.length} member(s) · Page ${page}/${pages}${unavailable ? ` · ${unavailable} profile(s) unavailable` : ""}` });
+  await interaction.editReply({ embeds: [embed] });
+}
+
+async function handleAudit(interaction: ChatInputCommandInteraction) {
+  if (!interaction.guild) return void await interaction.reply({ content: "This command must be used in a server.", ephemeral: true });
+  const target = interaction.options.getUser("user");
+  if ((!target || target.id !== interaction.user.id) && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+    return void await interaction.reply({ content: "You need Manage Server permission to view link history for other members or the whole server.", ephemeral: true });
+  }
+  const page = interaction.options.getInteger("page") ?? 1;
+  const entries = db.getAudit(interaction.guild.id, target?.id ?? null, page);
+  const embed = new EmbedBuilder().setTitle(target ? `Link History: ${target.username}` : `Link History: ${interaction.guild.name}`)
+    .setColor(0x3b82f6).setDescription(entries.length
+      ? entries.map((entry) => `• <t:${Math.floor(new Date(entry.created_at).getTime() / 1000)}:f> · **${entry.action}** · <@${entry.discord_id}>` +
+        (entry.actor_id !== entry.discord_id ? ` · by <@${entry.actor_id}>` : "") +
+        (entry.old_id ? ` · \`${entry.old_id}\`` : "") + (entry.new_id ? ` → \`${entry.new_id}\`` : "")).join("\n")
+      : "No link changes found for this page.").setFooter({ text: `Page ${page} · 10 entries per page` });
+  await interaction.reply({ embeds: [embed], ephemeral: true });
+}
+
+async function handleGuildLink(interaction: ChatInputCommandInteraction, clanSync: ClanSyncService) {
+  if (!interaction.guild) return void await interaction.reply({ content: "This command must be used in a server.", ephemeral: true });
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+    return void await interaction.reply({ content: "You need Manage Server permission to link a member in this server.", ephemeral: true });
+  }
+  await interaction.deferReply({ ephemeral: true });
+  const target = interaction.options.getUser("user", true);
+  const openfrontId = resolveOpenFrontId(interaction.options.getString("openfront_id", true).trim());
+  const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+  if (!member) return void await interaction.editReply({ content: "That user must be a member of this server." });
+  const profile = await openfrontApi.getPlayerProfile(openfrontId);
+  if (!profile) return void await interaction.editReply({ content: "Could not find that OpenFront profile. Check the ID or URL and try again." });
+  try {
+    db.linkGuildUser(interaction.guild.id, interaction.user.id, target.id, openfrontId, profile.username ?? null);
+  } catch (error) {
+    return void await interaction.editReply({ content: error instanceof Error ? error.message : "Could not save this server link." });
+  }
+  await clanSync.syncMember(member);
+  await interaction.editReply({ content: `Linked <@${target.id}> to [${profile.username || openfrontId}](https://openfront.io/player/${openfrontId}) in this server. They can replace this with their own verified bot-wide \`/link\`.` });
+}
+
+async function handleGuildUnlink(interaction: ChatInputCommandInteraction) {
+  if (!interaction.guild) return void await interaction.reply({ content: "This command must be used in a server.", ephemeral: true });
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+    return void await interaction.reply({ content: "You need Manage Server permission to unlink a member in this server.", ephemeral: true });
+  }
+  const target = interaction.options.getUser("user", true);
+  if (db.getUserByDiscordId(target.id)) {
+    return void await interaction.reply({ content: "That member has a bot-wide verified link. Only they can remove it with `/unlink`.", ephemeral: true });
+  }
+  if (!db.unlinkGuildUser(interaction.guild.id, interaction.user.id, target.id)) {
+    return void await interaction.reply({ content: `No manual link for <@${target.id}> exists in this server.`, ephemeral: true });
+  }
+  await interaction.reply({ content: `Removed <@${target.id}>'s manual link in this server. Their configured clan roles will be cleared in order.`, ephemeral: true });
 }
