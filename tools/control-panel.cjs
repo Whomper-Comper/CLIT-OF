@@ -10,6 +10,7 @@ const { spawn, exec } = require("node:child_process");
 
 const ROOT_DIR = path.resolve(__dirname, "..");
 const CONFIG_FILE = path.join(ROOT_DIR, "control-panel-config.json");
+const LOCAL_ENV_FILE = path.join(ROOT_DIR, ".env");
 const DEFAULT_PORT = 4321;
 
 // Load or initialize config
@@ -42,7 +43,7 @@ function getSshArgs(cfg, remoteCommand) {
     "-o",
     "StrictHostKeyChecking=accept-new",
     "-o",
-    "ConnectTimeout=10",
+    "ConnectTimeout=15",
   ];
 
   if (cfg.keyPath && cfg.keyPath.trim()) {
@@ -55,7 +56,7 @@ function getSshArgs(cfg, remoteCommand) {
   return args;
 }
 
-// Build SCP command arguments for direct code upload
+// Build SCP command arguments for file transfers
 function getScpArgs(cfg, localPath, remotePath) {
   const args = [
     "-P",
@@ -81,7 +82,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CLIT-OF Bot • Control Panel & Deployer</title>
+  <title>CLIT-OF Bot • Oracle Server Manager</title>
   <style>
     :root {
       --bg: #0b0f19;
@@ -105,7 +106,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       padding: 24px;
       line-height: 1.5;
     }
-    .container { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+    .container { max-width: 1280px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
     
     /* Header */
     header {
@@ -135,8 +136,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
     /* Layout */
-    .grid { display: grid; grid-template-columns: 360px 1fr; gap: 20px; }
-    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+    .grid { display: grid; grid-template-columns: 340px 1fr; gap: 20px; }
+    @media (max-width: 960px) { .grid { grid-template-columns: 1fr; } }
 
     /* Card */
     .card {
@@ -145,33 +146,33 @@ const HTML_CONTENT = `<!DOCTYPE html>
       border-radius: 12px;
       padding: 20px;
     }
-    .card h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+    .card h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
 
     /* Forms */
-    .form-group { margin-bottom: 14px; }
-    .form-group label { display: block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .form-group { margin-bottom: 12px; }
+    .form-group label { display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
     .form-group input {
       width: 100%;
       background: #0f172a;
       border: 1px solid #334155;
-      padding: 10px 12px;
+      padding: 9px 12px;
       border-radius: 8px;
       color: #fff;
-      font-size: 0.9rem;
+      font-size: 0.88rem;
       outline: none;
       transition: border-color 0.2s;
     }
     .form-group input:focus { border-color: var(--accent); }
-    .form-row { display: grid; grid-template-columns: 1fr 100px; gap: 10px; }
+    .form-row { display: grid; grid-template-columns: 1fr 90px; gap: 10px; }
 
     /* Buttons */
     button {
       cursor: pointer;
-      font-size: 0.9rem;
+      font-size: 0.88rem;
       font-weight: 500;
       border-radius: 8px;
       border: none;
-      padding: 10px 16px;
+      padding: 10px 14px;
       transition: all 0.15s ease;
       display: inline-flex;
       align-items: center;
@@ -184,18 +185,32 @@ const HTML_CONTENT = `<!DOCTYPE html>
     .btn-secondary { background: #1e293b; color: var(--text); border: 1px solid #334155; }
     .btn-secondary:hover:not(:disabled) { background: #334155; }
 
+    /* Section Tabs / Headers */
+    .section-title {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      font-weight: 700;
+      color: var(--text-muted);
+      margin: 16px 0 10px 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .section-title:first-child { margin-top: 0; }
+
     /* Actions Grid */
-    .actions-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .actions-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 12px; }
     .action-btn {
       background: #182238;
       border: 1px solid var(--card-border);
       color: #fff;
-      padding: 16px;
+      padding: 14px;
       border-radius: 10px;
       display: flex;
       flex-direction: column;
       align-items: flex-start;
-      gap: 6px;
+      gap: 5px;
       text-align: left;
     }
     .action-btn:hover:not(:disabled) {
@@ -203,8 +218,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
       background: #1e2d4a;
       transform: translateY(-1px);
     }
-    .action-btn span.title { font-weight: 600; font-size: 0.95rem; display: flex; align-items: center; gap: 8px; }
-    .action-btn span.desc { font-size: 0.75rem; color: var(--text-muted); }
+    .action-btn span.title { font-weight: 600; font-size: 0.9rem; display: flex; align-items: center; gap: 8px; }
+    .action-btn span.desc { font-size: 0.72rem; color: var(--text-muted); line-height: 1.3; }
 
     .action-btn.deploy { border-left: 4px solid var(--accent); }
     .action-btn.upload { border-left: 4px solid #a855f7; }
@@ -212,6 +227,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
     .action-btn.stop { border-left: 4px solid var(--danger); }
     .action-btn.restart { border-left: 4px solid var(--warning); }
     .action-btn.sync { border-left: 4px solid #06b6d4; }
+    .action-btn.setup { border-left: 4px solid #f97316; }
+    .action-btn.sys { border-left: 4px solid #10b981; }
 
     /* Terminal */
     .terminal-container {
@@ -221,7 +238,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
       overflow: hidden;
       display: flex;
       flex-direction: column;
-      height: 480px;
+      height: 440px;
     }
     .terminal-header {
       background: #0f172a;
@@ -282,7 +299,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         <h2>⚙️ Server Connection</h2>
         <div class="form-group">
           <label>Server IP / Host</label>
-          <input type="text" id="host" placeholder="123.456.78.90">
+          <input type="text" id="host" placeholder="e.g. 150.136.x.x">
         </div>
         <div class="form-row">
           <div class="form-group">
@@ -296,7 +313,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
         </div>
         <div class="form-group">
           <label>SSH Key File Path (.key / .pem)</label>
-          <input type="text" id="keyPath" placeholder="C:\\path\\to\\ssh-key.key">
+          <input type="text" id="keyPath" placeholder="C:\\path\\to\\your-ssh-key.key">
         </div>
         <div class="form-group">
           <label>Remote Bot Directory</label>
@@ -306,28 +323,57 @@ const HTML_CONTENT = `<!DOCTYPE html>
         <button class="btn-primary" id="saveAndTestBtn" onclick="saveAndTestConnection()">
           💾 Save & Test Connection
         </button>
+
+        <div style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--card-border);">
+          <div class="section-title">🔑 Quick Config Sync</div>
+          <button class="btn-secondary" style="width: 100%; justify-content: center;" onclick="runAction('upload_env')">
+            📤 Upload Local .env to Server
+          </button>
+        </div>
       </div>
 
       <!-- Right Column: Operations -->
-      <div style="display: flex; flex-direction: column; gap: 20px;">
+      <div style="display: flex; flex-direction: column; gap: 16px;">
         <div class="card">
-          <h2>⚡ Bot Management Actions</h2>
+          <!-- Section 1: Server Setup & Maintenance -->
+          <div class="section-title">🛠️ Server Setup & System Updates</div>
+          <div class="actions-grid">
+            <button class="action-btn setup" onclick="runAction('initial_setup')">
+              <span class="title">⚡ Initial Server Setup</span>
+              <span class="desc">Installs Node 22 LTS, Git, build tools & PM2 on clean VM</span>
+            </button>
+            <button class="action-btn sys" onclick="runAction('apt_update')">
+              <span class="title">🔄 Sudo Apt Update</span>
+              <span class="desc">apt-get update & upgrade system packages</span>
+            </button>
+            <button class="action-btn" onclick="runAction('npm_install')">
+              <span class="title">📦 NPM Install/Update</span>
+              <span class="desc">Run npm install & update dependencies</span>
+            </button>
+            <button class="action-btn" onclick="runAction('system_info')">
+              <span class="title">ℹ️ Server Hardware Info</span>
+              <span class="desc">Check RAM, disk space, CPU & uptime</span>
+            </button>
+          </div>
+
+          <!-- Section 2: Bot Management -->
+          <div class="section-title">🤖 Bot Management & Code Updates</div>
           <div class="actions-grid">
             <button class="action-btn deploy" onclick="runAction('deploy_git')">
-              <span class="title">🚀 Git Deploy</span>
-              <span class="desc">Pull origin main, build, deploy slash cmds, restart PM2</span>
+              <span class="title">🚀 Git Pull & Deploy</span>
+              <span class="desc">Pull main, build, sync slash commands & restart PM2</span>
             </button>
             <button class="action-btn upload" onclick="runAction('direct_upload')">
-              <span class="title">📦 Direct Upload</span>
-              <span class="desc">SCP local files directly to VM & restart (bypasses git push)</span>
+              <span class="title">📦 Direct Code Upload</span>
+              <span class="desc">SCP local files directly to VM & restart (no git push needed)</span>
             </button>
             <button class="action-btn restart" onclick="runAction('restart')">
               <span class="title">🔄 Restart Bot</span>
               <span class="desc">pm2 restart clit-of-bot</span>
             </button>
             <button class="action-btn sync" onclick="runAction('commands_refresh')">
-              <span class="title">🌐 Update Commands</span>
-              <span class="desc">Re-register (/) slash commands</span>
+              <span class="title">🌐 Force Cmd Sync</span>
+              <span class="desc">Re-register slash commands with Discord API</span>
             </button>
             <button class="action-btn start" onclick="runAction('start')">
               <span class="title">▶️ Start Bot</span>
@@ -339,7 +385,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
             </button>
             <button class="action-btn" onclick="runAction('status')">
               <span class="title">📊 PM2 Status</span>
-              <span class="desc">Inspect memory, uptime, process</span>
+              <span class="desc">Inspect RAM, CPU, PID & status</span>
             </button>
             <button class="action-btn" onclick="runAction('logs')">
               <span class="title">📜 View Logs</span>
@@ -357,7 +403,7 @@ const HTML_CONTENT = `<!DOCTYPE html>
               <button class="btn-secondary" style="padding: 4px 8px; font-size: 0.75rem;" onclick="copyTerminal()">Copy</button>
             </div>
           </div>
-          <div class="terminal-body" id="terminal">Welcome to OpenFront Bot Control Panel.\nClick 'Save & Test Connection' or any action above to start.</div>
+          <div class="terminal-body" id="terminal">Welcome to OpenFront Bot Control Panel.\nClick '⚡ Initial Server Setup' if starting on a new VM, or 'Save & Test Connection' to verify SSH.</div>
           <div class="terminal-input-bar">
             <input type="text" id="customCmd" placeholder="Type custom SSH command (e.g. pm2 list, git status, htop) and press Enter..." onkeydown="handleKey(event)">
             <button class="btn-secondary" onclick="runCustomCommand()">Run Command</button>
@@ -576,6 +622,36 @@ const server = http.createServer((req, res) => {
         "Transfer-Encoding": "chunked",
       });
 
+      // Special action: Upload local .env file to remote server
+      if (action === "upload_env") {
+        if (!fs.existsSync(LOCAL_ENV_FILE)) {
+          res.write("❌ Error: Local .env file does not exist in discord-bot folder!\n");
+          res.write("Please create .env locally first (copy .env.example -> .env) with your DISCORD_TOKEN and CLIENT_ID.\n");
+          return res.end();
+        }
+
+        res.write(`[1/2] Uploading local .env to ${cfg.host}:${remoteDir}/.env...\n`);
+
+        await new Promise((resolve) => {
+          const scpArgs = getScpArgs(cfg, LOCAL_ENV_FILE, `${remoteDir}/.env`);
+          const p = spawn("scp", scpArgs);
+
+          p.stdout.on("data", (d) => res.write(d));
+          p.stderr.on("data", (d) => res.write(d));
+          p.on("close", (code) => {
+            if (code === 0) {
+              res.write("✅ .env uploaded successfully to the remote server!\n");
+            } else {
+              res.write(`\n❌ Failed to upload .env (exit code ${code}). Check if remote directory exists.\n`);
+            }
+            resolve();
+          });
+        });
+
+        res.write("[2/2] Done!\n");
+        return res.end();
+      }
+
       // Special action: Direct SCP Code Upload (Syncs local files directly without git push!)
       if (action === "direct_upload") {
         res.write(`[1/3] Uploading local codebase to ${cfg.host}:${remoteDir} via SCP...\n`);
@@ -636,30 +712,74 @@ const server = http.createServer((req, res) => {
         case "test_connection":
           remoteCmd = 'echo "SSH_OK: Connected to $(hostname) as $(whoami) [$(uname -srm)]"';
           break;
+
+        case "initial_setup":
+          remoteCmd = [
+            'echo "=== [1/5] Updating system packages ==="',
+            'sudo DEBIAN_FRONTEND=noninteractive apt-get update -y',
+            'echo "=== [2/5] Installing curl, git, build-essential ==="',
+            'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl git build-essential',
+            'echo "=== [3/5] Installing Node.js 22 LTS via NodeSource ==="',
+            'curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -',
+            'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs',
+            'echo "=== [4/5] Installing PM2 process manager ==="',
+            'sudo npm install -g pm2',
+            `mkdir -p ${remoteDir}`,
+            'echo "=== [5/5] Setup Complete! Verified versions: ==="',
+            'node -v && npm -v && pm2 -v && git --version',
+          ].join(" && ");
+          break;
+
+        case "apt_update":
+          remoteCmd = 'sudo DEBIAN_FRONTEND=noninteractive apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y';
+          break;
+
+        case "npm_install":
+          remoteCmd = `cd ${remoteDir} && npm install && npm update && npm list --depth=0`;
+          break;
+
+        case "system_info":
+          remoteCmd = [
+            'echo "=== OS & Kernel ===" && uname -a',
+            'echo "\n=== Uptime & Load ===" && uptime',
+            'echo "\n=== Memory Usage ===" && free -h',
+            'echo "\n=== Disk Space ===" && df -h /',
+            'echo "\n=== Installed Runtimes ===" && echo "Node: $(node -v 2>/dev/null || echo \'Not installed\')" && echo "NPM: $(npm -v 2>/dev/null || echo \'Not installed\')" && echo "PM2: $(pm2 -v 2>/dev/null || echo \'Not installed\')"',
+          ].join(" && ");
+          break;
+
         case "deploy_git":
           remoteCmd = `cd ${remoteDir} && chmod +x deploy.sh && ./deploy.sh`;
           break;
+
         case "start":
           remoteCmd = `cd ${remoteDir} && pm2 start ecosystem.config.cjs && pm2 save && pm2 status clit-of-bot`;
           break;
+
         case "stop":
           remoteCmd = "pm2 stop clit-of-bot && pm2 status clit-of-bot";
           break;
+
         case "restart":
           remoteCmd = "pm2 restart clit-of-bot && pm2 status clit-of-bot";
           break;
+
         case "status":
           remoteCmd = "pm2 status clit-of-bot";
           break;
+
         case "logs":
           remoteCmd = "pm2 logs clit-of-bot --lines 60 --nostream";
           break;
+
         case "commands_refresh":
           remoteCmd = `cd ${remoteDir} && npm run register-commands`;
           break;
+
         case "custom":
           remoteCmd = payload.command || 'echo "No command provided"';
           break;
+
         default:
           remoteCmd = 'echo "Unknown action"';
       }
