@@ -48,7 +48,9 @@ function getSshArgs(cfg, remoteCommand) {
     "-o",
     "StrictHostKeyChecking=no",
     "-o",
-    "ConnectTimeout=30",
+    "UserKnownHostsFile=NUL",
+    "-o",
+    "ConnectTimeout=60",
     "-o",
     "ServerAliveInterval=15",
     "-o",
@@ -77,7 +79,9 @@ function getScpArgs(cfg, localPath, remotePath) {
     "-o",
     "StrictHostKeyChecking=no",
     "-o",
-    "ConnectTimeout=30",
+    "UserKnownHostsFile=NUL",
+    "-o",
+    "ConnectTimeout=60",
     "-r",
   ];
 
@@ -373,10 +377,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
               <span class="title">📦 NPM Install/Update</span>
               <span class="desc">Run npm install & update dependencies</span>
             </button>
-            <button class="action-btn sys" onclick="runAction('optimize_memory')">
-              <span class="title">🧹 Free RAM & Swap</span>
-              <span class="desc">Clear Linux OS page caches & activate 2GB swap</span>
-            </button>
             <button class="action-btn" onclick="runAction('system_info')">
               <span class="title">ℹ️ Server Hardware Info</span>
               <span class="desc">Check RAM, disk space, CPU & uptime</span>
@@ -415,16 +415,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
               <span class="desc">Inspect RAM, CPU, PID & status</span>
             </button>
             <button class="action-btn" onclick="runAction('logs')">
-              <span class="title">📜 View Logs (Recent)</span>
+              <span class="title">📜 View Logs</span>
               <span class="desc">Show recent 60 lines of bot logs</span>
-            </button>
-            <button class="action-btn" style="border-left: 4px solid #ec4899;" onclick="runAction('advanced_logs')">
-              <span class="title">🔬 Advanced Diagnostics</span>
-              <span class="desc">PM2 stdout, stderr, error logs & memory health</span>
-            </button>
-            <button class="action-btn" style="border-left: 4px solid #6366f1;" onclick="runAction('test_discord_api')">
-              <span class="title">🌐 Test Discord API</span>
-              <span class="desc">Ping Discord Gateway & verify .env format</span>
             </button>
           </div>
         </div>
@@ -432,16 +424,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
         <!-- Terminal Output -->
         <div class="terminal-container">
           <div class="terminal-header">
-            <div class="title" style="display: flex; align-items: center; gap: 8px;">
-              <span>💻 Live SSH Terminal Output</span>
-              <span id="activityBadge" style="display:none; font-size:0.75rem; color:#38bdf8; background:rgba(56,189,248,0.15); padding:2px 8px; border-radius:12px; font-weight:normal;">
-                ⏳ Working... <span id="timerText">0s</span>
-              </span>
-            </div>
-            <div style="display: flex; align-items: center; gap: 10px;">
-              <label style="font-size:0.75rem; color:var(--text-muted); display:inline-flex; align-items:center; gap:4px; cursor:pointer;">
-                <input type="checkbox" id="timestampsToggle" checked> Timestamps
-              </label>
+            <span class="title">💻 Live SSH Terminal Output</span>
+            <div style="display: flex; gap: 8px;">
               <button class="btn-secondary" style="padding: 4px 8px; font-size: 0.75rem;" onclick="clearTerminal()">Clear</button>
               <button class="btn-secondary" style="padding: 4px 8px; font-size: 0.75rem;" onclick="copyTerminal()">Copy</button>
             </div>
@@ -457,164 +441,85 @@ const HTML_CONTENT = `<!DOCTYPE html>
   </div>
 
   <script>
-    // Global error listener so any browser error is immediately visible in the terminal
-    window.onerror = function(msg, url, line) {
-      console.error('Browser error:', msg, 'at line', line);
-      const t = document.getElementById('terminal');
-      if (t) t.textContent += '\n⚠️ Browser Error (line ' + line + '): ' + msg + '\n';
-      return false;
-    };
+    const term = document.getElementById('terminal');
+    const dot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
 
-    window.addEventListener('unhandledrejection', function(e) {
-      console.error('Unhandled Promise Rejection:', e.reason);
-      const t = document.getElementById('terminal');
-      if (t) t.textContent += '\n⚠️ Unhandled Rejection: ' + (e.reason?.message || e.reason) + '\n';
-    });
-
-    let timerInterval = null;
-    let actionStart = null;
-
-    function getEl(id) {
-      return document.getElementById(id);
-    }
-
-    function ts() {
-      const toggle = getEl('timestampsToggle');
-      if (!toggle || !toggle.checked) return '';
-      const d = new Date();
-      return '[' + d.toLocaleTimeString() + '] ';
-    }
+    // Load initial config
+    fetch('/api/config')
+      .then(res => res.json())
+      .then(cfg => {
+        document.getElementById('host').value = cfg.host || '';
+        document.getElementById('username').value = cfg.username || 'ubuntu';
+        document.getElementById('port').value = cfg.port || '22';
+        document.getElementById('keyPath').value = cfg.keyPath || '';
+        document.getElementById('remoteDir').value = cfg.remoteDir || '~/discord-bot';
+        document.getElementById('githubToken').value = cfg.githubToken || '';
+        if (cfg.host) testConnectionSilently();
+      });
 
     function log(msg) {
-      const term = getEl('terminal');
-      if (term) {
-        term.textContent += msg;
-        term.scrollTop = term.scrollHeight;
-      }
-      console.log(msg);
+      term.textContent += msg;
+      term.scrollTop = term.scrollHeight;
     }
 
-    function logLine(msg) {
-      log(ts() + msg + '\n');
-    }
-
-    function clearTerminal() {
-      const term = getEl('terminal');
-      if (term) term.textContent = '';
-    }
-
-    function copyTerminal() {
-      const term = getEl('terminal');
-      if (term) {
-        navigator.clipboard.writeText(term.textContent);
-        alert('Terminal copied to clipboard!');
-      }
-    }
-
-    function startTimer() {
-      actionStart = Date.now();
-      const badge = getEl('activityBadge');
-      const timerEl = getEl('timerText');
-      if (badge) badge.style.display = 'inline';
-      if (timerEl) timerEl.textContent = '0s';
-      clearInterval(timerInterval);
-      timerInterval = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - actionStart) / 1000);
-        const m = Math.floor(elapsed / 60);
-        const s = elapsed % 60;
-        const currentTimer = getEl('timerText');
-        if (currentTimer) {
-          currentTimer.textContent = m > 0 ? m + 'm ' + s + 's' : s + 's';
-        }
-      }, 500);
-    }
-
-    function stopTimer() {
-      clearInterval(timerInterval);
-      const elapsed = actionStart ? ((Date.now() - actionStart) / 1000).toFixed(1) : '?';
-      const badge = getEl('activityBadge');
-      if (badge) badge.style.display = 'none';
-      actionStart = null;
-      return elapsed;
-    }
+    function clearTerminal() { term.textContent = ''; }
+    function copyTerminal() { navigator.clipboard.writeText(term.textContent); alert('Terminal copied to clipboard!'); }
 
     function getConfig() {
       return {
-        host: (getEl('host')?.value || '').trim(),
-        username: (getEl('username')?.value || '').trim(),
-        port: (getEl('port')?.value || '').trim(),
-        keyPath: (getEl('keyPath')?.value || '').trim(),
-        remoteDir: (getEl('remoteDir')?.value || '').trim(),
-        githubToken: (getEl('githubToken')?.value || '').trim(),
+        host: document.getElementById('host').value.trim(),
+        username: document.getElementById('username').value.trim(),
+        port: document.getElementById('port').value.trim(),
+        keyPath: document.getElementById('keyPath').value.trim(),
+        remoteDir: document.getElementById('remoteDir').value.trim(),
+        githubToken: document.getElementById('githubToken').value.trim(),
       };
     }
 
     async function saveConfig() {
-      try {
-        const cfg = getConfig();
-        await fetch('/api/config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(cfg),
-        });
-      } catch (err) {
-        console.warn('saveConfig non-fatal error:', err);
-      }
+      const cfg = getConfig();
+      await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cfg),
+      });
     }
 
     async function testConnectionSilently() {
-      const dot = getEl('statusDot');
-      const statusText = getEl('statusText');
-      if (dot) dot.className = 'dot busy';
-      if (statusText) statusText.textContent = 'Checking SSH...';
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000);
-
       try {
         const res = await fetch('/api/action', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'test_connection' }),
-          signal: controller.signal,
         });
-        clearTimeout(timeoutId);
         const text = await res.text();
         if (text.includes('SSH_OK')) {
-          if (dot) dot.className = 'dot online';
-          if (statusText) statusText.textContent = 'Server Connected';
+          dot.className = 'dot online';
+          statusText.textContent = 'Server Connected';
         } else {
-          if (dot) dot.className = 'dot offline';
-          if (statusText) statusText.textContent = 'SSH Disconnected';
+          dot.className = 'dot offline';
+          statusText.textContent = 'SSH Disconnected';
         }
-      } catch (err) {
-        clearTimeout(timeoutId);
-        if (dot) dot.className = 'dot offline';
-        if (statusText) statusText.textContent = 'SSH Disconnected';
+      } catch {
+        dot.className = 'dot offline';
+        statusText.textContent = 'SSH Disconnected';
       }
     }
 
     async function saveAndTestConnection() {
       await saveConfig();
-      const dot = getEl('statusDot');
-      const statusText = getEl('statusText');
-      if (dot) dot.className = 'dot busy';
-      if (statusText) statusText.textContent = 'Testing SSH...';
-      logLine('--- Testing SSH Connection ---');
-      await runAction('test_connection');
+      dot.className = 'dot busy';
+      statusText.textContent = 'Testing SSH...';
+      log('\\n\\n--- [Testing SSH Connection] ---\\n');
+      runAction('test_connection');
     }
 
     async function runAction(action) {
-      console.log('runAction called with:', action);
       await saveConfig();
-
-      const dot = getEl('statusDot');
-      const statusText = getEl('statusText');
-      if (dot) dot.className = 'dot busy';
-      if (statusText) statusText.textContent = 'Executing...';
-
-      startTimer();
-      logLine('>>> Starting action: ' + action);
+      dot.className = 'dot busy';
+      statusText.textContent = 'Executing...';
+      log('\\n>>> Action: ' + action + '\\n');
 
       try {
         const response = await fetch('/api/action', {
@@ -622,10 +527,6 @@ const HTML_CONTENT = `<!DOCTYPE html>
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action }),
         });
-
-        if (!response.ok) {
-          throw new Error('HTTP ' + response.status + ' ' + response.statusText);
-        }
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -636,15 +537,12 @@ const HTML_CONTENT = `<!DOCTYPE html>
           log(decoder.decode(value, { stream: true }));
         }
 
-        const elapsed = stopTimer();
-        logLine('✅ Completed: ' + action + ' (' + elapsed + 's)');
-        if (dot) dot.className = 'dot online';
-        if (statusText) statusText.textContent = 'Done (' + elapsed + 's)';
+        dot.className = 'dot online';
+        statusText.textContent = 'Server Connected';
       } catch (err) {
-        const elapsed = stopTimer();
-        logLine('❌ Error: ' + err.message + ' (' + elapsed + 's)');
-        if (dot) dot.className = 'dot offline';
-        if (statusText) statusText.textContent = 'Command Failed';
+        log('\\n❌ Error executing command: ' + err.message + '\\n');
+        dot.className = 'dot offline';
+        statusText.textContent = 'Command Failed';
       }
     }
 
@@ -653,21 +551,18 @@ const HTML_CONTENT = `<!DOCTYPE html>
     }
 
     function runCustomCommand() {
-      const input = getEl('customCmd');
-      const cmd = (input?.value || '').trim();
+      const input = document.getElementById('customCmd');
+      const cmd = input.value.trim();
       if (!cmd) return;
       input.value = '';
-      logLine('$ ' + cmd);
+      log('\\n$ ' + cmd + '\\n');
       runActionCustom(cmd);
     }
 
     async function runActionCustom(cmd) {
       await saveConfig();
-      const dot = getEl('statusDot');
-      const statusText = getEl('statusText');
-      if (dot) dot.className = 'dot busy';
-      if (statusText) statusText.textContent = 'Running...';
-      startTimer();
+      dot.className = 'dot busy';
+      statusText.textContent = 'Running command...';
 
       try {
         const response = await fetch('/api/action', {
@@ -685,31 +580,12 @@ const HTML_CONTENT = `<!DOCTYPE html>
           log(decoder.decode(value, { stream: true }));
         }
 
-        const elapsed = stopTimer();
-        logLine('✅ Command finished (' + elapsed + 's)');
-        if (dot) dot.className = 'dot online';
-        if (statusText) statusText.textContent = 'Done (' + elapsed + 's)';
+        dot.className = 'dot online';
+        statusText.textContent = 'Server Connected';
       } catch (err) {
-        const elapsed = stopTimer();
-        logLine('❌ Error: ' + err.message);
-        if (dot) dot.className = 'dot offline';
-        if (statusText) statusText.textContent = 'Failed';
+        log('\\n❌ Error: ' + err.message + '\\n');
       }
     }
-
-    // Load initial config from server
-    fetch('/api/config')
-      .then(res => res.json())
-      .then(cfg => {
-        if (getEl('host')) getEl('host').value = cfg.host || '';
-        if (getEl('username')) getEl('username').value = cfg.username || 'ubuntu';
-        if (getEl('port')) getEl('port').value = cfg.port || '22';
-        if (getEl('keyPath')) getEl('keyPath').value = cfg.keyPath || '';
-        if (getEl('remoteDir')) getEl('remoteDir').value = cfg.remoteDir || '~/discord-bot';
-        if (getEl('githubToken')) getEl('githubToken').value = cfg.githubToken || '';
-        if (cfg.host) testConnectionSilently();
-      })
-      .catch(err => console.warn('Could not load config:', err));
   </script>
 </body>
 </html>`;
@@ -720,11 +596,7 @@ const server = http.createServer((req, res) => {
 
   // GET / -> Serve GUI HTML
   if (req.method === "GET" && url.pathname === "/") {
-    res.writeHead(200, {
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store, no-cache, must-revalidate",
-      "Pragma": "no-cache"
-    });
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     return res.end(HTML_CONTENT);
   }
 
@@ -883,66 +755,26 @@ const server = http.createServer((req, res) => {
 
       switch (action) {
         case "test_connection":
-          remoteCmd = 'echo SSH_OK && whoami && hostname && free -h | head -2';
+          remoteCmd = 'echo "SSH_OK: Connected to $(hostname) as $(whoami) [$(uname -srm)]"';
           break;
 
         case "initial_setup": {
-          // Oracle Always Free = 1GB RAM. dnf/apt get OOM-killed without swap.
-          // Step 1: Create 2GB swap FIRST, then install packages one-by-one.
+          const token = (cfg.githubToken || "").trim();
+          const repoUrl = token
+            ? `https://${token}@github.com/Whomper-Comper/CLIT-OF.git`
+            : "https://github.com/Whomper-Comper/CLIT-OF.git";
+
           remoteCmd = [
-            'echo "══════════════════════════════════════════════════════"',
-            'echo "  ⚡ CLIT-OF Initial Server Setup"',
-            'echo "══════════════════════════════════════════════════════"',
-            'echo ""',
-
-            // Step 1: Swap (critical for 1GB Oracle Always Free)
-            'echo "▸ [1/6] Creating 2GB swap file (prevents OOM on 1GB VM)..."',
-            'if [ ! -f /swapfile ]; then sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile && echo "/swapfile swap swap defaults 0 0" | sudo tee -a /etc/fstab && echo "  ✓ 2GB swap created and activated"; else echo "  ✓ Swap already exists"; fi',
-            'free -h | grep -i swap',
-            'echo ""',
-
-            // Step 2: Detect OS + install system packages
-            'echo "▸ [2/6] Installing system packages (git, curl, build tools)..."',
-            'if command -v dnf >/dev/null 2>&1; then echo "  OS: Oracle Linux / RHEL (dnf)" && sudo dnf install -y git curl tar && echo "  ✓ System packages installed"; elif command -v apt-get >/dev/null 2>&1; then echo "  OS: Ubuntu / Debian (apt-get)" && sudo DEBIAN_FRONTEND=noninteractive apt-get update -y && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl git build-essential && echo "  ✓ System packages installed"; else echo "  ✗ Unsupported package manager" && exit 1; fi',
-            'echo ""',
-
-            // Step 3: Node.js 22 LTS
-            'echo "▸ [3/6] Installing Node.js 22 LTS..."',
-            'if command -v dnf >/dev/null 2>&1; then curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash - && sudo dnf install -y nodejs; else curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs; fi',
-            'echo "  ✓ Node.js $(node -v) installed"',
-            'echo "  ✓ npm $(npm -v) installed"',
-            'echo ""',
-
-            // Step 4: PM2
-            'echo "▸ [4/6] Installing PM2 process manager..."',
+            'echo "=== [1/4] Detecting OS & Installing Node.js 22 LTS ==="',
+            'if command -v dnf >/dev/null 2>&1; then echo "Detected Oracle Linux / RHEL (dnf)" && sudo dnf install -y git curl gcc-c++ make tar && curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash - && sudo dnf install -y nodejs; elif command -v apt-get >/dev/null 2>&1; then echo "Detected Ubuntu / Debian (apt-get)" && sudo DEBIAN_FRONTEND=noninteractive apt-get update -y && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl git build-essential && curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs; else echo "Unsupported package manager"; exit 1; fi',
+            'echo "=== [2/4] Installing PM2 Process Manager ==="',
             'sudo npm install -g pm2',
-            'echo "  ✓ PM2 $(pm2 -v) installed"',
-            'echo ""',
-
-            // Step 5: Create bot directory
-            'echo "▸ [5/6] Creating bot directory..."',
-            `mkdir -p ${remoteDir}`,
-            `echo "  ✓ ${remoteDir} ready"`,
-            'echo ""',
-
-            // Step 6: PM2 startup (auto-start on reboot)
-            'echo "▸ [6/6] Configuring PM2 startup on reboot..."',
-            'sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u $(whoami) --hp $HOME 2>/dev/null || echo "  ⚠ PM2 startup already configured"',
-            'echo ""',
-
-            'echo "══════════════════════════════════════════════════════"',
-            'echo "  ✅ Server setup complete!"',
-            'echo "  Next: Click \'🔗 Clone / Sync Repo\' to pull your code"',
-            'echo "══════════════════════════════════════════════════════"',
-            'echo ""',
-            'echo "Installed versions:"',
-            'echo "  Node.js: $(node -v)"',
-            'echo "  npm:     $(npm -v)"',
-            'echo "  PM2:     $(pm2 -v)"',
-            'echo "  Git:     $(git --version)"',
-            'echo ""',
-            'echo "Memory after setup:"',
-            'free -h',
+            `echo "=== [3/4] Preparing Bot Directory ===" && mkdir -p ${remoteDir}`,
+            (token
+              ? `if [ ! -d "${remoteDir}/.git" ]; then echo "=== Auto-cloning private repository with GitHub Token ===" && rm -rf ${remoteDir} && git clone ${repoUrl} ${remoteDir}; fi`
+              : 'echo "=== [No GitHub token provided, directory created] ==="'),
+            'echo "=== [4/4] Environment Ready! ==="',
+            'node -v && npm -v && pm2 -v && git --version',
           ].join(" && ");
           break;
         }
@@ -954,83 +786,32 @@ const server = http.createServer((req, res) => {
             : "https://github.com/Whomper-Comper/CLIT-OF.git";
 
           remoteCmd = [
-            'echo "▸ Checking repository status..."',
+            `echo "=== Cloning / Reconnecting CLIT-OF Repository ==="`,
             `if [ ! -d "${remoteDir}" ] || [ ! -d "${remoteDir}/.git" ]; then ` +
-              `echo "  Cloning fresh copy of CLIT-OF..." && ` +
-              `rm -rf ${remoteDir} && git clone ${repoUrl} ${remoteDir} && ` +
-              `echo "  ✓ Repository cloned successfully"; ` +
+              `rm -rf ${remoteDir} && git clone ${repoUrl} ${remoteDir}; ` +
             `else ` +
-              `echo "  Updating existing repository..." && ` +
-              `cd ${remoteDir} && git remote set-url origin ${repoUrl} && git fetch origin && git reset --hard origin/main && ` +
-              `echo "  ✓ Repository updated to latest main"; ` +
+              `cd ${remoteDir} && git remote set-url origin ${repoUrl} && git pull origin main; ` +
             `fi`,
-            `echo "" && echo "  Directory: ${remoteDir}" && ls -la ${remoteDir}/ | head -15`,
+            `echo "✅ Git repository is ready in ${remoteDir}"`,
           ].join(" && ");
           break;
         }
 
-        case "optimize_memory":
-          remoteCmd = [
-            'echo "▸ Current memory state:"',
-            'free -h',
-            'echo ""',
-
-            'echo "▸ Clearing page cache, dentries and inodes..."',
-            'sudo sh -c "sync && echo 3 > /proc/sys/vm/drop_caches"',
-            'echo "  ✓ Caches cleared"',
-            'echo ""',
-
-            'echo "▸ Checking swap..."',
-            'if [ ! -f /swapfile ]; then echo "  Creating 2GB swap..." && sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile && echo "/swapfile swap swap defaults 0 0" | sudo tee -a /etc/fstab && echo "  ✓ 2GB swap created"; else if ! swapon --show | grep -q swapfile; then sudo swapon /swapfile && echo "  ✓ Swap re-activated"; else echo "  ✓ Swap already active"; fi; fi',
-            'echo ""',
-
-            'echo "▸ Memory after optimization:"',
-            'free -h',
-          ].join(" && ");
-          break;
-
         case "apt_update":
-          remoteCmd = [
-            'echo "▸ Detecting package manager..."',
-            'if command -v dnf >/dev/null 2>&1; then echo "  Using dnf..." && sudo dnf update -y && echo "  ✓ System updated"; elif command -v apt-get >/dev/null 2>&1; then echo "  Using apt-get..." && sudo DEBIAN_FRONTEND=noninteractive apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y && echo "  ✓ System updated"; fi',
-          ].join(" && ");
+          remoteCmd = 'if command -v dnf >/dev/null 2>&1; then sudo dnf update -y; elif command -v apt-get >/dev/null 2>&1; then sudo DEBIAN_FRONTEND=noninteractive apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y; fi';
           break;
 
         case "npm_install":
-          remoteCmd = [
-            `echo "▸ Changing to ${remoteDir}..."`,
-            `cd ${remoteDir}`,
-            'echo "▸ Running npm install..."',
-            'npm install',
-            'echo ""',
-            'echo "▸ Running npm update..."',
-            'npm update',
-            'echo ""',
-            'echo "▸ Installed packages:"',
-            'npm list --depth=0',
-            'echo ""',
-            'echo "  ✓ Dependencies up to date"',
-          ].join(" && ");
+          remoteCmd = `cd ${remoteDir} && npm install && npm update && npm list --depth=0`;
           break;
 
         case "system_info":
           remoteCmd = [
-            'echo "══════════════════════════════════════"',
-            'echo "         Server Diagnostics"',
-            'echo "══════════════════════════════════════"',
-            'echo ""',
-            'echo "▸ OS & Kernel:" && uname -a',
-            'echo "" && echo "▸ Uptime & Load:" && uptime',
-            'echo "" && echo "▸ Memory:" && free -h',
-            'echo "" && echo "▸ Swap:" && swapon --show 2>/dev/null || echo "  No swap configured"',
-            'echo "" && echo "▸ Disk:" && df -h / | column -t',
-            'echo "" && echo "▸ CPU:" && lscpu 2>/dev/null | grep -E "Model name|CPU\(s\):|Thread" || cat /proc/cpuinfo | grep "model name" | head -1',
-            'echo "" && echo "▸ Top 5 memory-hungry processes:" && ps aux --sort=-%mem | head -6',
-            'echo "" && echo "▸ Installed Runtimes:"',
-            'echo "  Node.js: $(node -v 2>/dev/null || echo Not installed)"',
-            'echo "  npm:     $(npm -v 2>/dev/null || echo Not installed)"',
-            'echo "  PM2:     $(pm2 -v 2>/dev/null || echo Not installed)"',
-            'echo "  Git:     $(git --version 2>/dev/null || echo Not installed)"',
+            'echo "=== OS & Kernel ===" && uname -a',
+            'echo "\n=== Uptime & Load ===" && uptime',
+            'echo "\n=== Memory Usage ===" && free -h',
+            'echo "\n=== Disk Space ===" && df -h /',
+            'echo "\n=== Installed Runtimes ===" && echo "Node: $(node -v 2>/dev/null || echo \'Not installed\')" && echo "NPM: $(npm -v 2>/dev/null || echo \'Not installed\')" && echo "PM2: $(pm2 -v 2>/dev/null || echo \'Not installed\')"',
           ].join(" && ");
           break;
 
@@ -1042,99 +823,40 @@ const server = http.createServer((req, res) => {
 
           remoteCmd = [
             `if [ ! -d "${remoteDir}" ] || [ ! -d "${remoteDir}/.git" ]; then ` +
-              `echo "▸ Cloning CLIT-OF repository..." && ` +
+              `echo "=== [1/2] Cloning private CLIT-OF repository from GitHub... ===" && ` +
               `rm -rf ${remoteDir} && ` +
-              `git clone ${repoUrl} ${remoteDir} && ` +
-              `echo "  ✓ Cloned successfully"; ` +
+              `git clone ${repoUrl} ${remoteDir}; ` +
             `else ` +
-              `echo "▸ Updating remote URL..." && ` +
-              `cd ${remoteDir} && git remote set-url origin ${repoUrl} && ` +
-              `echo "  ✓ Remote URL updated"; ` +
+              `echo "=== [1/2] Updating Git remote configuration... ===" && ` +
+              `cd ${remoteDir} && git remote set-url origin ${repoUrl}; ` +
             `fi`,
-            `cd ${remoteDir} && chmod +x deploy.sh && echo "▸ Running deploy.sh..." && ./deploy.sh`,
+            `cd ${remoteDir} && chmod +x deploy.sh && ./deploy.sh`,
           ].join(" && ");
           break;
         }
 
         case "start":
-          remoteCmd = [
-            `echo "▸ Starting bot under PM2..."`,
-            `cd ${remoteDir} && pm2 start ecosystem.config.cjs`,
-            'pm2 save',
-            'echo "" && echo "▸ Current PM2 status:" && pm2 status clit-of-bot',
-          ].join(" && ");
+          remoteCmd = `cd ${remoteDir} && pm2 start ecosystem.config.cjs && pm2 save && pm2 status clit-of-bot`;
           break;
 
         case "stop":
-          remoteCmd = 'echo "▸ Stopping bot..." && pm2 stop clit-of-bot && echo "" && echo "▸ PM2 status:" && pm2 status clit-of-bot';
+          remoteCmd = "pm2 stop clit-of-bot && pm2 status clit-of-bot";
           break;
 
         case "restart":
-          remoteCmd = 'echo "▸ Restarting bot..." && pm2 restart clit-of-bot && echo "" && echo "▸ PM2 status:" && pm2 status clit-of-bot';
+          remoteCmd = "pm2 restart clit-of-bot && pm2 status clit-of-bot";
           break;
 
         case "status":
-          remoteCmd = 'echo "▸ PM2 Process List:" && pm2 status && echo "" && echo "▸ Memory:" && free -h | head -2';
+          remoteCmd = "pm2 status clit-of-bot";
           break;
 
         case "logs":
-          remoteCmd = 'echo "▸ Last 60 lines of bot output:" && echo "" && pm2 logs clit-of-bot --lines 60 --nostream';
-          break;
-
-        case "advanced_logs":
-          remoteCmd = [
-            'echo "══════════════════════════════════════"',
-            'echo "       Advanced Bot Diagnostics"',
-            'echo "══════════════════════════════════════"',
-            'echo ""',
-
-            'echo "▸ PM2 Process Details:" && pm2 describe clit-of-bot 2>/dev/null || echo "  Bot is not registered in PM2"',
-            'echo ""',
-
-            'echo "▸ Last 30 lines of STDOUT:" && echo "─────────────────────────────" && pm2 logs clit-of-bot --out --lines 30 --nostream 2>/dev/null || echo "  No stdout logs"',
-            'echo ""',
-
-            'echo "▸ Last 30 lines of STDERR:" && echo "─────────────────────────────" && pm2 logs clit-of-bot --err --lines 30 --nostream 2>/dev/null || echo "  No stderr logs"',
-            'echo ""',
-
-            'echo "▸ Node.js process memory (if running):" && ps aux | grep -E "node.*clit|node.*dist" | grep -v grep || echo "  Bot process not found"',
-            'echo ""',
-
-            'echo "▸ System memory health:" && free -h',
-            'echo "" && echo "▸ Swap usage:" && swapon --show 2>/dev/null || echo "  No swap"',
-            'echo "" && echo "▸ OOM Killer events (last 10):" && sudo dmesg 2>/dev/null | grep -i "oom\|killed process" | tail -10 || echo "  No OOM events found"',
-            'echo "" && echo "▸ Disk usage:" && df -h / | column -t',
-            `echo "" && echo "▸ .env file check:" && if [ -f "${remoteDir}/.env" ]; then echo "  ✓ .env exists ($(wc -l < ${remoteDir}/.env) lines)"; else echo "  ✗ .env NOT found - upload it!"; fi`,
-            `echo "" && echo "▸ Bot directory:" && ls -la ${remoteDir}/ 2>/dev/null | head -20 || echo "  Directory does not exist"`,
-          ].join(" && ");
-          break;
-
-        case "test_discord_api":
-          remoteCmd = [
-            'echo "▸ Testing Discord API Gateway..."',
-            'GATEWAY=$(curl -sf https://discord.com/api/v10/gateway 2>&1)',
-            'if echo "$GATEWAY" | grep -q "wss://"; then echo "  ✓ Discord API reachable: $GATEWAY"; else echo "  ✗ Discord API unreachable: $GATEWAY"; fi',
-            'echo ""',
-
-            `echo "▸ Checking .env configuration..."`,
-            `if [ -f "${remoteDir}/.env" ]; then ` +
-              `echo "  ✓ .env file found" && ` +
-              `if grep -q "DISCORD_TOKEN=" ${remoteDir}/.env; then echo "  ✓ DISCORD_TOKEN is set"; else echo "  ✗ DISCORD_TOKEN missing!"; fi && ` +
-              `if grep -q "CLIENT_ID=" ${remoteDir}/.env; then echo "  ✓ CLIENT_ID is set"; else echo "  ✗ CLIENT_ID missing!"; fi; ` +
-            `else echo "  ✗ .env file NOT found - upload it first!"; fi`,
-            'echo ""',
-
-            'echo "▸ Testing outbound HTTPS..."',
-            'curl -sf -o /dev/null -w "  ✓ HTTPS works (HTTP %{http_code}, %{time_total}s)" https://discord.com/api/v10/gateway || echo "  ✗ HTTPS failed - check firewall"',
-            'echo ""',
-
-            'echo "▸ DNS resolution test..."',
-            'host discord.com 2>/dev/null && echo "  ✓ DNS working" || (nslookup discord.com 2>/dev/null && echo "  ✓ DNS working" || echo "  ✗ DNS resolution failed")',
-          ].join(" && ");
+          remoteCmd = "pm2 logs clit-of-bot --lines 60 --nostream";
           break;
 
         case "commands_refresh":
-          remoteCmd = `echo "▸ Re-registering Discord slash commands..." && cd ${remoteDir} && npm run register-commands && echo "" && echo "  ✓ Slash commands synced with Discord API"`;
+          remoteCmd = `cd ${remoteDir} && npm run register-commands`;
           break;
 
         case "custom":
