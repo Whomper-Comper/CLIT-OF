@@ -48,9 +48,7 @@ function getSshArgs(cfg, remoteCommand) {
     "-o",
     "StrictHostKeyChecking=no",
     "-o",
-    "UserKnownHostsFile=NUL",
-    "-o",
-    "ConnectTimeout=60",
+    "ConnectTimeout=30",
     "-o",
     "ServerAliveInterval=15",
     "-o",
@@ -79,9 +77,7 @@ function getScpArgs(cfg, localPath, remotePath) {
     "-o",
     "StrictHostKeyChecking=no",
     "-o",
-    "UserKnownHostsFile=NUL",
-    "-o",
-    "ConnectTimeout=60",
+    "ConnectTimeout=30",
     "-r",
   ];
 
@@ -567,15 +563,23 @@ const HTML_CONTENT = `<!DOCTYPE html>
     }
 
     async function testConnectionSilently() {
+      const dot = getEl('statusDot');
+      const statusText = getEl('statusText');
+      if (dot) dot.className = 'dot busy';
+      if (statusText) statusText.textContent = 'Checking SSH...';
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
+
       try {
         const res = await fetch('/api/action', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'test_connection' }),
+          signal: controller.signal,
         });
+        clearTimeout(timeoutId);
         const text = await res.text();
-        const dot = getEl('statusDot');
-        const statusText = getEl('statusText');
         if (text.includes('SSH_OK')) {
           if (dot) dot.className = 'dot online';
           if (statusText) statusText.textContent = 'Server Connected';
@@ -583,9 +587,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
           if (dot) dot.className = 'dot offline';
           if (statusText) statusText.textContent = 'SSH Disconnected';
         }
-      } catch {
-        const dot = getEl('statusDot');
-        const statusText = getEl('statusText');
+      } catch (err) {
+        clearTimeout(timeoutId);
         if (dot) dot.className = 'dot offline';
         if (statusText) statusText.textContent = 'SSH Disconnected';
       }
@@ -880,7 +883,7 @@ const server = http.createServer((req, res) => {
 
       switch (action) {
         case "test_connection":
-          remoteCmd = 'echo "SSH_OK: Connected to $(hostname) as $(whoami) [$(uname -srm)]" && echo "Memory:" && free -h | head -2 && echo "Disk:" && df -h / | tail -1 && echo "Uptime:" && uptime';
+          remoteCmd = 'echo SSH_OK && whoami && hostname && free -h | head -2';
           break;
 
         case "initial_setup": {
