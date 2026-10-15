@@ -1,0 +1,26 @@
+name: Deploy Bot to Oracle Cloud
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: # Allows manual triggering from GitHub Actions web UI with a single click
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy via SSH to Oracle Cloud VM
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORACLE_HOST }}
+          username: ${{ secrets.ORACLE_USERNAME || 'ubuntu' }}
+          key: ${{ secrets.ORACLE_SSH_KEY }}
+          port: ${{ secrets.ORACLE_PORT || 22 }}
+          script: |
+            # Navigate to bot directory
+            cd ~/discord-bot || cd ~/openfront-discord-bot
+
+            # Run update script
+            chmod +x deploy.sh
+            ./deploy.sh

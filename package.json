@@ -1,0 +1,36 @@
+{
+  "name": "openfront-discord-bot",
+  "version": "1.0.0",
+  "description": "Discord bot to link OpenFront accounts and synchronize clan roles",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node --no-warnings dist/index.js",
+    "dev": "tsx src/index.ts",
+    "register-commands": "tsx src/deploy-commands.ts",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:stop": "pm2 stop ecosystem.config.cjs",
+    "pm2:restart": "pm2 restart ecosystem.config.cjs",
+    "pm2:logs": "pm2 logs clit-of-bot",
+    "update": "bash deploy.sh"
+  },
+  "keywords": [
+    "openfront",
+    "discord-bot",
+    "clan-sync"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.18.0",
+    "dotenv": "^16.4.7",
+    "jose": "^6.2.12",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}

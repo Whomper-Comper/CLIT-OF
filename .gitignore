@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+
+# Local databases & persistent runtime data
+data/
+*.db
+*.db-journal
+
+# Secrets & environment
+.env
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS artifacts
+.DS_Store
+Thumbs.db
