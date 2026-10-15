@@ -74,12 +74,7 @@ export class BotDatabase {
       // Old manual links have no guild provenance: quarantine them for safe local re-linking.
       const legacy = this.db.prepare("SELECT * FROM linked_users WHERE verified_method = 'admin_manual'").all() as unknown as LinkedUser[];
       for (const link of legacy) {
-        const auditGuilds = new Set(this.getAllGuildConfigs().map((c) => c.guild_id));
-        if (auditGuilds.size) {
-          for (const guild of auditGuilds) this.audit(guild, "migration", link.discord_id, "legacy_manual_revoked", link.openfront_id, null);
-        } else {
-          this.audit(null, "migration", link.discord_id, "legacy_manual_revoked", link.openfront_id, null);
-        }
+        this.audit(null, "migration", link.discord_id, "legacy_manual_revoked", link.openfront_id, null);
         this.enqueueAll(link.discord_id);
       }
       this.db.exec(`INSERT OR IGNORE INTO legacy_manual_links SELECT discord_id, openfront_id,
@@ -121,7 +116,7 @@ export class BotDatabase {
     if (!["identity_token", "profile_discord"].includes(method)) throw new Error("Global links require ownership verification.");
     this.transaction(() => {
       const old = this.getUserByDiscordId(id);
-      this.db.prepare(`INSERT INTO linked_users VALUES(?,?,?,?,?) ON CONFLICT(discord_id) DO UPDATE SET
+      this.db.prepare(`INSERT INTO linked_users(discord_id,openfront_id,openfront_username,linked_at,verified_method) VALUES(?,?,?,?,?) ON CONFLICT(discord_id) DO UPDATE SET
         openfront_id=excluded.openfront_id, openfront_username=excluded.openfront_username,
         linked_at=excluded.linked_at, verified_method=excluded.verified_method`).run(id,ofId,username,new Date().toISOString(),method);
       // Verified ownership invalidates conflicting local claims and the owner's old local links.
@@ -131,9 +126,7 @@ export class BotDatabase {
         this.enqueueGuild(local.guild_id,local.discord_id);
       }
       this.db.prepare("DELETE FROM guild_links WHERE discord_id = ? OR openfront_id = ?").run(id,ofId);
-      const auditGuilds = new Set(this.getAllGuildConfigs().map((c) => c.guild_id));
-      if (originGuild) auditGuilds.add(originGuild);
-      for (const guild of auditGuilds) this.audit(guild,id,id,"global_link",old?.openfront_id ?? null,ofId);
+      this.audit(originGuild,id,id,"global_link",old?.openfront_id ?? null,ofId);
       this.enqueueAll(id);
     });
   }
@@ -145,11 +138,7 @@ export class BotDatabase {
       this.db.prepare("DELETE FROM linked_users WHERE discord_id = ?").run(id);
       this.db.prepare("DELETE FROM guild_links WHERE discord_id = ?").run(id);
       for (const local of locals) this.audit(local.guild_id,id,id,"local_self_unlink",local.openfront_id,null);
-      const auditGuilds = new Set(this.getAllGuildConfigs().map((c) => c.guild_id));
-      for (const local of locals) auditGuilds.add(local.guild_id);
-      if (originGuild) auditGuilds.add(originGuild);
-      if (!auditGuilds.size) this.audit(null,id,id,"global_unlink",global?.openfront_id ?? null,null);
-      else for (const guild of auditGuilds) this.audit(guild,id,id,"global_unlink",global?.openfront_id ?? null,null);
+      this.audit(originGuild,id,id,"global_unlink",global?.openfront_id ?? null,null);
       this.enqueueAll(id);
       return true;
     });
@@ -160,7 +149,7 @@ export class BotDatabase {
       const old = this.getGuildLink(guild,id);
       const other = this.db.prepare("SELECT discord_id FROM guild_links WHERE guild_id=? AND openfront_id=?").get(guild,ofId);
       if (other && other.discord_id !== id) throw new Error("That OpenFront account already has a manual link in this server.");
-      this.db.prepare(`INSERT INTO guild_links VALUES(?,?,?,?,?,?) ON CONFLICT(guild_id,discord_id) DO UPDATE SET
+      this.db.prepare(`INSERT INTO guild_links(guild_id,discord_id,openfront_id,openfront_username,linked_at,verified_method) VALUES(?,?,?,?,?,?) ON CONFLICT(guild_id,discord_id) DO UPDATE SET
         openfront_id=excluded.openfront_id,openfront_username=excluded.openfront_username,
         linked_at=excluded.linked_at,verified_method=excluded.verified_method`).run(guild,id,ofId,username,new Date().toISOString(),"admin_manual");
       this.audit(guild,actor,id,"local_link",old?.openfront_id ?? null,ofId);
@@ -181,11 +170,23 @@ export class BotDatabase {
     this.db.prepare("UPDATE linked_users SET openfront_username=? WHERE discord_id=?").run(username,id);
     if (guild) this.db.prepare("UPDATE guild_links SET openfront_username=? WHERE guild_id=? AND discord_id=?").run(username,guild,id);
   }
-  getAudit(guild: string | null, user: string | null, page = 1): AuditEntry[] {
-    // A guild admin sees only events originating in that guild. Self-history can span guilds.
-    return this.db.prepare(`SELECT * FROM link_audit WHERE ${guild ? "guild_id = ?" : "discord_id = ?"}
-      ${guild && user ? "AND discord_id = ?" : ""} ORDER BY id DESC LIMIT 10 OFFSET ?`)
-      .all(...(guild && user ? [guild,user] : [guild ?? user!]), (page-1)*10) as unknown as AuditEntry[];
+  getAudit(guild: string | null, user: string | null, page = 1, ownHistory = false): AuditEntry[] {
+    const parameters: (string | number)[] = [];
+    let where: string;
+    if (ownHistory && user) {
+      where = "discord_id=? AND (guild_id=? OR action IN ('global_link','global_unlink','legacy_manual_revoked'))";
+      parameters.push(user, guild ?? "");
+    } else if (guild) {
+      where = "guild_id=?";
+      parameters.push(guild);
+      if (user) { where += " AND discord_id=?"; parameters.push(user); }
+    } else {
+      if (!user) throw new Error("An audit query requires a guild or a user.");
+      where = "discord_id=?";
+      parameters.push(user);
+    }
+    return this.db.prepare(`SELECT * FROM link_audit WHERE ${where} ORDER BY id DESC LIMIT 10 OFFSET ?`)
+      .all(...parameters, (page - 1) * 10) as unknown as AuditEntry[];
   }
   enqueueGuild(guild: string, id: string, extraRoles: string[] = []) {
     const previous = this.db.prepare("SELECT role_ids FROM role_jobs WHERE guild_id=? AND discord_id=?").get(guild,id);
@@ -212,18 +213,15 @@ export class BotDatabase {
     return this.db.prepare("SELECT * FROM role_jobs WHERE guild_id=? AND discord_id=?").get(guild,id) as unknown as RoleJob ?? null;
   }
   setGuildClanConfig(c: GuildClanConfig, guildMemberIds: string[] = []) {
-    const old = this.getGuildClanConfig(c.guild_id, c.clan_tag);
-    const oldRoles = old ? managedRoles([old]) : [];
-    const newRoles = managedRoles([c]);
-    if (old && (oldRoles.length !== newRoles.length || oldRoles.some((role) => !newRoles.includes(role)))) {
-      const guildMembers = new Set(guildMemberIds);
-      const ids = this.getEffectiveLinks(c.guild_id).filter((link) => guildMembers.has(link.discord_id)).map((link) => link.discord_id);
-      for (const id of ids) this.enqueueGuild(c.guild_id, id, oldRoles);
-    }
-    this.db.prepare(`INSERT INTO guild_clan_configs VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(guild_id,clan_tag) DO UPDATE SET
-      member_role_id=excluded.member_role_id,officer_role_id=excluded.officer_role_id,leader_role_id=excluded.leader_role_id,
-      join_role_id=excluded.join_role_id,log_channel_id=excluded.log_channel_id,sync_interval_mins=excluded.sync_interval_mins`)
-      .run(c.guild_id,c.clan_tag.trim().toUpperCase(),c.member_role_id,c.officer_role_id,c.leader_role_id,c.join_role_id,c.log_channel_id,c.sync_interval_mins,c.last_sync_at);
+    this.transaction(() => {
+      const old = this.getGuildClanConfig(c.guild_id, c.clan_tag);
+      for (const id of guildMemberIds) this.enqueueGuild(c.guild_id, id, [...managedRoles(old ? [old] : []), ...managedRoles([c])]);
+      this.db.prepare(`INSERT INTO guild_clan_configs(guild_id,clan_tag,member_role_id,officer_role_id,leader_role_id,
+        join_role_id,log_channel_id,sync_interval_mins,last_sync_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(guild_id,clan_tag) DO UPDATE SET
+        member_role_id=excluded.member_role_id,officer_role_id=excluded.officer_role_id,leader_role_id=excluded.leader_role_id,
+        join_role_id=excluded.join_role_id,log_channel_id=excluded.log_channel_id,sync_interval_mins=excluded.sync_interval_mins,last_sync_at=NULL`)
+        .run(c.guild_id,c.clan_tag.trim().toUpperCase(),c.member_role_id,c.officer_role_id,c.leader_role_id,c.join_role_id,c.log_channel_id,c.sync_interval_mins,c.last_sync_at);
+    });
   }
   updateClanLastSync(guild: string, tag: string) {
     this.db.prepare("UPDATE guild_clan_configs SET last_sync_at=? WHERE guild_id=? AND clan_tag=?").run(new Date().toISOString(),guild,tag.trim().toUpperCase());
@@ -235,12 +233,12 @@ export class BotDatabase {
     return this.db.prepare("SELECT * FROM guild_clan_configs WHERE guild_id=? ORDER BY clan_tag").all(guild) as unknown as GuildClanConfig[];
   }
   deleteGuildClanConfig(guild: string, tag: string, guildMemberIds: string[] = []): boolean {
-    const config = this.getGuildClanConfig(guild, tag);
-    if (!config) return false;
-    const guildMembers = new Set(guildMemberIds);
-    const ids = this.getEffectiveLinks(guild).filter((link) => guildMembers.has(link.discord_id)).map((link) => link.discord_id);
-    for (const id of ids) this.enqueueGuild(guild, id, managedRoles([config]));
-    return Number(this.db.prepare("DELETE FROM guild_clan_configs WHERE guild_id=? AND clan_tag=?").run(guild,tag.trim().toUpperCase()).changes)>0;
+    return this.transaction(() => {
+      const config = this.getGuildClanConfig(guild, tag);
+      if (!config) return false;
+      for (const id of guildMemberIds) this.enqueueGuild(guild, id, managedRoles([config]));
+      return Number(this.db.prepare("DELETE FROM guild_clan_configs WHERE guild_id=? AND clan_tag=?").run(guild,tag.trim().toUpperCase()).changes)>0;
+    });
   }
   getAllGuildConfigs(): GuildClanConfig[] {
     return this.db.prepare("SELECT * FROM guild_clan_configs").all() as unknown as GuildClanConfig[];

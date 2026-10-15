@@ -8,14 +8,15 @@ import {
 import { CONFIG, validateConfig } from "./config.js";
 import { db } from "./db.js";
 import { ClanSyncService } from "./clanSync.js";
-import { linkCommand } from "./commands/link.js";
-import { unlinkCommand } from "./commands/unlink.js";
-import { whoisCommand } from "./commands/whois.js";
-import { clanCommand } from "./commands/clan.js";
+
+import { commandsByName } from "./commands/index.js";
+import { CommandError, privateReply } from "./commands/support.js";
+import { OpenFrontApiError } from "./api.js";
 
 validateConfig();
 
 const client = new Client({
+  allowedMentions: { parse: [] },
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers, // Privileged intent: required for role sync & member lookups
@@ -65,35 +66,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
   const { commandName } = interaction;
 
   try {
-    switch (commandName) {
-      case "link":
-        await linkCommand.execute(interaction, clanSyncService);
-        break;
-
-      case "unlink":
-        await unlinkCommand.execute(interaction);
-        break;
-
-      case "whois":
-        await whoisCommand.execute(interaction);
-        break;
-
-      case "clan":
-        await clanCommand.execute(interaction, clanSyncService);
-        break;
-
-      default:
-        console.warn(`[Bot] Unknown command received: ${commandName}`);
-        await interaction.reply({ content: "Unknown command.", ephemeral: true });
-    }
+    const command = commandsByName.get(commandName);
+    if (!command) throw new CommandError("This command is no longer available. Refresh Discord and try again.");
+    await command.execute(interaction, clanSyncService);
   } catch (error) {
-    console.error(`[Bot] Error executing command /${commandName}:`, error);
+    const expected = error instanceof CommandError || error instanceof OpenFrontApiError;
+    if (!expected) console.error(`[Bot] Error executing command /${commandName}:`, error);
 
-    const errorMessage = "⚠️ An unexpected error occurred while processing this command.";
+    const errorMessage = expected ? error.message : "An unexpected error occurred. Please try again later.";
     if (interaction.deferred || interaction.replied) {
-      await interaction.editReply({ content: errorMessage }).catch(() => null);
+      await interaction.editReply({ content: errorMessage, embeds: [], components: [], allowedMentions: { parse: [] } }).catch(() => null);
     } else {
-      await interaction.reply({ content: errorMessage, ephemeral: true }).catch(() => null);
+      await interaction.reply({ content: errorMessage, ...privateReply, allowedMentions: { parse: [] } }).catch(() => null);
     }
   }
 });

@@ -37,25 +37,27 @@ A standalone Discord bot that connects Discord accounts with OpenFront accounts,
 
 | Command | Description |
 |---|---|
-| `/link [openfront_id] [token]` | Link via OpenFront ID or profile URL (auto-verifies if logged in via Discord), or paste an Identity Token from OpenFront Settings. |
-| `/unlink` | Unlink your Discord account and remove associated clan roles. |
-| `/whois [user] [openfront_id]` | Look up the linked OpenFront profile or Discord user. Supports URLs and mentions. |
+| `/link [openfront_id] [token]` | Provide exactly one public ID/profile URL or Identity Token to verify your bot-wide identity. |
+| `/unlink` | Remove all your bot-wide and server-only links, including in DMs, and queue clan role cleanup. |
+| `/whois [user] [openfront_id]` | Provide exactly one Discord user or OpenFront ID/profile URL. Shows server-only links only in their server. |
 
 ### Clan Management Commands (`/clan`)
 
 | Subcommand | Description | Permissions |
 |---|---|---|
 | `/clan setup <clan_tag> <member_role> [officer_role] [leader_role] [join_role] [log_channel] [sync_interval]` | Configure an OpenFront clan for this server (supports multiple clans per server). | `Manage Server` |
-| `/clan config [clan_tag]` | View current server clan configurations (omit `clan_tag` to view all). | Everyone |
-| `/clan pending [clan_tag]` | List members who have the `join_role` and need an in-game clan invite, with direct profile links. | Everyone |
+| `/clan config [clan_tag] [page]` | View server clan configurations, three per page. | Everyone |
+| `/clan pending [clan_tag] [page]` | List pending clan invitations, 15 per page. | Everyone |
 | `/clan roster <clan_tag> [page]` | Browse linked members in this server who belong to the clan, with OpenFront rank. | Everyone |
 | `/clan audit [user] [page]` | View link and unlink history for this server, or your own history. | Everyone (own history) / `Manage Server` (others or server history) |
 | `/clan link <user> <openfront_id>` | Create a manual link scoped to this server. Members can replace it with a verified bot-wide `/link`. | `Manage Server` |
 | `/clan unlink <user>` | Remove a manual link in this server. Bot-wide verified links can only be removed by their owner with `/unlink`. | `Manage Server` |
 | `/clan remove <clan_tag>` | Remove a clan configuration from this server. | `Manage Server` |
-| `/clan sync [user] [clan_tag]` | Force an immediate clan sync for a member or the entire server. | `Manage Roles` / `Manage Server` (for server-wide) |
+| `/clan sync [user] [clan_tag] [page]` | Sync a member or the server, up to ten clan configurations per page. | Everyone (self) / `Manage Roles` or `Manage Server` (others or server) |
 
-Link and unlink role cleanup is stored durably and removes at most one role per second across the bot. If an API update fails, the worker rechecks that the link still exists before changing roles.
+Role changes share a queue with a one-second gap between writes. Cleanup survives restarts, retries failed operations, and rechecks identity and configuration before applying changes. Public server-sync messages are updated when the run completes, including long runs.
+
+Setup accepts OpenFront tags of 2–5 letters or numbers and checks role hierarchy, duplicate mappings, and log-channel permissions before saving. Invalid input and missing permissions fail before changes are made. API outages leave current clan roles intact and are reported separately from missing profiles. Members can view their own global link history with `/clan audit user:@yourself`; server managers see only events recorded in the current server.
 
 ---
 

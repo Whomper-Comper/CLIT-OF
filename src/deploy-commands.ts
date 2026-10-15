@@ -1,18 +1,11 @@
 import { REST, Routes } from "discord.js";
 import { CONFIG, validateConfig } from "./config.js";
-import { linkCommand } from "./commands/link.js";
-import { unlinkCommand } from "./commands/unlink.js";
-import { whoisCommand } from "./commands/whois.js";
-import { clanCommand } from "./commands/clan.js";
+
+import { commands as definitions } from "./commands/index.js";
 
 validateConfig();
 
-const commands = [
-  linkCommand.data.toJSON(),
-  unlinkCommand.data.toJSON(),
-  whoisCommand.data.toJSON(),
-  clanCommand.data.toJSON(),
-];
+const commands = definitions.map((command) => command.data.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(CONFIG.DISCORD_TOKEN);
 

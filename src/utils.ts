@@ -55,7 +55,7 @@ export function resolveOpenFrontId(input: string): string {
   if (!input) return "";
 
   // 1. Strip surrounding Discord angle brackets (<url>), quotes, and extra whitespace
-  let clean = input.trim().replace(/^<+|>+$/g, "").replace(/^["']|["']$/g, "").trim();
+  const clean = input.trim().replace(/^<+|>+$/g, "").replace(/^["']|["']$/g, "").trim();
 
   // 2. Try parsing as a URL
   try {
@@ -105,7 +105,7 @@ export function resolveOpenFrontId(input: string): string {
     return clean;
   }
 
-  return clean;
+  return "";
 }
 
 /**

@@ -1,160 +1,36 @@
-import {
-  ChatInputCommandInteraction,
-  SlashCommandBuilder,
-  EmbedBuilder,
-  GuildMember,
-} from "discord.js";
+import { ChatInputCommandInteraction, SlashCommandBuilder, EmbedBuilder } from "discord.js";
 import { db } from "../db.js";
 import { openfrontApi } from "../api.js";
-import { ClanSyncService } from "../clanSync.js";
-import { resolveOpenFrontId, isDiscordSnowflake, extractDiscordId } from "../utils.js";
+import { extractDiscordId } from "../utils.js";
+import { CommandError, identityLocks, playerId, privateReply, profileLink, throttle } from "./support.js";
 
 export const linkCommand = {
-  data: new SlashCommandBuilder()
-    .setName("link")
-    .setDescription("Link your Discord account to your OpenFront account")
-    .addStringOption((opt) =>
-      opt
-        .setName("openfront_id")
-        .setDescription("Your OpenFront Public ID or profile URL (e.g. HabCsQYR or openfront.io/player/HabCsQYR)")
-        .setRequired(false)
-    )
-    .addStringOption((opt) =>
-      opt
-        .setName("token")
-        .setDescription("Identity token from OpenFront Account Settings → Link to third-party site")
-        .setRequired(false)
-    ),
+  data: new SlashCommandBuilder().setName("link").setDescription("Verify and link your OpenFront account across the bot")
+    .addStringOption((option) => option.setName("openfront_id").setDescription("OpenFront public ID or player profile URL"))
+    .addStringOption((option) => option.setName("token").setDescription("Identity token from OpenFront account settings").setMaxLength(4096)),
 
-  async execute(interaction: ChatInputCommandInteraction, clanSync: ClanSyncService) {
-    await interaction.deferReply({ ephemeral: true });
-
-    const discordId = interaction.user.id;
-    const rawIdInput = interaction.options.getString("openfront_id")?.trim();
-    const tokenInput = interaction.options.getString("token")?.trim();
-
-    if (!rawIdInput && !tokenInput) {
-      await interaction.editReply({
-        content:
-          "❌ Please provide either your OpenFront Public ID (`openfront_id:`) or an Identity Token (`token:`).\n\n" +
-          "**How to link:**\n" +
-          "• **Signed into OpenFront with Discord?** Just run: `/link openfront_id:YOUR_ID`\n" +
-          "• **Have a profile URL?** Paste it directly: `/link openfront_id:https://openfront.io/player/YOUR_ID`\n" +
-          "• **Signed into OpenFront with Google/Steam/Email?** In OpenFront, go to **Account Settings → Link to a third-party site**, click **Generate Token**, and paste it: `/link token:eyJ...`",
-      });
-      return;
-    }
-
-    let resolvedOpenFrontId: string | null = null;
-    let verificationMethod = "profile_discord";
-
-    // --- Path A: Verified via Identity Token ---
-    if (tokenInput) {
-      const verifiedId = await openfrontApi.verifyIdentityToken(tokenInput);
-      if (!verifiedId) {
-        await interaction.editReply({
-          content:
-            "❌ Invalid or expired OpenFront Identity Token.\n\n" +
-            "Please go to **OpenFront → Account Settings → Link to a third-party site**, generate a fresh token, and try again (tokens expire after 10 minutes).",
-        });
+  async execute(interaction: ChatInputCommandInteraction) {
+    const input = interaction.options.getString("openfront_id")?.trim();
+    const token = interaction.options.getString("token")?.trim();
+    if (Boolean(input) === Boolean(token)) throw new CommandError("Provide exactly one of `openfront_id` or `token`. Use a player profile URL, or generate an Identity Token in OpenFront account settings.");
+    throttle(`link:${interaction.user.id}`);
+    await interaction.deferReply(privateReply);
+    await identityLocks.run(interaction.user.id, async () => {
+      const verifiedId = token ? await openfrontApi.verifyIdentityToken(token) : null;
+      if (token && !verifiedId) throw new CommandError("That Identity Token is invalid or expired. Generate a new one in OpenFront account settings.");
+      const id = playerId(verifiedId ?? input!);
+      const profile = await openfrontApi.getPlayerProfile(id);
+      if (!profile) throw new CommandError("That OpenFront player was not found. Check the ID or profile URL.");
+      const discordMatch = profile.user?.id && extractDiscordId(profile.user.id) === interaction.user.id;
+      if (!token && !discordMatch) {
+        await interaction.editReply({ content: `We found ${profileLink(id, profile.username || id)}, but its Discord connection does not match your account. Generate an **Identity Token** in OpenFront account settings and run \`/link token:<token>\`. A server manager can also create a server-only approval with \`/clan link\`.` });
         return;
       }
-      resolvedOpenFrontId = verifiedId;
-      verificationMethod = "identity_token";
-    } else if (rawIdInput) {
-      // Check if user accidentally entered a Discord snowflake/mention into openfront_id
-      const extractedDiscordId = extractDiscordId(rawIdInput);
-      if (extractedDiscordId) {
-        await interaction.editReply({
-          content:
-            `❌ The value \`${rawIdInput}\` is a Discord User ID, not an OpenFront Public ID!\n\n` +
-            `• OpenFront Public IDs are 8-character codes like \`HabCsQYR\`.\n` +
-            `• You can find yours in your profile URL: \`https://openfront.io/player/HabCsQYR\`.\n` +
-            `• If you named your in-game player name a Discord ID, that is your username, not your Public ID. Please use your Public ID or generate an Identity Token: \`/link token:<paste_token>\`.`,
-        });
-        return;
-      }
-
-      resolvedOpenFrontId = resolveOpenFrontId(rawIdInput);
-    }
-
-    if (!resolvedOpenFrontId) return;
-
-    // Check again if resolvedOpenFrontId is a Discord snowflake
-    if (isDiscordSnowflake(resolvedOpenFrontId)) {
-      await interaction.editReply({
-        content: `❌ \`${resolvedOpenFrontId}\` appears to be a Discord User ID, not an OpenFront Public ID.`,
-      });
-      return;
-    }
-
-    // Check if another Discord user is already linked to this OpenFront account
-    const existingOfUser = db.getUserByOpenFrontId(resolvedOpenFrontId);
-    if (existingOfUser && existingOfUser.discord_id !== discordId) {
-      await interaction.editReply({
-        content: `❌ The OpenFront account \`${resolvedOpenFrontId}\` is already linked to another Discord user (<@${existingOfUser.discord_id}>).`,
-      });
-      return;
-    }
-
-    // Fetch the player profile from OpenFront public API
-    const profile = await openfrontApi.getPlayerProfile(resolvedOpenFrontId);
-    if (!profile) {
-      await interaction.editReply({
-        content: `❌ Could not find an OpenFront player with ID \`${resolvedOpenFrontId}\`. Please check the ID or profile link and try again.`,
-      });
-      return;
-    }
-
-    const ofUsername = profile.username || resolvedOpenFrontId;
-
-    // Check verification status:
-    // 1. Verified by EdDSA Identity Token (cryptographically signed), OR
-    // 2. Verified because OpenFront profile.user.id matches this Discord ID
-    //    (Strict check: profile.user.id must match discordId, and must be a valid snowflake).
-    const profileDiscordId = profile.user?.id ? extractDiscordId(profile.user.id) : null;
-    const isDiscordMatch = Boolean(profileDiscordId && profileDiscordId === discordId);
-
-    const isVerified = verificationMethod === "identity_token" || isDiscordMatch;
-
-    if (isVerified) {
-      db.linkUser(discordId, resolvedOpenFrontId, profile.username || null, verificationMethod, interaction.guildId);
-
-      const embed = new EmbedBuilder()
-        .setTitle("✅ Accounts Linked Successfully!")
-        .setColor(0x22c55e)
-        .setDescription(
-          `Your Discord account is now linked to OpenFront account **[${ofUsername}](https://openfront.io/player/${resolvedOpenFrontId})** (\`${resolvedOpenFrontId}\`).\n\n` +
-            `Verified via: \`${verificationMethod === "identity_token" ? "OpenFront Cryptographic Identity Token" : "OpenFront Discord Connection"}\`.`
-        )
-        .setTimestamp();
-
-      await interaction.editReply({ embeds: [embed] });
-
-      // Trigger immediate clan role sync if in a guild
-      if (interaction.member instanceof GuildMember) {
-        await clanSync.syncMember(interaction.member);
-      }
-      return;
-    }
-
-    // Not verified via Discord profile and no token was provided — explain options
-    const embed = new EmbedBuilder()
-      .setTitle("🔐 Account Verification Required")
-      .setColor(0x3b82f6)
-      .setDescription(
-        `We found OpenFront account **[${ofUsername}](https://openfront.io/player/${resolvedOpenFrontId})** (\`${resolvedOpenFrontId}\`), but it does not have your Discord account directly linked in OpenFront.\n\n` +
-          `**Choose how you want to verify ownership:**\n\n` +
-          `### 🌟 Method 1: Instant Identity Token (Recommended)\n` +
-          `1. In OpenFront, open **Account Settings**.\n` +
-          `2. Under **Link to a third-party site**, select any site (e.g. \`ofstats.io\`) and click **Generate Token**.\n` +
-          `3. Copy the token and paste it here:\n` +
-          `   \`/link token:<paste_token_here>\`\n\n` +
-          `### 🛡️ Method 2: Clan Officer Approval\n` +
-          `Ask a clan officer in this server to run:\n` +
-          `\`/clan link user:@${interaction.user.username} openfront_id:${resolvedOpenFrontId}\``
-      );
-
-    await interaction.editReply({ embeds: [embed] });
+      const existing = db.getUserByOpenFrontId(id);
+      if (existing && existing.discord_id !== interaction.user.id) throw new CommandError("That OpenFront account is already linked to another Discord user. Its current owner must unlink it first.");
+      db.linkUser(interaction.user.id, id, profile.username ?? null, token ? "identity_token" : "profile_discord", interaction.guildId);
+      await interaction.editReply({ embeds: [new EmbedBuilder().setTitle("OpenFront account linked").setColor(0x22c55e)
+        .setDescription(`Your bot-wide identity is now ${profileLink(id, profile.username || id)}. Clan role updates are queued across configured servers.`)] });
+    });
   },
 };

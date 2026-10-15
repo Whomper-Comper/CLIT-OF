@@ -1,148 +1,75 @@
+import { decodeJwt } from "jose";
 import { CONFIG } from "./config.js";
 
 export interface OpenFrontDiscordUser {
-  id: string;
-  username: string;
-  discriminator?: string;
-  avatar?: string | null;
-  global_name?: string | null;
+  id: string; username: string; discriminator?: string; avatar?: string | null; global_name?: string | null;
 }
-
 export interface OpenFrontClanMembership {
-  tag: string;
-  name: string;
-  role: "leader" | "officer" | "member";
-  joinedAt: string;
-  memberCount?: number;
+  tag: string; name: string; role: "leader" | "officer" | "member"; joinedAt: string; memberCount?: number;
 }
-
 export interface OpenFrontPlayerProfile {
-  createdAt: string;
-  user?: OpenFrontDiscordUser;
-  username?: string | null;
-  clans?: OpenFrontClanMembership[];
+  createdAt: string; user?: OpenFrontDiscordUser; username?: string | null; clans?: OpenFrontClanMembership[];
 }
-
 export interface OpenFrontClanInfo {
-  name: string;
-  tag: string;
-  description: string;
-  memberCount?: number;
-  isOpen?: boolean;
+  name: string; tag: string; description: string; memberCount?: number; isOpen?: boolean;
 }
+export class OpenFrontApiError extends Error {
+  constructor() { super("OpenFront is temporarily unavailable or returned an invalid response. Please try again later."); }
+}
+const object = (data: unknown): data is Record<string, unknown> => typeof data === "object" && data !== null;
 
 export class OpenFrontApi {
   private base: string;
+  constructor(baseUrl = CONFIG.OPENFRONT_API_BASE) { this.base = baseUrl.replace(/\/+$/, ""); }
 
-  constructor(baseUrl = CONFIG.OPENFRONT_API_BASE) {
-    this.base = baseUrl.replace(/\/+$/, "");
+  private async request(endpoint: string, options: RequestInit = {}): Promise<Response> {
+    try {
+      return await fetch(`${this.base}${endpoint}`, { ...options,
+        headers: { Accept: "application/json", ...options.headers }, signal: AbortSignal.timeout(15_000) });
+    } catch { throw new OpenFrontApiError(); }
+  }
+  private async json(response: Response): Promise<unknown> {
+    if (!response.ok) throw new OpenFrontApiError();
+    try { return await response.json(); }
+    catch { throw new OpenFrontApiError(); }
   }
 
-  /**
-   * Fetches the public profile for an OpenFront player by their publicId.
-   * Does not require authentication.
-   */
   async getPlayerProfile(publicId: string): Promise<OpenFrontPlayerProfile | null> {
-    try {
-      const url = `${this.base}/public/player/${encodeURIComponent(publicId.trim())}`;
-      const res = await fetch(url, {
-        headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(15_000),
-      });
-
-      if (res.status === 404) return null;
-      if (!res.ok) {
-        console.warn(`[OpenFrontApi] getPlayerProfile(${publicId}) returned HTTP ${res.status}`);
-        return null;
-      }
-
-      const data = (await res.json()) as OpenFrontPlayerProfile;
-      return data;
-    } catch (err) {
-      console.error(`[OpenFrontApi] Failed to fetch player profile for ${publicId}:`, err);
-      return null;
-    }
+    const response = await this.request(`/public/player/${encodeURIComponent(publicId.trim())}`);
+    if (response.status === 404) return null;
+    const data = await this.json(response);
+    if (!object(data) || (data.username !== undefined && data.username !== null && typeof data.username !== "string")) throw new OpenFrontApiError();
+    if (data.user !== undefined && (!object(data.user) || typeof data.user.id !== "string")) throw new OpenFrontApiError();
+    if (data.clans !== undefined && (!Array.isArray(data.clans) || data.clans.some((clan: unknown) =>
+      !object(clan) || typeof clan.tag !== "string" || typeof clan.name !== "string" || !["leader", "officer", "member"].includes(String(clan.role))))) throw new OpenFrontApiError();
+    return data as unknown as OpenFrontPlayerProfile;
   }
 
-  /**
-   * Fetches public info for a clan by tag.
-   */
-  async getClanInfo(clanTag: string): Promise<OpenFrontClanInfo | null> {
-    try {
-      const url = `${this.base}/public/clan/${encodeURIComponent(clanTag.trim().toUpperCase())}`;
-      const res = await fetch(url, {
-        headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(15_000),
-      });
-
-      if (res.status === 404) return null;
-      if (!res.ok) {
-        console.warn(`[OpenFrontApi] getClanInfo(${clanTag}) returned HTTP ${res.status}`);
-        return null;
-      }
-
-      const data = (await res.json()) as OpenFrontClanInfo;
-      return data;
-    } catch (err) {
-      console.error(`[OpenFrontApi] Failed to fetch clan info for ${clanTag}:`, err);
-      return null;
-    }
+  async getClanInfo(tag: string): Promise<OpenFrontClanInfo | null> {
+    const response = await this.request(`/public/clan/${encodeURIComponent(tag.trim().toUpperCase())}`);
+    if (response.status === 404) return null;
+    const data = await this.json(response);
+    if (!object(data) || typeof data.name !== "string" || typeof data.tag !== "string" || typeof data.description !== "string") throw new OpenFrontApiError();
+    return data as unknown as OpenFrontClanInfo;
   }
 
-  /**
-   * Verifies an OpenFront Identity Token generated by a player in Account Settings
-   * via OpenFront's official public validation endpoint.
-   * Returns the player's verified publicId, or null if invalid or expired.
-   */
   async verifyIdentityToken(token: string): Promise<string | null> {
+    const trimmed = token.trim();
+    let audience: string | undefined;
     try {
-      const trimmed = token.trim();
-      const { decodeJwt } = await import("jose");
-
-      let audience = "ofstats.io";
-      try {
-        const claims = decodeJwt(trimmed);
-        if (claims.aud) {
-          audience = Array.isArray(claims.aud) ? claims.aud[0] : claims.aud;
-        }
-      } catch (err) {
-        console.warn("[OpenFrontApi] Failed to parse JWT claims from token:", err);
-      }
-
-      // Try with the token's audience, then fall back to known supported audiences
-      const audiencesToTry = Array.from(new Set([audience, "ofstats.io", "trackerfront.io"]));
-
-      for (const aud of audiencesToTry) {
-        const url = `${this.base}/public/identity_token/validate`;
-        const res = await fetch(url, {
-          method: "POST",
-          signal: AbortSignal.timeout(15_000),
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-          },
-          body: JSON.stringify({
-            token: trimmed,
-            audience: aud,
-          }),
-        });
-
-        if (res.ok) {
-          const data = (await res.json()) as { publicId?: string; expiresAt?: string };
-          if (typeof data.publicId === "string") {
-            return data.publicId;
-          }
-        } else {
-          console.warn(`[OpenFrontApi] Validation failed for audience '${aud}': HTTP ${res.status}`);
-        }
-      }
-
-      return null;
-    } catch (err) {
-      console.error("[OpenFrontApi] Identity token validation error:", err);
-      return null;
+      const claims = decodeJwt(trimmed);
+      audience = Array.isArray(claims.aud) ? claims.aud[0] : claims.aud;
+    } catch { return null; }
+    for (const aud of new Set([audience || "ofstats.io", "ofstats.io", "trackerfront.io"])) {
+      const response = await this.request("/public/identity_token/validate", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: trimmed, audience: aud }),
+      });
+      if ([400, 401, 403].includes(response.status)) continue;
+      const data = await this.json(response);
+      if (!object(data) || typeof data.publicId !== "string" || !/^[A-Za-z0-9_-]{1,22}$/.test(data.publicId)) throw new OpenFrontApiError();
+      return data.publicId;
     }
+    return null;
   }
 }
-
 export const openfrontApi = new OpenFrontApi();
