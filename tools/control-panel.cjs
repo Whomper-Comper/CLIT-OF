@@ -461,84 +461,109 @@ const HTML_CONTENT = `<!DOCTYPE html>
   </div>
 
   <script>
-    const term = document.getElementById('terminal');
-    const dot = document.getElementById('statusDot');
-    const statusText = document.getElementById('statusText');
-    const badge = document.getElementById('activityBadge');
-    const timerEl = document.getElementById('timerText');
+    // Global error listener so any browser error is immediately visible in the terminal
+    window.onerror = function(msg, url, line) {
+      console.error('Browser error:', msg, 'at line', line);
+      const t = document.getElementById('terminal');
+      if (t) t.textContent += '\n⚠️ Browser Error (line ' + line + '): ' + msg + '\n';
+      return false;
+    };
+
+    window.addEventListener('unhandledrejection', function(e) {
+      console.error('Unhandled Promise Rejection:', e.reason);
+      const t = document.getElementById('terminal');
+      if (t) t.textContent += '\n⚠️ Unhandled Rejection: ' + (e.reason?.message || e.reason) + '\n';
+    });
+
     let timerInterval = null;
     let actionStart = null;
 
-    // Load initial config
-    fetch('/api/config')
-      .then(res => res.json())
-      .then(cfg => {
-        document.getElementById('host').value = cfg.host || '';
-        document.getElementById('username').value = cfg.username || 'ubuntu';
-        document.getElementById('port').value = cfg.port || '22';
-        document.getElementById('keyPath').value = cfg.keyPath || '';
-        document.getElementById('remoteDir').value = cfg.remoteDir || '~/discord-bot';
-        document.getElementById('githubToken').value = cfg.githubToken || '';
-        if (cfg.host) testConnectionSilently();
-      });
+    function getEl(id) {
+      return document.getElementById(id);
+    }
 
     function ts() {
-      if (!document.getElementById('timestampsToggle').checked) return '';
+      const toggle = getEl('timestampsToggle');
+      if (!toggle || !toggle.checked) return '';
       const d = new Date();
       return '[' + d.toLocaleTimeString() + '] ';
     }
 
     function log(msg) {
-      term.textContent += msg;
-      term.scrollTop = term.scrollHeight;
+      const term = getEl('terminal');
+      if (term) {
+        term.textContent += msg;
+        term.scrollTop = term.scrollHeight;
+      }
+      console.log(msg);
     }
 
     function logLine(msg) {
       log(ts() + msg + '\n');
     }
 
-    function clearTerminal() { term.textContent = ''; }
-    function copyTerminal() { navigator.clipboard.writeText(term.textContent); alert('Terminal copied to clipboard!'); }
+    function clearTerminal() {
+      const term = getEl('terminal');
+      if (term) term.textContent = '';
+    }
+
+    function copyTerminal() {
+      const term = getEl('terminal');
+      if (term) {
+        navigator.clipboard.writeText(term.textContent);
+        alert('Terminal copied to clipboard!');
+      }
+    }
 
     function startTimer() {
       actionStart = Date.now();
-      badge.style.display = 'inline';
-      timerEl.textContent = '0s';
+      const badge = getEl('activityBadge');
+      const timerEl = getEl('timerText');
+      if (badge) badge.style.display = 'inline';
+      if (timerEl) timerEl.textContent = '0s';
       clearInterval(timerInterval);
       timerInterval = setInterval(() => {
         const elapsed = Math.floor((Date.now() - actionStart) / 1000);
         const m = Math.floor(elapsed / 60);
         const s = elapsed % 60;
-        timerEl.textContent = m > 0 ? m + 'm ' + s + 's' : s + 's';
+        const currentTimer = getEl('timerText');
+        if (currentTimer) {
+          currentTimer.textContent = m > 0 ? m + 'm ' + s + 's' : s + 's';
+        }
       }, 500);
     }
 
     function stopTimer() {
       clearInterval(timerInterval);
       const elapsed = actionStart ? ((Date.now() - actionStart) / 1000).toFixed(1) : '?';
-      badge.style.display = 'none';
+      const badge = getEl('activityBadge');
+      if (badge) badge.style.display = 'none';
       actionStart = null;
       return elapsed;
     }
 
     function getConfig() {
       return {
-        host: document.getElementById('host').value.trim(),
-        username: document.getElementById('username').value.trim(),
-        port: document.getElementById('port').value.trim(),
-        keyPath: document.getElementById('keyPath').value.trim(),
-        remoteDir: document.getElementById('remoteDir').value.trim(),
-        githubToken: document.getElementById('githubToken').value.trim(),
+        host: (getEl('host')?.value || '').trim(),
+        username: (getEl('username')?.value || '').trim(),
+        port: (getEl('port')?.value || '').trim(),
+        keyPath: (getEl('keyPath')?.value || '').trim(),
+        remoteDir: (getEl('remoteDir')?.value || '').trim(),
+        githubToken: (getEl('githubToken')?.value || '').trim(),
       };
     }
 
     async function saveConfig() {
-      const cfg = getConfig();
-      await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(cfg),
-      });
+      try {
+        const cfg = getConfig();
+        await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(cfg),
+        });
+      } catch (err) {
+        console.warn('saveConfig non-fatal error:', err);
+      }
     }
 
     async function testConnectionSilently() {
@@ -549,33 +574,44 @@ const HTML_CONTENT = `<!DOCTYPE html>
           body: JSON.stringify({ action: 'test_connection' }),
         });
         const text = await res.text();
+        const dot = getEl('statusDot');
+        const statusText = getEl('statusText');
         if (text.includes('SSH_OK')) {
-          dot.className = 'dot online';
-          statusText.textContent = 'Server Connected';
+          if (dot) dot.className = 'dot online';
+          if (statusText) statusText.textContent = 'Server Connected';
         } else {
-          dot.className = 'dot offline';
-          statusText.textContent = 'SSH Disconnected';
+          if (dot) dot.className = 'dot offline';
+          if (statusText) statusText.textContent = 'SSH Disconnected';
         }
       } catch {
-        dot.className = 'dot offline';
-        statusText.textContent = 'SSH Disconnected';
+        const dot = getEl('statusDot');
+        const statusText = getEl('statusText');
+        if (dot) dot.className = 'dot offline';
+        if (statusText) statusText.textContent = 'SSH Disconnected';
       }
     }
 
     async function saveAndTestConnection() {
       await saveConfig();
-      dot.className = 'dot busy';
-      statusText.textContent = 'Testing SSH...';
+      const dot = getEl('statusDot');
+      const statusText = getEl('statusText');
+      if (dot) dot.className = 'dot busy';
+      if (statusText) statusText.textContent = 'Testing SSH...';
       logLine('--- Testing SSH Connection ---');
       await runAction('test_connection');
     }
 
     async function runAction(action) {
+      console.log('runAction called with:', action);
       await saveConfig();
-      dot.className = 'dot busy';
-      statusText.textContent = 'Executing...';
+
+      const dot = getEl('statusDot');
+      const statusText = getEl('statusText');
+      if (dot) dot.className = 'dot busy';
+      if (statusText) statusText.textContent = 'Executing...';
+
       startTimer();
-      logLine('>>> Starting: ' + action);
+      logLine('>>> Starting action: ' + action);
 
       try {
         const response = await fetch('/api/action', {
@@ -583,6 +619,10 @@ const HTML_CONTENT = `<!DOCTYPE html>
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action }),
         });
+
+        if (!response.ok) {
+          throw new Error('HTTP ' + response.status + ' ' + response.statusText);
+        }
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -594,14 +634,14 @@ const HTML_CONTENT = `<!DOCTYPE html>
         }
 
         const elapsed = stopTimer();
-        logLine('\u2705 Completed: ' + action + ' (' + elapsed + 's)');
-        dot.className = 'dot online';
-        statusText.textContent = 'Done (' + elapsed + 's)';
+        logLine('✅ Completed: ' + action + ' (' + elapsed + 's)');
+        if (dot) dot.className = 'dot online';
+        if (statusText) statusText.textContent = 'Done (' + elapsed + 's)';
       } catch (err) {
         const elapsed = stopTimer();
-        logLine('\u274c Error: ' + err.message + ' (' + elapsed + 's)');
-        dot.className = 'dot offline';
-        statusText.textContent = 'Command Failed';
+        logLine('❌ Error: ' + err.message + ' (' + elapsed + 's)');
+        if (dot) dot.className = 'dot offline';
+        if (statusText) statusText.textContent = 'Command Failed';
       }
     }
 
@@ -610,8 +650,8 @@ const HTML_CONTENT = `<!DOCTYPE html>
     }
 
     function runCustomCommand() {
-      const input = document.getElementById('customCmd');
-      const cmd = input.value.trim();
+      const input = getEl('customCmd');
+      const cmd = (input?.value || '').trim();
       if (!cmd) return;
       input.value = '';
       logLine('$ ' + cmd);
@@ -620,8 +660,10 @@ const HTML_CONTENT = `<!DOCTYPE html>
 
     async function runActionCustom(cmd) {
       await saveConfig();
-      dot.className = 'dot busy';
-      statusText.textContent = 'Running command...';
+      const dot = getEl('statusDot');
+      const statusText = getEl('statusText');
+      if (dot) dot.className = 'dot busy';
+      if (statusText) statusText.textContent = 'Running...';
       startTimer();
 
       try {
@@ -641,15 +683,30 @@ const HTML_CONTENT = `<!DOCTYPE html>
         }
 
         const elapsed = stopTimer();
-        logLine('\u2705 Command finished (' + elapsed + 's)');
-        dot.className = 'dot online';
-        statusText.textContent = 'Done (' + elapsed + 's)';
+        logLine('✅ Command finished (' + elapsed + 's)');
+        if (dot) dot.className = 'dot online';
+        if (statusText) statusText.textContent = 'Done (' + elapsed + 's)';
       } catch (err) {
         const elapsed = stopTimer();
-        logLine('\u274c Error: ' + err.message);
-        dot.className = 'dot offline';
+        logLine('❌ Error: ' + err.message);
+        if (dot) dot.className = 'dot offline';
+        if (statusText) statusText.textContent = 'Failed';
       }
     }
+
+    // Load initial config from server
+    fetch('/api/config')
+      .then(res => res.json())
+      .then(cfg => {
+        if (getEl('host')) getEl('host').value = cfg.host || '';
+        if (getEl('username')) getEl('username').value = cfg.username || 'ubuntu';
+        if (getEl('port')) getEl('port').value = cfg.port || '22';
+        if (getEl('keyPath')) getEl('keyPath').value = cfg.keyPath || '';
+        if (getEl('remoteDir')) getEl('remoteDir').value = cfg.remoteDir || '~/discord-bot';
+        if (getEl('githubToken')) getEl('githubToken').value = cfg.githubToken || '';
+        if (cfg.host) testConnectionSilently();
+      })
+      .catch(err => console.warn('Could not load config:', err));
   </script>
 </body>
 </html>`;
@@ -660,7 +717,11 @@ const server = http.createServer((req, res) => {
 
   // GET / -> Serve GUI HTML
   if (req.method === "GET" && url.pathname === "/") {
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+      "Pragma": "no-cache"
+    });
     return res.end(HTML_CONTENT);
   }
 
