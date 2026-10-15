@@ -131,7 +131,7 @@ export class ClanSyncService {
       }
 
       // Check join_role mismatch: member has join_role but is NOT in the clan in OpenFront
-      if (config.join_role_id && member.roles.cache.has(config.join_role_id) && !result.inClan) {
+      if (config.join_role_id && member.roles.cache.has(config.join_role_id) && !result.inClan && !result.error) {
         mismatches.push({
           discordId: memberId,
           openfrontId: link.openfront_id,
@@ -148,21 +148,6 @@ export class ClanSyncService {
 
     db.updateClanLastSync(guild.id, config.clan_tag);
     return results;
-  }
-
-  /**
-   * Sync all clan configs for a guild (multi-clan full sync).
-   */
-  async syncGuild(guild: Guild): Promise<SyncResult[]> {
-    const configs = db.getGuildConfigs(guild.id);
-    if (configs.length === 0) return [];
-
-    const allResults: SyncResult[] = [];
-    for (const config of configs) {
-      const results = await this.syncGuildClan(guild, config);
-      allResults.push(...results);
-    }
-    return allResults;
   }
 
   /**
@@ -184,23 +169,6 @@ export class ClanSyncService {
       results.push(result);
     }
     return results;
-  }
-
-  /**
-   * Sync clan roles for a single member for a specific clan tag.
-   */
-  async syncMemberClan(member: GuildMember, clanTag: string): Promise<SyncResult | null> {
-    const config = db.getGuildClanConfig(member.guild.id, clanTag);
-    if (!config) return null;
-
-    const link = db.getUserByDiscordId(member.id);
-    if (!link) return null;
-
-    const result = await this.syncMemberForClan(member, link, config);
-    if (result.rolesAdded.length > 0 || result.rolesRemoved.length > 0) {
-      await this.logRoleChange(member.guild, config, member, result);
-    }
-    return result;
   }
 
   /**
@@ -229,7 +197,7 @@ export class ClanSyncService {
 
       // Update stored username if changed
       if (profile.username && profile.username !== link.openfront_username) {
-        db.linkUser(link.discord_id, link.openfront_id, profile.username, link.verified_method);
+        db.updateUsername(link.discord_id, profile.username);
       }
 
       const targetClanTag = config.clan_tag.toUpperCase();
@@ -354,8 +322,9 @@ export class ClanSyncService {
       }
 
       const profile = await openfrontApi.getPlayerProfile(link.openfront_id);
+      if (!profile) throw new Error("Could not check pending clan invites: OpenFront API unavailable.");
       const inClan = Boolean(
-        profile?.clans?.some((c) => c.tag.toUpperCase() === targetClanTag)
+        profile.clans?.some((c) => c.tag.toUpperCase() === targetClanTag)
       );
 
       if (!inClan) {
@@ -415,7 +384,7 @@ export class ClanSyncService {
             if (result.rolesAdded.length > 0) {
               await this.logRoleChange(newMember.guild, config, newMember, result);
             }
-          } else {
+          } else if (!result.error) {
             // Needs in-game invite!
             if (config.log_channel_id) {
               const channel = newMember.guild.channels.cache.get(config.log_channel_id) as TextChannel | undefined;

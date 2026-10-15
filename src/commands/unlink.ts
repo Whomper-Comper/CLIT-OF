@@ -5,14 +5,13 @@ import {
   GuildMember,
 } from "discord.js";
 import { db } from "../db.js";
-import { ClanSyncService } from "../clanSync.js";
 
 export const unlinkCommand = {
   data: new SlashCommandBuilder()
     .setName("unlink")
     .setDescription("Unlink your Discord account from your OpenFront account"),
 
-  async execute(interaction: ChatInputCommandInteraction, clanSync: ClanSyncService) {
+  async execute(interaction: ChatInputCommandInteraction) {
     await interaction.deferReply({ ephemeral: true });
 
     const discordId = interaction.user.id;

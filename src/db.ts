@@ -181,15 +181,17 @@ class BotDatabase {
     stmt.run(discordId, openfrontId, openfrontUsername, nowIso, verifiedMethod);
   }
 
+  public close(): void {
+    this.db.close();
+  }
+
+  public updateUsername(discordId: string, username: string): void {
+    this.db.prepare("UPDATE linked_users SET openfront_username = ? WHERE discord_id = ?").run(username, discordId);
+  }
+
   public unlinkUser(discordId: string): boolean {
     const stmt = this.db.prepare(`DELETE FROM linked_users WHERE discord_id = ?`);
     const res = stmt.run(discordId) as { changes?: number };
-    return (res.changes ?? 0) > 0;
-  }
-
-  public unlinkByOpenFrontId(openfrontId: string): boolean {
-    const stmt = this.db.prepare(`DELETE FROM linked_users WHERE openfront_id = ?`);
-    const res = stmt.run(openfrontId) as { changes?: number };
     return (res.changes ?? 0) > 0;
   }
 
@@ -201,11 +203,6 @@ class BotDatabase {
   public getUserByOpenFrontId(openfrontId: string): LinkedUser | null {
     const stmt = this.db.prepare(`SELECT * FROM linked_users WHERE openfront_id = ?`);
     return (stmt.get(openfrontId) as LinkedUser | undefined) ?? null;
-  }
-
-  public getAllLinkedUsers(): LinkedUser[] {
-    const stmt = this.db.prepare(`SELECT * FROM linked_users`);
-    return stmt.all() as unknown as LinkedUser[];
   }
 
   // ────────────────────────────────────────────────────────
@@ -271,12 +268,6 @@ class BotDatabase {
     );
     const res = stmt.run(guildId, clanTag.toUpperCase()) as { changes?: number };
     return (res.changes ?? 0) > 0;
-  }
-
-  public deleteAllGuildConfigs(guildId: string): number {
-    const stmt = this.db.prepare(`DELETE FROM guild_clan_configs WHERE guild_id = ?`);
-    const res = stmt.run(guildId) as { changes?: number };
-    return res.changes ?? 0;
   }
 
   public getAllGuildConfigs(): GuildClanConfig[] {

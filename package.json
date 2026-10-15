@@ -4,6 +4,10 @@
   "description": "Discord bot to link OpenFront accounts and synchronize clan roles",
   "main": "dist/index.js",
   "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node --no-warnings dist/index.js",
@@ -13,7 +17,7 @@
     "pm2:stop": "pm2 stop ecosystem.config.cjs",
     "pm2:restart": "pm2 restart ecosystem.config.cjs",
     "update": "bash deploy.sh",
-    "gui": "node tools/control-panel.cjs"
+    "test": "npm run build && node --test test/*.test.mjs"
   },
   "keywords": [
     "openfront",
@@ -25,8 +29,7 @@
   "dependencies": {
     "discord.js": "^14.18.0",
     "dotenv": "^16.4.7",
-    "jose": "^6.2.12",
-    "zod": "^3.24.2"
+    "jose": "^6.2.12"
   },
   "devDependencies": {
     "@types/node": "^22.13.1",

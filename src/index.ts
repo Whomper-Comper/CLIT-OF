@@ -72,7 +72,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         break;
 
       case "unlink":
-        await unlinkCommand.execute(interaction, clanSyncService);
+        await unlinkCommand.execute(interaction);
         break;
 
       case "whois":
@@ -103,26 +103,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-// Process signal handling
-process.on("SIGINT", () => {
+// Stop the scheduler and release resources on either shutdown signal.
+async function shutdown() {
   console.log("[Bot] Shutting down gracefully...");
   clanSyncService.stopScheduler();
-  client.destroy();
+  await client.destroy();
+  db.close();
   process.exit(0);
-});
-
-process.on("SIGTERM", () => {
-  console.log("[Bot] Shutting down gracefully...");
-  clanSyncService.stopScheduler();
-  client.destroy();
-  process.exit(0);
-});
-
-// Start bot
-if (CONFIG.DISCORD_TOKEN) {
-  client.login(CONFIG.DISCORD_TOKEN).catch((err) => {
-    console.error("[Bot] Login failed:", err);
-  });
-} else {
-  console.warn("[Bot] Cannot log in: DISCORD_TOKEN is empty. Please set it in discord-bot/.env");
 }
+
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
+
+client.login(CONFIG.DISCORD_TOKEN).catch(async (err) => {
+  console.error("[Bot] Login failed:", err);
+  clanSyncService.stopScheduler();
+  await client.destroy();
+  db.close();
+  process.exitCode = 1;
+});

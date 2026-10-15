@@ -14,17 +14,17 @@ cd "$SCRIPT_DIR"
 echo "========================================="
 echo " [1/5] Pulling latest code from Git..."
 echo "========================================="
-git pull origin main
+git pull --ff-only origin main
 
 echo "========================================="
 echo " [2/5] Installing dependencies..."
 echo "========================================="
-npm install
+npm ci --include=dev
 
 echo "========================================="
 echo " [3/5] Building TypeScript project..."
 echo "========================================="
-npm run build
+npm test
 
 echo "========================================="
 echo " [4/5] Deploying Discord slash commands..."

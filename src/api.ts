@@ -21,7 +21,6 @@ export interface OpenFrontPlayerProfile {
   user?: OpenFrontDiscordUser;
   username?: string | null;
   clans?: OpenFrontClanMembership[];
-  stats?: Record<string, any>;
 }
 
 export interface OpenFrontClanInfo {
@@ -30,13 +29,6 @@ export interface OpenFrontClanInfo {
   description: string;
   memberCount?: number;
   isOpen?: boolean;
-}
-
-export interface OpenFrontPlayerGame {
-  gameId: string;
-  start: string;
-  username: string;
-  clanTag?: string | null;
 }
 
 export class OpenFrontApi {
@@ -55,6 +47,7 @@ export class OpenFrontApi {
       const url = `${this.base}/public/player/${encodeURIComponent(publicId.trim())}`;
       const res = await fetch(url, {
         headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(15_000),
       });
 
       if (res.status === 404) return null;
@@ -79,6 +72,7 @@ export class OpenFrontApi {
       const url = `${this.base}/public/clan/${encodeURIComponent(clanTag.trim().toUpperCase())}`;
       const res = await fetch(url, {
         headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(15_000),
       });
 
       if (res.status === 404) return null;
@@ -92,26 +86,6 @@ export class OpenFrontApi {
     } catch (err) {
       console.error(`[OpenFrontApi] Failed to fetch clan info for ${clanTag}:`, err);
       return null;
-    }
-  }
-
-  /**
-   * Fetches recent games of a player to verify recent activity or code in username.
-   */
-  async getPlayerRecentGames(publicId: string): Promise<OpenFrontPlayerGame[]> {
-    try {
-      const url = `${this.base}/public/player/${encodeURIComponent(publicId.trim())}/games`;
-      const res = await fetch(url, {
-        headers: { Accept: "application/json" },
-      });
-
-      if (!res.ok) return [];
-
-      const data = (await res.json()) as { results?: OpenFrontPlayerGame[] };
-      return data.results || [];
-    } catch (err) {
-      console.error(`[OpenFrontApi] Failed to fetch games for ${publicId}:`, err);
-      return [];
     }
   }
 
@@ -142,6 +116,7 @@ export class OpenFrontApi {
         const url = `${this.base}/public/identity_token/validate`;
         const res = await fetch(url, {
           method: "POST",
+          signal: AbortSignal.timeout(15_000),
           headers: {
             "Content-Type": "application/json",
             Accept: "application/json",
@@ -158,8 +133,7 @@ export class OpenFrontApi {
             return data.publicId;
           }
         } else {
-          const errBody = await res.text().catch(() => "");
-          console.warn(`[OpenFrontApi] Validation failed for audience '${aud}': HTTP ${res.status} ${errBody}`);
+          console.warn(`[OpenFrontApi] Validation failed for audience '${aud}': HTTP ${res.status}`);
         }
       }
 

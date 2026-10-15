@@ -61,6 +61,10 @@ A standalone Discord bot that connects Discord accounts with OpenFront accounts,
 
 ## Setup & Installation
 
+Requires Node.js **22.13.0 or newer** (for built-in SQLite). Install dependencies with `npm ci`.
+
+This repository contains only the Discord bot. The desktop control panel is maintained separately.
+
 ### 1. Discord Developer Portal Setup
 
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications).
@@ -99,21 +103,29 @@ Deploy the slash commands to Discord:
 
 ```bash
 # Register globally (available in all servers, takes up to 1h to propagate):
-npm.cmd run register-commands
+npm run register-commands
 
 # Or register instantly to a specific guild (instant update for testing):
-GUILD_ID=your_guild_id npm.cmd run register-commands
+npm run register-commands -- your_guild_id
 ```
 
 ### 4. Start the Bot
 
 ```bash
 # Build the TypeScript project:
-npm.cmd run build
+npm run build
 
 # Start the bot:
-npm.cmd start
+npm start
 
-# Or run in development mode with live tsx:
-npm.cmd run dev
+# Or run the TypeScript source directly:
+npm run dev
 ```
+
+## Verification and deployment
+
+Run `npm test` to compile and run isolated regression tests. Tests use an in-memory database and mocked API calls.
+
+`DEFAULT_SYNC_INTERVAL_MINS` must be an integer from 2 to 1440 and is used when `/clan setup` omits `sync_interval`. Existing clan intervals are preserved.
+
+For Linux hosting, install PM2 separately and run `npm run pm2:start` after building. `npm run update` pulls `main`, installs locked dependencies, runs tests, registers commands, and restarts the bot. The GitHub deployment workflow runs this script on pushes to `main` using the configured Oracle SSH secrets. Keep `.env` and `data/` on the host; neither is tracked by Git.

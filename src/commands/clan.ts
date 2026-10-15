@@ -2,10 +2,10 @@ import {
   ChatInputCommandInteraction,
   SlashCommandBuilder,
   PermissionFlagsBits,
-  GuildMember,
   EmbedBuilder,
   ChannelType,
 } from "discord.js";
+import { CONFIG } from "../config.js";
 import { db } from "../db.js";
 import { openfrontApi } from "../api.js";
 import { ClanSyncService } from "../clanSync.js";
@@ -121,8 +121,7 @@ async function handleSetup(interaction: ChatInputCommandInteraction) {
   }
 
   if (
-    interaction.member instanceof GuildMember &&
-    !interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)
+    !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)
   ) {
     await interaction.reply({
       content: "❌ You need `Manage Server` permission to configure clans.",
@@ -139,7 +138,7 @@ async function handleSetup(interaction: ChatInputCommandInteraction) {
   const leaderRole = interaction.options.getRole("leader_role");
   const joinRole = interaction.options.getRole("join_role");
   const logChannel = interaction.options.getChannel("log_channel");
-  const syncInterval = interaction.options.getInteger("sync_interval") || 10;
+  const syncInterval = interaction.options.getInteger("sync_interval") ?? CONFIG.DEFAULT_SYNC_INTERVAL_MINS;
 
   // Verify clan exists on OpenFront
   const clanInfo = await openfrontApi.getClanInfo(clanTag);
@@ -249,8 +248,7 @@ async function handleRemove(interaction: ChatInputCommandInteraction) {
   }
 
   if (
-    interaction.member instanceof GuildMember &&
-    !interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)
+    !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)
   ) {
     await interaction.reply({
       content: "❌ You need `Manage Server` permission to remove clan configurations.",
@@ -293,10 +291,10 @@ async function handleSync(interaction: ChatInputCommandInteraction, clanSync: Cl
   const specificClanTag = interaction.options.getString("clan_tag")?.toUpperCase().trim();
 
   // If syncing the whole guild (no target user), require permissions
-  if (!targetUser && interaction.member instanceof GuildMember) {
+  if (!targetUser) {
     if (
-      !interaction.member.permissions.has(PermissionFlagsBits.ManageRoles) &&
-      !interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)
+      !interaction.memberPermissions?.has(PermissionFlagsBits.ManageRoles) &&
+      !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)
     ) {
       await interaction.reply({
         content:

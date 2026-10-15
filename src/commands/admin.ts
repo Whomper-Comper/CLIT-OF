@@ -37,6 +37,11 @@ export const adminCommand = {
     ),
 
   async execute(interaction: ChatInputCommandInteraction, clanSync: ClanSyncService) {
+    if (!interaction.guild || !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+      await interaction.reply({ content: "You need Manage Server permission in a Discord server to use this command.", ephemeral: true });
+      return;
+    }
+
     const sub = interaction.options.getSubcommand();
 
     switch (sub) {

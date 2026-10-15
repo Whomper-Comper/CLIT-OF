@@ -8,6 +8,8 @@ dist/
 data/
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 
@@ -15,6 +17,7 @@ data/
 .env*
 !.env.example
 control-panel-config.json
+control-panel/
 *.key
 *.pem
 *.ppk

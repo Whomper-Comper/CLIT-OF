@@ -8,7 +8,7 @@ export const CONFIG = {
   CLIENT_ID: process.env.CLIENT_ID || "",
   OPENFRONT_API_BASE: (process.env.OPENFRONT_API_BASE || "https://api.openfront.io").replace(/\/+$/, ""),
   DB_PATH: process.env.DB_PATH || path.resolve(process.cwd(), "data", "openfront_bot.db"),
-  DEFAULT_SYNC_INTERVAL_MINS: Math.max(1, parseInt(process.env.DEFAULT_SYNC_INTERVAL_MINS || "10", 10)),
+  DEFAULT_SYNC_INTERVAL_MINS: Number(process.env.DEFAULT_SYNC_INTERVAL_MINS || "10"),
 };
 
 export function validateConfig() {
@@ -17,7 +17,11 @@ export function validateConfig() {
   if (!CONFIG.CLIENT_ID) missing.push("CLIENT_ID");
 
   if (missing.length > 0) {
-    console.warn(`[Config] Warning: Missing environment variables: ${missing.join(", ")}`);
-    console.warn(`[Config] Set them in .env before starting the bot.`);
+    throw new Error(`Missing environment variables: ${missing.join(", ")}. Set them in .env.`);
+  }
+
+  const interval = CONFIG.DEFAULT_SYNC_INTERVAL_MINS;
+  if (!Number.isInteger(interval) || interval < 2 || interval > 1440) {
+    throw new Error("DEFAULT_SYNC_INTERVAL_MINS must be an integer between 2 and 1440.");
   }
 }
