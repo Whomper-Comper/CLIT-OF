@@ -7,13 +7,27 @@ export const debugCommand = {
   data: new SlashCommandBuilder().setName("debug").setDescription("Export server links or inspect server status (requires the debug role)")
     .setContexts(InteractionContextType.Guild)
     .addStringOption((option) => option.setName("action").setDescription("Choose a debug action").setRequired(true)
-      .addChoices({ name: "Export linked users as JSON", value: "export_links" }, { name: "Server link and queue status", value: "status" })),
+      .addChoices({ name: "Export linked users as JSON", value: "export_links" }, { name: "Server link and queue status", value: "status" },
+        { name: "Toggle verbose error explanations", value: "verbose" }, { name: "Toggle ephemeral replies", value: "ephemeral" }))
+    .addBooleanOption((option) => option.setName("enabled").setDescription("Required for verbose/ephemeral: true enables, false disables")),
 
   async execute(i: ChatInputCommandInteraction) {
     if (!i.inCachedGuild()) throw new CommandError("Use `/debug` in a server where the bot is installed.");
     await i.deferReply(privateReply);
     await requireDebugAccess(i.guild, i.user.id);
     const action = i.options.getString("action", true);
+    if (action === "verbose" || action === "ephemeral") {
+      const enabled = i.options.getBoolean("enabled");
+      if (enabled === null) throw new CommandError("Provide the enabled input: true to enable or false to disable this setting.");
+      const revision = db.getDebugSettings(i.guildId)!.revision;
+      await requireDebugAccess(i.guild, i.user.id);
+      db.setDebugOptions(i.guildId, action === "verbose" ? { verboseErrors: enabled } : { ephemeralReplies: enabled }, revision);
+      const message = action === "verbose" ? `Verbose error explanations ${enabled ? "enabled" : "disabled"}.`
+        : enabled ? "Ordinary command replies are private again."
+        : "Ordinary clan and unlink replies are now visible in the channel. Verification, configuration menus, debug tools, and access-denied replies stay private. Existing messages keep their original visibility.";
+      await i.editReply({ content: message, allowedMentions: { parse: [] } });
+      return;
+    }
     if (action !== "export_links" && action !== "status") throw new CommandError("Choose a valid debug action.");
     throttle(`debug:${i.guildId}:${i.user.id}`, 15_000);
     let members;
@@ -25,7 +39,8 @@ export const debugCommand = {
       .sort((a, b) => a.discord_id.localeCompare(b.discord_id));
     if (action === "status") {
       const jobs = db.getQueueSummary(i.guildId);
-      await i.editReply({ content: `Current server members: **${members.size}**\nLinked members: **${links.length}**\nConfigured clans: **${db.getGuildConfigs(i.guildId).length}**\nRole queue: **${jobs.pending}** pending (**${jobs.retrying}** retrying)`, allowedMentions: { parse: [] } });
+      const settings = db.getDebugSettings(i.guildId)!;
+      await i.editReply({ content: `Current server members: **${members.size}**\nLinked members: **${links.length}**\nConfigured clans: **${db.getGuildConfigs(i.guildId).length}**\nRole queue: **${jobs.pending}** pending (**${jobs.retrying}** retrying)\nVerbose errors: **${settings.verbose_errors ? "on" : "off"}**\nEphemeral replies: **${settings.ephemeral_replies ? "on" : "off"}**`, allowedMentions: { parse: [] } });
       return;
     }
     const data = {

@@ -5,7 +5,7 @@ import { ClanSyncService, SyncResult } from "../clanSync.js";
 import { configSnapshot, newClanDraft, normalizeClanTag, validateClanDraft } from "../setupConfig.js";
 import { toEpochSeconds } from "../utils.js";
 import { desiredRoles } from "../roles.js";
-import { CommandError, identityLocks, label, pageOf, playerId, privateReply, profileLink, sendEmbeds, shortText, throttle } from "./support.js";
+import { CommandError, identityLocks, label, pageOf, playerId, privateReply, commandReplyOptions, profileLink, sendEmbeds, shortText, throttle } from "./support.js";
 import { checkClanAccess, checkConfigAccess, requireClanAccess, requireConfigAccess } from "../access.js";
 import { configCommand } from "./config.js";
 import { buildCoverageEmbeds, buildDoctorEmbeds } from "../reporting.js";
@@ -59,7 +59,7 @@ export async function executeClanCommand(interaction: ChatInputCommandInteractio
   }
   if (["roster", "pending", "coverage", "doctor"].includes(action)) throttle(`${action}:${i.guildId}`, 15_000);
   if (["setup", "remove", "link", "unlink"].includes(action)) throttle(`${action}:${i.guildId}:${i.user.id}`, 3000);
-  await i.deferReply(action === "roster" || (action === "sync" && !i.options.getUser("user")) ? {} : privateReply);
+  await i.deferReply(action === "roster" || (action === "sync" && !i.options.getUser("user")) ? {} : action === "config" ? privateReply : commandReplyOptions(i));
   if (action === "config") await requireConfigAccess(i.guild, i.user.id);
   else await requireClanAccess(i.guild, i.user.id);
   switch (action) {

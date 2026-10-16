@@ -19,7 +19,7 @@ export interface RoleJob {
   attempts: number; available_at: number; last_error: string | null; priority: number; created_at: number;
 }
 export interface GuildSettings { guild_id: string; manager_role_id: string; revision: number }
-export interface DebugSettings { guild_id: string; debug_role_id: string | null; revision: number }
+export interface DebugSettings { guild_id: string; debug_role_id: string | null; revision: number; verbose_errors: number; ephemeral_replies: number }
 export interface AuditEntry {
   id: number; guild_id: string | null; actor_id: string; discord_id: string;
   action: string; old_id: string | null; new_id: string | null; created_at: string;
@@ -69,6 +69,9 @@ export class BotDatabase {
           linked_at TEXT NOT NULL, migrated_at TEXT NOT NULL);
       `);
       const jobColumns = this.db.prepare("PRAGMA table_info(role_jobs)").all();
+      const debugColumns = this.db.prepare("PRAGMA table_info(guild_debug_settings)").all();
+      if (!debugColumns.some(c => c.name === "verbose_errors")) this.db.exec("ALTER TABLE guild_debug_settings ADD COLUMN verbose_errors INTEGER NOT NULL DEFAULT 0");
+      if (!debugColumns.some(c => c.name === "ephemeral_replies")) this.db.exec("ALTER TABLE guild_debug_settings ADD COLUMN ephemeral_replies INTEGER NOT NULL DEFAULT 1");
       if (!jobColumns.some((c) => c.name === "priority")) this.db.exec("ALTER TABLE role_jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0");
       if (!jobColumns.some((c) => c.name === "created_at")) this.db.exec("ALTER TABLE role_jobs ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0");
       this.db.prepare("UPDATE role_jobs SET created_at=? WHERE created_at=0").run(Date.now());
@@ -125,6 +128,16 @@ export class BotDatabase {
       if ((this.getDebugSettings(guild)?.revision ?? 0) !== expectedRevision) throw new Error("The debug role changed in another session. Open the configuration menu again.");
       this.db.prepare(`INSERT INTO guild_debug_settings(guild_id,debug_role_id,revision) VALUES(?,?,1)
         ON CONFLICT(guild_id) DO UPDATE SET debug_role_id=excluded.debug_role_id,revision=guild_debug_settings.revision+1`).run(guild,role);
+      return this.getDebugSettings(guild)!;
+    });
+  }
+  setDebugOptions(guild: string, options: { verboseErrors?: boolean; ephemeralReplies?: boolean }, expectedRevision: number): DebugSettings {
+    return this.transaction(() => {
+      if (this.getDebugSettings(guild)?.revision !== expectedRevision) throw new Error("Debug settings changed in another session. Try again.");
+      this.db.prepare(`UPDATE guild_debug_settings SET verbose_errors=COALESCE(?,verbose_errors),
+        ephemeral_replies=COALESCE(?,ephemeral_replies),revision=revision+1 WHERE guild_id=?`)
+        .run(options.verboseErrors === undefined ? null : Number(options.verboseErrors),
+          options.ephemeralReplies === undefined ? null : Number(options.ephemeralReplies), guild);
       return this.getDebugSettings(guild)!;
     });
   }

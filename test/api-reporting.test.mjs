@@ -135,6 +135,30 @@ test("missing or null statistics are unavailable; huge counters preserve integer
   assert.deepEqual(summary.details, []);
 });
 
+test("building graphs use built slots, separate modes and distinguish missing counters from zero", () => {
+  const stats = { Public: { "Free For All": { Easy: leaf(2, 1, { units: {
+    city: ["10", "999"], port: ["0"], defp: ["3"], fact: ["2"], silo: ["1"],
+  } }), Hard: leaf(1, 0, { units: { city: ["5"] } }) }, Team: { Easy: leaf(1, 1, { units: { city: ["90"] } }) } } };
+  const ffa = summarizePlayerStats(stats, "ffa"), teams = summarizePlayerStats(stats, "teams");
+  assert.deepEqual(ffa.buildings.map((row) => row.value), [15n, 0n, 3n, 2n, 1n]);
+  assert.equal(ffa.buildings[0].partial, false);
+  assert.equal(ffa.buildings[1].partial, true);
+  assert.equal(teams.buildings[0].value, 90n);
+  assert.equal(teams.buildings[1].value, null);
+});
+
+test("graph columns align with zero, missing, partial and very large counts", async () => {
+  const { alignedBarChart } = await import("../dist/commands/statsGraph.js");
+  const chart = alignedBarChart([{ name: "Cities", value: 12345678901234567890n }, { name: "Defense posts", value: 0n },
+    { name: "Ports", value: null }, { name: "Missile silos", value: 12n, partial: true }]);
+  const lines = chart.split("\n").slice(1, -1);
+  assert.ok(lines.every((line) => line.length === 34));
+  assert.ok(lines.every((line) => line[13] === " " && line[24] === " "));
+  assert.match(lines[2], /N\/A/);
+  assert.match(lines[3], /12\+/);
+  assert.ok(chart.length < 1024);
+});
+
 test("coverage counts current Discord humans and describes clan figures as a lower bound", async (t) => {
   const members = new Map([["linked", { id: "linked", user: { bot: false } }], ["unlinked", { id: "unlinked", user: { bot: false } }], ["bot", { id: "bot", user: { bot: true } }]]);
   t.mock.method(db, "getEffectiveLinks", () => [{ discord_id: "linked", openfront_id: "player" }, { discord_id: "bot", openfront_id: "robot" }, { discord_id: "another-server", openfront_id: "private" }]);

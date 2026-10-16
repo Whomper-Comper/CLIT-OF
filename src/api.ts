@@ -16,7 +16,9 @@ export interface OpenFrontClanInfo {
   name: string; tag: string; description: string; memberCount?: number; isOpen?: boolean;
 }
 export class OpenFrontApiError extends Error {
-  constructor() { super("OpenFront is temporarily unavailable or returned an invalid response. Please try again later."); }
+  constructor(public reason: "timeout" | "network" | "http" | "invalid_response" = "invalid_response", public status?: number) {
+    super("OpenFront is temporarily unavailable or returned an invalid response. Please try again later.");
+  }
 }
 const object = (data: unknown): data is Record<string, unknown> => typeof data === "object" && data !== null && !Array.isArray(data);
 export interface PublicReadOptions { fresh?: boolean }
@@ -73,10 +75,13 @@ export class OpenFrontApi {
     try {
       return await fetch(`${this.base}${endpoint}`, { ...options,
         headers: { Accept: "application/json", ...options.headers }, signal: AbortSignal.timeout(15_000) });
-    } catch { throw new OpenFrontApiError(); }
+    } catch (error) {
+      const timeout = error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name);
+      throw new OpenFrontApiError(timeout ? "timeout" : "network");
+    }
   }
   private async json(response: Response): Promise<unknown> {
-    if (!response.ok) throw new OpenFrontApiError();
+    if (!response.ok) throw new OpenFrontApiError("http", response.status);
     try { return await response.json(); }
     catch { throw new OpenFrontApiError(); }
   }

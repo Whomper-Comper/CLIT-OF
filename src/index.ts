@@ -14,6 +14,7 @@ import { CommandError, privateReply } from "./commands/support.js";
 import { OpenFrontApiError } from "./api.js";
 import { handleConfigInteraction } from "./commands/config.js";
 import { handleWhoisStatsInteraction } from "./commands/whois.js";
+import { commandErrorMessage } from "./commands/errorMessages.js";
 import { clearDeploymentHealth, writeDeploymentHealth } from "./deploymentHealth.js";
 
 validateConfig();
@@ -79,7 +80,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const expected = error instanceof CommandError || error instanceof OpenFrontApiError;
     if (!expected) console.error(`[Bot] Error executing command /${commandName}:`, error);
 
-    const errorMessage = expected ? error.message : "An unexpected error occurred. Please try again later.";
+    const errorMessage = commandErrorMessage(error, interaction.guildId);
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply({ content: errorMessage, embeds: [], components: [], allowedMentions: { parse: [] } }).catch(() => null);
     } else {

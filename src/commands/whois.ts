@@ -8,6 +8,7 @@ import { openfrontApi, OpenFrontPlayerProfile } from "../api.js";
 import { extractDiscordId, toEpochSeconds } from "../utils.js";
 import { PlayerGameMode, PlayerStatsSummary, summarizePlayerStats, winRate } from "../playerStats.js";
 import { CommandError, label, playerId, profileLink, shortText, throttle } from "./support.js";
+import { alignedBarChart } from "./statsGraph.js";
 
 interface StatsTabs {
   id: string;
@@ -129,17 +130,10 @@ function renderStats(session: StatsTabs, mode: PlayerGameMode) {
     return embed;
   }
   const number = (value: bigint) => value.toLocaleString("en-US");
-  embed.addFields({ name: title, value: `**Games:** ${number(stats.games)}\n**Wins:** ${number(stats.wins)}\n**Losses:** ${number(stats.losses)}\n**Win rate:** ${winRate(stats.wins, stats.games)}`, inline: true },
-    { name: "Wins / losses", value: graph(stats), inline: true });
+  embed.addFields({ name: title, value: `**Games:** ${number(stats.games)} · **Wins:** ${number(stats.wins)} · **Losses:** ${number(stats.losses)} · **Win rate:** ${winRate(stats.wins, stats.games)}` },
+    { name: "Wins / losses", value: alignedBarChart([{ name: "Wins", value: stats.wins }, { name: "Losses", value: stats.losses }]) },
+    { name: "Buildings built", value: alignedBarChart(stats.buildings) + "\nN/A = unavailable · + = partial total · ~ = abbreviated count. Exact available totals below." });
   if (stats.details.length) embed.addFields({ name: "Lifetime totals", value: stats.details.map((item) => `${item.name}: **${number(item.value)}**`).join("\n") });
   embed.setFooter({ text: `${title} · all recorded public, private and singleplayer matches${stats.partial ? " · some statistics were unavailable" : ""}` });
   return embed;
-}
-
-function graph(stats: PlayerStatsSummary) {
-  const max = stats.wins > stats.losses ? stats.wins : stats.losses;
-  const blocks = (value: bigint) => max === 0n ? 0 : Number((value * 12n + max / 2n) / max);
-  const bar = (value: bigint) => `${"█".repeat(blocks(value))}${"░".repeat(12 - blocks(value))}`;
-  const number = (value: bigint) => value.toLocaleString("en-US");
-  return `Wins   ${bar(stats.wins)} ${number(stats.wins)}\nLosses ${bar(stats.losses)} ${number(stats.losses)}`;
 }

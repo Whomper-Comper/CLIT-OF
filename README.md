@@ -52,6 +52,12 @@ Choose a separate **debug role** in `/config`. Only members holding that role ca
 |---|---|
 | `/debug action:export_links` | Privately download a JSON snapshot of all linked users currently in this server. |
 | `/debug action:status` | Privately show current member/link counts, configured clan count, and pending/retrying role jobs. |
+| `/debug action:verbose enabled:true` | Enable clearer error explanations and likely causes for this server. Set `enabled:false` to restore short errors. |
+| `/debug action:ephemeral enabled:false` | Make ordinary clan and unlink replies public. Set `enabled:true` to restore their default private replies. |
+
+Verbose mode is off by default and private replies are on by default. Only the configured debug role can change these settings. Settings persist per server; status reports both modes. Verbose output contains actionable explanations for API timeouts, rate limits, access failures, invalid inputs and other errors; raw exception bodies, tokens and stack traces are not shown. Verification, configuration menus, debug tools/JSON exports, and replies rejecting access remain private. Already-created messages keep their original visibility.
+
+The `/whois` FFA and Teams tabs each show aligned, full-width graphs for wins/losses and buildings built: cities, ports, defense posts, factories and missile silos. Fixed columns inside monospace code blocks align every bar and number. Missing data appears as `N/A`, partial totals end with `+`, and large chart counts use `~` scientific abbreviations; exact available counters remain in lifetime totals. Buildings use the API's built counter, excluding upgrades and captures.
 
 The JSON includes `schema_version`, `exported_at`, server ID/name, member/link counts, and a `users` array containing Discord ID/username/display name, stored OpenFront ID/username, link timestamp, scope, and verification method. IDs remain strings. Verified bot-wide links take precedence over approvals from this server. Departed members and approvals belonging to other servers are excluded. Names are the stored/current snapshot; the export does not call OpenFront. Tokens, credentials, private configuration, and audit history are not exported. Empty results produce a valid JSON file; failed membership reads or an attachment exceeding Discord's limit produce an error instead of a partial file. Access is checked again after fetching membership.
 

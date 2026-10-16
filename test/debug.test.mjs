@@ -6,6 +6,9 @@ process.env.CLIENT_ID = "test";
 const { db } = await import("../dist/db.js");
 const { debugCommand } = await import("../dist/commands/debug.js");
 const { MessageFlags } = await import("discord.js");
+const { commandReplyOptions, CommandError } = await import("../dist/commands/support.js");
+const { commandErrorMessage } = await import("../dist/commands/errorMessages.js");
+const { OpenFrontApiError } = await import("../dist/api.js");
 after(() => db.close());
 let sequence = 0;
 function fixture(action = "export_links", role = true) {
@@ -19,7 +22,7 @@ function fixture(action = "export_links", role = true) {
   } } };
   db.setDebugRole(id, "debug-role");
   const i = { guild, guildId: id, user: { id: userId }, memberPermissions: { has: () => true },
-    inCachedGuild: () => true, options: { getString: () => action }, attachmentSizeLimit: 8 * 1024 * 1024,
+    inCachedGuild: () => true, options: { getString: () => action, getBoolean: () => null }, attachmentSizeLimit: 8 * 1024 * 1024,
     deferReply: async function (payload) { this.deferredPayload = payload; },
     editReply: async function (payload) { this.output = payload; } };
   return { i, held, members, afterFetch: (fn) => { afterFetch = fn; } };
@@ -87,4 +90,54 @@ test("debug status stays scoped to this server and uses a private reply", async 
   assert.match(f.i.output.content, /Linked members: \*\*0\*\*/);
   assert.match(f.i.output.content, /Role queue: \*\*0\*\*/);
   assert.equal(f.i.output.files, undefined);
+});
+
+test("debug toggles are explicit, server scoped, reversible, and private", async () => {
+  const f = fixture("verbose"), other = fixture();
+  assert.equal(db.getDebugSettings(f.i.guildId).verbose_errors, 0);
+  assert.equal(db.getDebugSettings(f.i.guildId).ephemeral_replies, 1);
+  await assert.rejects(debugCommand.execute(f.i), /enabled input/);
+  f.i.options.getBoolean = () => true;
+  await debugCommand.execute(f.i);
+  assert.equal(db.getDebugSettings(f.i.guildId).verbose_errors, 1);
+  assert.equal(db.getDebugSettings(other.i.guildId).verbose_errors, 0);
+  f.i.options.getString = () => "ephemeral";
+  f.i.options.getBoolean = () => false;
+  await debugCommand.execute(f.i);
+  assert.deepEqual(commandReplyOptions(f.i), {});
+  assert.equal(f.i.deferredPayload.flags, MessageFlags.Ephemeral);
+  assert.equal(commandReplyOptions(other.i).flags, MessageFlags.Ephemeral);
+  assert.equal(commandReplyOptions({ guildId: null }).flags, MessageFlags.Ephemeral);
+  f.i.options.getBoolean = () => true;
+  await debugCommand.execute(f.i);
+  assert.equal(commandReplyOptions(f.i).flags, MessageFlags.Ephemeral);
+  assert.throws(() => db.setDebugOptions(f.i.guildId, { verboseErrors: false }, 1), /another session/);
+});
+
+test("toggle rechecks debug role after slow initial authorization", async () => {
+  const f = fixture("verbose");
+  f.i.options.getBoolean = () => true;
+  const fetch = f.i.guild.members.fetch;
+  let calls = 0;
+  f.i.guild.members.fetch = async (options) => {
+    if (++calls === 2) f.held.clear();
+    return fetch(options);
+  };
+  await assert.rejects(debugCommand.execute(f.i), /configured debug role/);
+  assert.equal(db.getDebugSettings(f.i.guildId).verbose_errors, 0);
+});
+
+test("verbose errors explain API, permissions and conflicts without exposing raw exceptions", () => {
+  const f = fixture();
+  const api = new OpenFrontApiError("http", 429);
+  assert.equal(commandErrorMessage(api, f.i.guildId), api.message);
+  db.setDebugOptions(f.i.guildId, { verboseErrors: true }, 1);
+  assert.match(commandErrorMessage(api, f.i.guildId), /rate limiting/);
+  assert.match(commandErrorMessage(new OpenFrontApiError("timeout"), f.i.guildId), /time limit/);
+  const permission = Object.assign(new Error("sensitive token and HTTP request body"), { code: 50013 });
+  const output = commandErrorMessage(permission, f.i.guildId);
+  assert.match(output, /role above/);
+  assert.doesNotMatch(output, /sensitive token|HTTP request body|\n\s+at /);
+  assert.match(commandErrorMessage(new CommandError("The user input is required."), f.i.guildId), /selected action needs/);
+  assert.equal(commandErrorMessage(permission, null), "An unexpected error occurred. Please try again later.");
 });

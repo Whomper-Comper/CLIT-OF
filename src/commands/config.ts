@@ -10,6 +10,7 @@ import { openfrontApi } from "../api.js";
 import { ClanDraft, clanDraft, configSnapshot, newClanDraft, normalizeClanTag, validateClanDraft } from "../setupConfig.js";
 import { CommandError, label, privateReply, shortText, throttle } from "./support.js";
 import { buildCoverageEmbeds, buildDoctorEmbeds } from "../reporting.js";
+import { commandErrorMessage } from "./errorMessages.js";
 
 type Screen = "home" | "draft" | "roles" | "logs" | "confirm";
 interface Session {
@@ -49,8 +50,9 @@ function render(s: Session, allowed: boolean, notice = "") {
   const embed = new EmbedBuilder().setTitle(allowed ? "OpenFront server configuration" : "Set or recover clan access")
     .setColor(0x3b82f6).setFooter({ text: "Private menu · expires after 10 minutes · every change rechecks access" });
   const access = settings ? `<@&${settings.manager_role_id}>` : "Not selected";
-  const debugRole = db.getDebugSettings(s.guild)?.debug_role_id;
-  const summary = `**Config role:** ${access}\n**Debug role:** ${debugRole ? `<@&${debugRole}>` : "Disabled"}\n**Configured clans:** ${configs.length}\n**Role jobs:** ${jobs.pending} queued (${jobs.retrying} retrying)`;
+  const debug = db.getDebugSettings(s.guild);
+  const debugRole = debug?.debug_role_id;
+  const summary = `**Config role:** ${access}\n**Debug role:** ${debugRole ? `<@&${debugRole}>` : "Disabled"}\n**Verbose errors:** ${debug?.verbose_errors ? "On" : "Off"}\n**Ordinary private replies:** ${debug?.ephemeral_replies === 0 ? "Off (public)" : "On"}\n**Configured clans:** ${configs.length}\n**Role jobs:** ${jobs.pending} queued (${jobs.retrying} retrying)`;
   const components: ActionRowBuilder<any>[] = [];
   if (!allowed || s.screen === "home") {
     embed.setDescription(`${summary}\n\n${allowed ? "Choose a clan to edit, or create one. Changing the config role below saves immediately. Manage Server permission also grants configuration access; other /clan actions require the selected role." : "Open this menu with Manage Server permission or the config role."}${notice ? `\n\n${notice}` : ""}`);
@@ -220,7 +222,7 @@ export async function handleConfigInteraction(i: Interaction): Promise<boolean> 
     } else throw new CommandError("That menu action is no longer available. Reopen /config.");
     await i.editReply(render(s, true));
   } catch (error) {
-    const content = error instanceof Error ? shortText(error.message, 1900) : "Could not update configuration. Please try again.";
+    const content = commandErrorMessage(error, i.guildId);
     if (i.deferred || i.replied) await i.followUp({ content, ...privateReply, allowedMentions: { parse: [] } }).catch(() => null);
     else await i.reply({ content, ...privateReply, allowedMentions: { parse: [] } }).catch(() => null);
   } finally { if (locked) locked.busy = false; }

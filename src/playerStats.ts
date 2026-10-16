@@ -11,6 +11,7 @@ export interface PlayerStatsSummary {
   wins: bigint; losses: bigint; games: bigint; partial: boolean;
   recent: { games: number; wins: number } | null;
   details: { name: string; value: bigint }[];
+  buildings: { name: string; value: bigint | null; partial: boolean }[];
 }
 export type PlayerGameMode = "ffa" | "teams";
 export type PlayerStatsFilter = PlayerGameMode | "ranked";
@@ -56,7 +57,7 @@ export function summarizePlayerStats(stats: unknown, gameMode?: PlayerStatsFilte
     else for (const value of Object.values(stats.Ranked)) leaf(value);
   }
   if (!leaves.length) return null;
-  const summary: PlayerStatsSummary = { wins: 0n, losses: 0n, games: 0n, partial, recent: null, details: [] };
+  const summary: PlayerStatsSummary = { wins: 0n, losses: 0n, games: 0n, partial, recent: null, details: [], buildings: [] };
   const detailTotals = new Map<string, bigint>();
   const add = (name: string, value: unknown) => {
     const parsed = count(value);
@@ -71,6 +72,10 @@ export function summarizePlayerStats(stats: unknown, gameMode?: PlayerStatsFilte
     const detail = item.stats;
     if (record(detail.units)) {
       add("Cities built", slot(detail.units.city, 0));
+      add("Ports built", slot(detail.units.port, 0));
+      add("Defense posts built", slot(detail.units.defp, 0));
+      add("Factories built", slot(detail.units.fact, 0));
+      add("Missile silos built", slot(detail.units.silo, 0));
       add("Warships built", slot(detail.units.wshp, 0));
     }
     if (record(detail.bombs)) {
@@ -87,5 +92,12 @@ export function summarizePlayerStats(stats: unknown, gameMode?: PlayerStatsFilte
     summary.recent = { games: recent.games, wins: recent.wins };
   }
   summary.details = [...detailTotals].map(([name, value]) => ({ name, value }));
+  // Wire counters use slot zero for built units. Missing buckets are not zero builds.
+  summary.buildings = [["city", "Cities"], ["port", "Ports"], ["defp", "Defense posts"], ["fact", "Factories"], ["silo", "Missile silos"]].map(([key, name]) => {
+    const values = leaves.map(item => record(item.stats) && record(item.stats.units) ? count(slot(item.stats.units[key], 0)) : null);
+    const known = values.filter((value): value is bigint => value !== null);
+    return { name, value: known.length ? known.reduce((total, value) => total + value, 0n) : null,
+      partial: partial || known.length !== leaves.length };
+  });
   return summary;
 }
