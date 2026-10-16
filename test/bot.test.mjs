@@ -60,12 +60,17 @@ function serviceFixture(guilds = []) {
 afterEach(() => { let job; while ((job = db.nextJob(Number.MAX_SAFE_INTEGER))) db.finishJob(job); });
 after(() => db.close());
 
-test("command registration has one definition per command and bounded clan pages", () => {
+test("command registration exposes one clan command with an action choice and shared inputs", () => {
   const data = commands.map((command) => command.data.toJSON());
   assert.deepEqual(data.map((command) => command.name), ["link", "unlink", "whois", "clan", "config"]);
   const clan = data.find((command) => command.name === "clan");
   assert.equal(clan.options.length, 11);
-  for (const name of ["config", "sync", "pending", "roster", "audit", "coverage", "doctor"]) assert.ok(clan.options.find((sub) => sub.name === name).options.some((option) => option.name === "page"));
+  assert.equal(clan.options[0].name, "action");
+  assert.deepEqual(clan.options[0].choices.map((choice) => choice.value), ["setup", "config", "remove", "sync", "pending", "roster", "audit", "link", "unlink", "coverage", "doctor"]);
+  assert.ok(clan.options.some((option) => option.name === "clan_tag"));
+  assert.ok(clan.options.some((option) => option.name === "user"));
+  assert.ok(clan.options.some((option) => option.name === "openfront_id"));
+  assert.ok(clan.options.some((option) => option.name === "page"));
 });
 
 test("configuration rejects missing credentials and invalid intervals", () => {

@@ -1,9 +1,25 @@
-import { ChatInputCommandInteraction, SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import { randomUUID } from "node:crypto";
+import {
+  ActionRowBuilder, ButtonBuilder, ButtonStyle, ChatInputCommandInteraction,
+  EmbedBuilder, Interaction, MessageFlags, SlashCommandBuilder,
+} from "discord.js";
 import { db, LinkedUser } from "../db.js";
 import { openfrontApi, OpenFrontPlayerProfile } from "../api.js";
 import { extractDiscordId, toEpochSeconds } from "../utils.js";
-import { summarizePlayerStats, winRate } from "../playerStats.js";
+import { PlayerGameMode, PlayerStatsSummary, summarizePlayerStats, winRate } from "../playerStats.js";
 import { CommandError, label, playerId, profileLink, shortText, throttle } from "./support.js";
+
+interface StatsTabs {
+  id: string;
+  userId: string;
+  expiresAt: number;
+  base: EmbedBuilder;
+  ffa: PlayerStatsSummary | null;
+  teams: PlayerStatsSummary | null;
+}
+const tabs = new Map<string, StatsTabs>();
+const tabLifetime = 10 * 60_000;
+const tabPrefix = "whois-stats:";
 
 export const whoisCommand = {
   data: new SlashCommandBuilder().setName("whois").setDescription("Look up a Discord user or OpenFront public ID")
@@ -37,39 +53,93 @@ export const whoisCommand = {
     if (!profile && !link) throw new CommandError("That OpenFront profile was not found, and no link is available here.");
     const name = profile?.username || link?.openfront_username || id;
     const connectedId = link?.discord_id ?? (profile?.user?.id ? extractDiscordId(profile.user.id) : null);
-    const embed = new EmbedBuilder().setTitle(shortText(`Identity: ${name}`, 256)).setColor(unavailable ? 0xf59e0b : 0x3b82f6)
+    const base = new EmbedBuilder().setTitle(shortText(`Identity: ${name}`, 256)).setColor(unavailable ? 0xf59e0b : 0x3b82f6)
       .addFields({ name: "OpenFront Profile", value: profileLink(id, name) },
         { name: "Discord User", value: connectedId ? `<@${connectedId}>` : "No linked Discord user", inline: true });
     if (link) {
       const epoch = toEpochSeconds(link.linked_at);
-      embed.addFields({ name: "Link Scope", value: link.verified_method === "admin_manual" ? "Approved in this server" : "Verified bot-wide", inline: true },
+      base.addFields({ name: "Link Scope", value: link.verified_method === "admin_manual" ? "Approved in this server" : "Verified bot-wide", inline: true },
         { name: "Linked Since", value: epoch !== null ? `<t:${epoch}:F> (<t:${epoch}:R>)` : "Unknown" });
     } else {
-      embed.setDescription("This profile is public and has no identity link available in this context.");
+      base.setDescription("This profile is public and has no identity link available in this context.");
     }
-    embed.addFields({ name: "Clans", value: unavailable ? "OpenFront API is unavailable; live membership could not be checked."
+    base.addFields({ name: "Clans", value: unavailable ? "OpenFront API is unavailable; live membership could not be checked."
       : !profile ? "The stored link remains, but its OpenFront profile was not found."
       : !profile.clans ? "Clan membership was not included in the API response."
       : profile.clans.length ? shortText(profile.clans.map((clan) => `• **[${label(clan.tag)}]** ${label(clan.name)} — ${clan.role}`).join("\n"), 1024)
       : "No current clan memberships." });
     if (profile) {
-      const stats = summarizePlayerStats(profile.stats);
-      if (!stats) embed.addFields({ name: "OpenFront Statistics", value: "No recorded statistics were provided by OpenFront." });
-      else {
-        const number = (value: bigint) => value.toLocaleString("en-US");
-        embed.addFields(
-          { name: "Games Played", value: number(stats.games), inline: true },
-          { name: "Wins / Losses", value: `${number(stats.wins)} / ${number(stats.losses)}`, inline: true },
-          { name: "Win Rate", value: winRate(stats.wins, stats.games), inline: true },
-        );
-        if (stats.recent?.games) embed.addFields({ name: `Last ${stats.recent.games} Games`,
-          value: `${stats.recent.wins} wins · ${winRate(BigInt(stats.recent.wins), BigInt(stats.recent.games))} win rate`, inline: true });
-        if (stats.details.length) embed.addFields({ name: "Lifetime Totals", value: stats.details.map((item) => `${item.name}: **${number(item.value)}**`).join("\n") });
-        embed.setFooter({ text: `All recorded public, private, singleplayer and ranked games.${stats.partial ? " Some statistics were unavailable; totals are partial." : ""}` });
-      }
+      const ffa = summarizePlayerStats(profile.stats, "ffa");
+      const teams = summarizePlayerStats(profile.stats, "teams");
+      const ranked = summarizePlayerStats(profile.stats, "ranked");
+      const all = summarizePlayerStats(profile.stats);
       const created = toEpochSeconds(profile.createdAt);
-      if (created !== null) embed.addFields({ name: "OpenFront Account Created", value: `<t:${created}:D>`, inline: true });
+      if (created !== null) base.addFields({ name: "OpenFront Account Created", value: `<t:${created}:D>`, inline: true });
+      if (ranked) {
+        const number = (value: bigint) => value.toLocaleString("en-US");
+        base.addFields({ name: "Ranked Record", value: `${number(ranked.wins)} wins · ${number(ranked.losses)} losses · ${winRate(ranked.wins, ranked.games)} win rate`, inline: true });
+      }
+      if (!all) {
+        base.addFields({ name: "OpenFront Statistics", value: "No recorded statistics were provided by OpenFront." });
+        await interaction.editReply({ embeds: [base], allowedMentions: { parse: [] } });
+        return;
+      }
+      const session = { id: randomUUID(), userId: interaction.user.id, expiresAt: Date.now() + tabLifetime, base, ffa, teams };
+      for (const [key, value] of tabs) if (value.expiresAt <= Date.now()) tabs.delete(key);
+      if (tabs.size >= 500) tabs.delete(tabs.keys().next().value!);
+      tabs.set(session.id, session);
+      await interaction.editReply({ embeds: [renderStats(session, "ffa")], components: [tabRow(session, "ffa")], allowedMentions: { parse: [] } });
+      return;
     }
-    await interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
+    await interaction.editReply({ embeds: [base], allowedMentions: { parse: [] } });
   },
 };
+
+export async function handleWhoisStatsInteraction(interaction: Interaction): Promise<boolean> {
+  if (!interaction.isButton() || !interaction.customId.startsWith(tabPrefix)) return false;
+  const [, id, mode] = interaction.customId.split(":");
+  if (mode !== "ffa" && mode !== "teams") return false;
+  const session = tabs.get(id);
+  if (!session || session.expiresAt <= Date.now()) {
+    if (session) tabs.delete(id);
+    await interaction.reply({ content: "These stats tabs expired. Run `/whois` again to refresh them.", flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  if (interaction.user.id !== session.userId) {
+    await interaction.reply({ content: "Only the person who ran `/whois` can change these stats tabs.", flags: MessageFlags.Ephemeral });
+    return true;
+  }
+  await interaction.update({ embeds: [renderStats(session, mode)], components: [tabRow(session, mode)], allowedMentions: { parse: [] } });
+  return true;
+}
+
+function tabRow(session: StatsTabs, selected: PlayerGameMode) {
+  const button = (mode: PlayerGameMode, title: string) => new ButtonBuilder()
+    .setCustomId(`${tabPrefix}${session.id}:${mode}`).setLabel(title)
+    .setStyle(mode === selected ? ButtonStyle.Primary : ButtonStyle.Secondary);
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(button("ffa", "Free For All"), button("teams", "Teams"));
+}
+
+function renderStats(session: StatsTabs, mode: PlayerGameMode) {
+  const embed = EmbedBuilder.from(session.base);
+  const stats = mode === "ffa" ? session.ffa : session.teams;
+  const title = mode === "ffa" ? "Free For All Stats" : "Teams Stats";
+  if (!stats) {
+    embed.addFields({ name: title, value: `No recorded ${mode === "ffa" ? "Free For All" : "Teams"} statistics were provided by OpenFront.` });
+    return embed;
+  }
+  const number = (value: bigint) => value.toLocaleString("en-US");
+  embed.addFields({ name: title, value: `**Games:** ${number(stats.games)}\n**Wins:** ${number(stats.wins)}\n**Losses:** ${number(stats.losses)}\n**Win rate:** ${winRate(stats.wins, stats.games)}`, inline: true },
+    { name: "Wins / losses", value: graph(stats), inline: true });
+  if (stats.details.length) embed.addFields({ name: "Lifetime totals", value: stats.details.map((item) => `${item.name}: **${number(item.value)}**`).join("\n") });
+  embed.setFooter({ text: `${title} · all recorded public, private and singleplayer matches${stats.partial ? " · some statistics were unavailable" : ""}` });
+  return embed;
+}
+
+function graph(stats: PlayerStatsSummary) {
+  const max = stats.wins > stats.losses ? stats.wins : stats.losses;
+  const blocks = (value: bigint) => max === 0n ? 0 : Number((value * 12n + max / 2n) / max);
+  const bar = (value: bigint) => `${"█".repeat(blocks(value))}${"░".repeat(12 - blocks(value))}`;
+  const number = (value: bigint) => value.toLocaleString("en-US");
+  return `Wins   ${bar(stats.wins)} ${number(stats.wins)}\nLosses ${bar(stats.losses)} ${number(stats.losses)}`;
+}

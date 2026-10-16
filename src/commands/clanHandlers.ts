@@ -29,16 +29,29 @@ async function member(guild: Guild, id: string): Promise<GuildMember> {
 function configs(i: GuildCommand): GuildClanConfig[] {
   const tag = i.options.getString("clan_tag");
   const result = db.getGuildConfigs(i.guildId).filter((config) => !tag || config.clan_tag === normalizeClanTag(tag));
-  if (!result.length) throw new CommandError(tag ? "That clan is not configured in this server." : "No clans are configured in this server. Ask a server manager to use `/clan setup`.");
+  if (!result.length) throw new CommandError(tag ? "That clan is not configured in this server." : "No clans are configured in this server. Ask a server manager to use `/clan` with action `setup`.");
   return result;
 }
 
 export async function executeClanCommand(interaction: ChatInputCommandInteraction, sync: ClanSyncService) {
   if (!interaction.inCachedGuild()) throw new CommandError("Use `/clan` in a Discord server where the bot is installed.");
   const i = interaction;
-  const action = i.options.getSubcommand();
+  const action = i.options.getString("action") ?? i.options.getSubcommand();
+  if (!["setup", "config", "remove", "sync", "pending", "roster", "audit", "link", "unlink", "coverage", "doctor"].includes(action)) {
+    throw new CommandError("Choose a valid clan action.");
+  }
   if (action === "config") checkConfigAccess(i);
   else checkClanAccess(i);
+  const requiredByAction: Record<string, string[]> = {
+    setup: ["clan_tag", "member_role"], remove: ["clan_tag"], roster: ["clan_tag"],
+    link: ["user", "openfront_id"], unlink: ["user"],
+  };
+  for (const name of requiredByAction[action] ?? []) {
+    const value = name === "member_role" ? i.options.getRole(name)
+      : name === "user" ? i.options.getUser(name)
+      : i.options.getString(name);
+    if (!value) throw new CommandError("The " + name + " input is required for the " + action + " action.");
+  }
   if (action === "config" && !i.options.getString("clan_tag") && !i.options.getInteger("page")) return configCommand.execute(i);
   if (action === "sync") {
     const target = i.options.getUser("user");
@@ -165,7 +178,7 @@ async function synchronize(i: GuildCommand, sync: ClanSyncService) {
 
 async function pending(i: GuildCommand, sync: ClanSyncService) {
   const available = configs(i).filter((c) => c.join_role_id);
-  if (!available.length) throw new CommandError("No approval role is configured for the selected clans. A server manager can set join_role in /clan setup.");
+  if (!available.length) throw new CommandError("No approval role is configured for the selected clans. A server manager can set join_role with `/clan` action `setup`.");
   const lines: string[] = [];
   for (const c of available) {
     const list = await sync.getPendingJoinMembers(i.guild, c);

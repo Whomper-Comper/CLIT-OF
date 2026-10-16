@@ -7,7 +7,7 @@ process.env.CLIENT_ID = "test";
 const { OpenFrontApi, OpenFrontApiError, openfrontApi } = await import("../dist/api.js");
 const { summarizePlayerStats, winRate } = await import("../dist/playerStats.js");
 const { buildCoverageEmbeds, buildDoctorEmbeds } = await import("../dist/reporting.js");
-const { whoisCommand } = await import("../dist/commands/whois.js");
+const { whoisCommand, handleWhoisStatsInteraction } = await import("../dist/commands/whois.js");
 const { db } = await import("../dist/db.js");
 after(() => db.close());
 
@@ -173,14 +173,21 @@ test("doctor checks live hierarchy, deleted log channels, uncached API, and retr
   assert.equal(embed.toJSON().color, 0xf59e0b);
 });
 
-test("whois displays recorded wins, losses, recent results and lifetime details", async (t) => {
+test("whois shows FFA graph and switches to the Teams stats tab", async (t) => {
   t.mock.method(db, "getEffectiveLinkByOpenFrontId", () => null);
-  t.mock.method(openfrontApi, "getPlayerProfile", async () => profile({ stats: { Public: { "Free For All": { Easy: leaf(3, 1, { units: { city: ["9"] } }) } }, recent: { all: { games: 2, wins: 1 } } } }));
+  t.mock.method(openfrontApi, "getPlayerProfile", async () => profile({ stats: { Public: {
+    "Free For All": { Easy: leaf(3, 1, { units: { city: ["9"] } }) }, Team: { Easy: leaf(2, 2) },
+  } } }));
   const interaction = { guildId: "guild", user: { id: "stats-reader" }, options: { getUser: () => null, getString: () => "player" }, deferReply: async () => {}, editReply: async function (value) { this.output = value; } };
   await whoisCommand.execute(interaction);
   const fields = interaction.output.embeds[0].toJSON().fields;
-  assert.equal(fields.find((field) => field.name === "Wins / Losses").value, "3 / 1");
-  assert.equal(fields.find((field) => field.name === "Win Rate").value, "75.0%");
-  assert.match(fields.find((field) => field.name === "Last 2 Games").value, /50.0%/);
-  assert.match(fields.find((field) => field.name === "Lifetime Totals").value, /Cities built: \*\*9\*\*/);
+  assert.match(fields.find((field) => field.name === "Free For All Stats").value, /75\.0%/);
+  assert.match(fields.find((field) => field.name === "Wins \/ losses").value, /Wins\s+█/);
+  assert.deepEqual(interaction.output.components[0].components.map((button) => button.data.label), ["Free For All", "Teams"]);
+  assert.match(fields.find((field) => field.name === "Lifetime totals").value, /Cities built: \*\*9\*\*/);
+  const switched = { customId: interaction.output.components[0].components[1].data.custom_id,
+    user: { id: "stats-reader" }, isButton: () => true,
+    update: async function (value) { this.output = value; }, reply: async () => { throw new Error("unexpected stale tab"); } };
+  assert.equal(await handleWhoisStatsInteraction(switched), true);
+  assert.match(switched.output.embeds[0].toJSON().fields.find((field) => field.name === "Teams Stats").value, /50\.0%/);
 });

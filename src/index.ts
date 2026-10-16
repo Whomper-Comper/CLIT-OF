@@ -13,6 +13,7 @@ import { commandsByName } from "./commands/index.js";
 import { CommandError, privateReply } from "./commands/support.js";
 import { OpenFrontApiError } from "./api.js";
 import { handleConfigInteraction } from "./commands/config.js";
+import { handleWhoisStatsInteraction } from "./commands/whois.js";
 import { clearDeploymentHealth, writeDeploymentHealth } from "./deploymentHealth.js";
 
 validateConfig();
@@ -65,6 +66,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
 // Slash Command Router
 client.on(Events.InteractionCreate, async (interaction) => {
   if (await handleConfigInteraction(interaction)) return;
+  if (await handleWhoisStatsInteraction(interaction)) return;
   if (!interaction.isChatInputCommand()) return;
 
   const { commandName } = interaction;

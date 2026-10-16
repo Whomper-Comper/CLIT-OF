@@ -13,20 +13,20 @@ A standalone Discord bot that connects Discord accounts with OpenFront accounts,
 - **Accurate Timezone Display**: All timestamps are stored in UTC ISO-8601 with localized Discord relative and absolute formatting (`<t:TIMESTAMP:F> (<t:TIMESTAMP:R>)`), rendering accurately in the user's local timezone.
 - **Multi-Clan Support**: A single Discord server can configure multiple OpenFront clans (e.g. Clan `MARS`, Clan `VENUS`, etc.).
 - **Guild-Scoped Admin Links**: Admin-approved links are isolated to one server; member-verified links work bot-wide and admins cannot overwrite them.
-- **Link History and Clan Rosters**: `/clan audit` shows scoped link changes and `/clan roster` lists verified or approved clan members in the current server.
-- **Private Configuration Menu**: Use `/clan config` to edit clans, role mappings, approval roles, log channels and sync intervals with Discord buttons, selectors and forms. Each server chooses its own required clan access role.
-- **Player Statistics**: `/whois` includes recorded games, wins, losses, win rate, recent results and available lifetime counters from OpenFront.
-- **Link Coverage and Diagnostics**: `/clan coverage` compares linked people with current Discord membership and OpenFront clan sizes; `/clan doctor` checks roles, permissions, API connectivity and queued work.
+- **Link History and Clan Rosters**: Choose `audit` or `roster` as the action in `/clan` to see scoped link changes or verified and approved clan members in the current server.
+- **Private Configuration Menu**: Choose `config` in `/clan` to edit clans, role mappings, approval roles, log channels and sync intervals with Discord buttons, selectors and forms. Each server chooses its own required clan access role.
+- **Player Statistics**: `/whois` has separate Free For All and Teams buttons, with wins and losses shown as a compact bar graph and available lifetime counters from OpenFront.
+- **Link Coverage and Diagnostics**: Choose `coverage` or `doctor` in `/clan` to compare linked people with current Discord membership and OpenFront clan sizes or check roles, permissions, API connectivity and queued work.
 - **Role-Based Closed Clan Approvals (`join_role`)**:
   - Assign a Discord role (e.g. `@Mars`) to approve a user to join a closed clan in OpenFront.
   - Automatically notifies clan officers in the log channel with a clickable profile link to invite them in-game.
-  - Use `/clan pending` to inspect who has the role and is waiting for an in-game clan invitation.
+  - Choose `pending` in `/clan` to inspect who has the role and is waiting for an in-game clan invitation.
 - **Reversible Linking**: Users can `/unlink` their verified bot-wide link at any time; queued cleanup removes configured clan roles across servers at a paced rate.
 - **Clan Role Synchronization**:
   - Automatically gives configured Discord roles (`Member`, `Officer`, `Leader`) to linked members in the clan.
   - Automatically removes roles when a player leaves the clan.
   - Periodic background sync (configurable interval, default: 10 minutes).
-  - Immediate sync on `/clan sync` or when a linked member joins the server.
+  - Immediate sync by choosing `sync` in `/clan` or when a linked member joins the server.
 - **Two-Way Identity Lookup (`/whois`)**:
   - Find an OpenFront profile by Discord user mention or ID (`/whois user:@Alice`).
   - Find a Discord user by OpenFront Public ID or profile URL (`/whois openfront_id:HabCsQYR`).
@@ -42,25 +42,25 @@ A standalone Discord bot that connects Discord accounts with OpenFront accounts,
 |---|---|
 | `/link [openfront_id] [token]` | Provide exactly one public ID/profile URL or Identity Token to verify your bot-wide identity. |
 | `/unlink` | Remove all your bot-wide and server-only links, including in DMs, and queue clan role cleanup. |
-| `/whois [user] [openfront_id]` | Provide exactly one Discord user or OpenFront ID/profile URL. Shows server-only links only in their server. |
+| `/whois [user] [openfront_id]` | Provide exactly one Discord user or OpenFront ID/profile URL. Shows server-only links only in their server, with separate Free For All and Teams stats tabs. |
 
-### Clan Management Commands (`/clan`)
+### Clan Management (`/clan`)
 
-Clan actions require the server's selected **config role**, including for administrators and the server owner. Configuration is the exception: **Manage Server permission or the config role** grants access to `/config` and `/clan config`. To begin, someone with Manage Server opens the menu, chooses a server role and assigns it to the people who should manage clans. Manage Server always allows configuration recovery if the role is deleted or no longer assigned.
+Use the single `/clan` command and select an `action`; the remaining inputs are optional and apply to the selected action. Clan actions require the server's selected **config role**, including for administrators and the server owner. Configuration is the exception: **Manage Server permission or the config role** grants access to `/config` and `/clan` with action `config`. To begin, someone with Manage Server opens the menu, chooses a server role and assigns it to the people who should manage clans. Manage Server always allows configuration recovery if the role is deleted or no longer assigned.
 
-| Subcommand | Description | Permissions |
+| Action | Inputs and description | Permissions |
 |---|---|---|
-| `/clan setup <clan_tag> <member_role> [officer_role] [leader_role] [join_role] [log_channel] [sync_interval]` | Configure an OpenFront clan for this server. | Clan access role |
-| `/clan config [clan_tag] [page]` | Open the private GUI; supply a tag or page to view saved settings, three per page. | Manage Server or config role |
-| `/clan pending [clan_tag] [page]` | List pending clan invitations, 15 per page. | Clan access role |
-| `/clan roster <clan_tag> [page]` | Browse linked people currently in this Discord who belong to the clan, with OpenFront rank. | Clan access role |
-| `/clan audit [user] [page]` | View link changes recorded in this server, or your own history. | Clan access role |
-| `/clan link <user> <openfront_id>` | Approve a manual link in this server. A verified bot-wide `/link` supersedes it. | Clan access role |
-| `/clan unlink <user>` | Remove a server-only link. Verified bot-wide links can only be removed by their owner. | Clan access role |
-| `/clan remove <clan_tag>` | Remove a clan configuration and queue obsolete role cleanup. | Clan access role |
-| `/clan sync [user] [clan_tag] [page]` | Sync a member or the server, up to ten clan configurations per page. | Clan access role |
-| `/clan coverage [clan_tag] [page]` | Compare current human Discord membership and clan link coverage, ten clans per page. | Clan access role |
-| `/clan doctor [clan_tag] [page]` | Check live configuration, Discord permissions, OpenFront connectivity and queue health, five clans per page. | Clan access role |
+| `/clan action:setup` | Set `clan_tag` and `member_role`; optionally set `officer_role`, `leader_role`, `join_role`, `log_channel`, and `sync_interval`. | Clan access role |
+| `/clan action:config` | Open the private GUI; optionally supply `clan_tag` or `page` to view saved settings, three per page. | Manage Server or config role |
+| `/clan action:pending` | List pending clan invitations; optionally filter by `clan_tag` and `page`. | Clan access role |
+| `/clan action:roster` | Set `clan_tag` to browse linked people currently in this Discord who belong to the clan, with OpenFront rank; optionally set `page`. | Clan access role |
+| `/clan action:audit` | View link changes recorded in this server, optionally filtered by `user` and `page`. | Clan access role |
+| `/clan action:link` | Set `user` and `openfront_id` to approve a manual link in this server. A verified bot-wide `/link` supersedes it. | Clan access role |
+| `/clan action:unlink` | Set `user` to remove a server-only link. Verified bot-wide links can only be removed by their owner. | Clan access role |
+| `/clan action:remove` | Set `clan_tag` to remove a clan configuration and queue obsolete role cleanup. | Clan access role |
+| `/clan action:sync` | Sync a member or the server; optionally set `user`, `clan_tag`, and `page` (up to ten clan configurations per page). | Clan access role |
+| `/clan action:coverage` | Compare current human Discord membership and clan link coverage; optionally set `clan_tag` and `page` (ten clans per page). | Clan access role |
+| `/clan action:doctor` | Check live configuration, Discord permissions, OpenFront connectivity and queue health; optionally set `clan_tag` and `page` (five clans per page). | Clan access role |
 
 Role changes share a queue with a one-second gap between writes. Unlink cleanup has priority over ordinary sync, and equal-priority work rotates between servers after each write. Cleanup survives restarts, backs off failed jobs without blocking other servers, and rechecks identity and configuration before applying changes. Obsolete ranks are removed before new roles are granted. Public server-sync messages are updated when the run completes, including long runs.
 
@@ -74,7 +74,7 @@ Coverage excludes Discord bots and departed members. The Discord linked/total co
 
 Requires Node.js **22.13.0 or newer** (for built-in SQLite). Install dependencies with `npm ci`.
 
-This repository contains only the Discord bot. The desktop control panel is maintained separately. `/link` and `/unlink` manage a verified bot-wide identity. `/clan link` and `/clan unlink` manage an administrator-approved identity for this server only. Server admins cannot replace or remove a member’s verified bot-wide link.
+This repository contains only the Discord bot. The desktop control panel is maintained separately. `/link` and `/unlink` manage a verified bot-wide identity. `/clan` with action `link` or `unlink` manages an administrator-approved identity for this server only. Server admins cannot replace or remove a member’s verified bot-wide link.
 
 ### 1. Discord Developer Portal Setup
 
@@ -137,7 +137,7 @@ npm run dev
 
 Run `npm test` to compile and run isolated regression tests. Tests use in-memory or temporary databases and mocked API calls.
 
-`DEFAULT_SYNC_INTERVAL_MINS` must be an integer from 2 to 1440 and is used when `/clan setup` omits `sync_interval`. Existing clan intervals are preserved.
+`DEFAULT_SYNC_INTERVAL_MINS` must be an integer from 2 to 1440 and is used when `/clan` action `setup` omits `sync_interval`. Existing clan intervals are preserved.
 
 For Linux hosting, install PM2 separately and run `npm run pm2:start` after building. `npm run update` fetches `main`, stages an immutable commit in `.deploy/releases`, installs locked dependencies and tests it while the old bot stays online. It then restarts PM2, verifies that the expected commit and process reached Discord's ready event, registers commands, and saves the process list. A failed health check attempts to restart the previous code. Database files are preserved rather than automatically rolled back.
 
@@ -145,4 +145,4 @@ The GitHub workflow tests the pushed SHA before SSH deployment and deploys that 
 
 Before opening an existing database for migrations, the bot creates a consistent SQLite snapshot, verifies its integrity and retains the newest five snapshots for that database in the adjacent `backups` directory (normally `data/backups`). A failed backup stops migration. New and in-memory databases do not require a snapshot.
 
-Role cleanup uses a persistent queue that removes at most one configured role per second across the bot. Failed Discord role operations retry with increasing delays. Existing legacy admin-created links are quarantined during migration because their original server cannot be determined safely; admins can recreate them as server-scoped links with `/clan link`.
+Role cleanup uses a persistent queue that removes at most one configured role per second across the bot. Failed Discord role operations retry with increasing delays. Existing legacy admin-created links are quarantined during migration because their original server cannot be determined safely; admins can recreate them as server-scoped links with `/clan` action `link`.

@@ -12,6 +12,8 @@ export interface PlayerStatsSummary {
   recent: { games: number; wins: number } | null;
   details: { name: string; value: bigint }[];
 }
+export type PlayerGameMode = "ffa" | "teams";
+export type PlayerStatsFilter = PlayerGameMode | "ranked";
 
 /** BigInt arithmetic keeps counters accurate above Number.MAX_SAFE_INTEGER. */
 export function winRate(wins: bigint, games: bigint): string {
@@ -20,7 +22,7 @@ export function winRate(wins: bigint, games: bigint): string {
   return `${tenths / 10n}.${tenths % 10n}%`;
 }
 
-export function summarizePlayerStats(stats: unknown): PlayerStatsSummary | null {
+export function summarizePlayerStats(stats: unknown, gameMode?: PlayerStatsFilter): PlayerStatsSummary | null {
   if (!record(stats)) return null;
   const leaves: Record<string, unknown>[] = [];
   let partial = false;
@@ -32,11 +34,15 @@ export function summarizePlayerStats(stats: unknown): PlayerStatsSummary | null 
     leaves.push(value);
   };
   // Never recursively sum every object: stats.recent contains overlapping aggregates.
+  const selectedModes = gameMode === "ffa" ? ["Free For All"]
+    : gameMode === "teams" ? ["Team", "Humans Vs Nations"]
+    : gameMode === "ranked" ? []
+    : ["Free For All", "Team", "Humans Vs Nations"];
   for (const type of ["Public", "Private", "Singleplayer"]) {
     const node = stats[type];
     if (node === undefined) continue;
     if (!record(node)) { partial = true; continue; }
-    for (const mode of ["Free For All", "Team", "Humans Vs Nations"]) {
+    for (const mode of selectedModes) {
       const difficulties = node[mode];
       if (difficulties === undefined) continue;
       if (!record(difficulties)) { partial = true; continue; }
@@ -45,7 +51,7 @@ export function summarizePlayerStats(stats: unknown): PlayerStatsSummary | null 
       }
     }
   }
-  if (stats.Ranked !== undefined) {
+  if ((gameMode === undefined || gameMode === "ranked") && stats.Ranked !== undefined) {
     if (!record(stats.Ranked)) partial = true;
     else for (const value of Object.values(stats.Ranked)) leaf(value);
   }
