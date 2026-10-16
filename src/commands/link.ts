@@ -19,7 +19,7 @@ export const linkCommand = {
       const verifiedId = token ? await openfrontApi.verifyIdentityToken(token) : null;
       if (token && !verifiedId) throw new CommandError("That Identity Token is invalid or expired. Generate a new one in OpenFront account settings.");
       const id = playerId(verifiedId ?? input!);
-      const profile = await openfrontApi.getPlayerProfile(id);
+      const profile = await openfrontApi.getPlayerProfile(id, { fresh: true });
       if (!profile) throw new CommandError("That OpenFront player was not found. Check the ID or profile URL.");
       const discordMatch = profile.user?.id && extractDiscordId(profile.user.id) === interaction.user.id;
       if (!token && !discordMatch) {

@@ -3,24 +3,54 @@ name: Deploy Bot to Oracle Cloud
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: # Allows manual triggering from GitHub Actions web UI with a single click
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-bot-deployment
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --include=dev
+      - name: Build and run regression tests
+        run: npm test
+        env:
+          DB_PATH: ':memory:'
+
       - name: Deploy via SSH to Oracle Cloud VM
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
         with:
           host: ${{ secrets.ORACLE_HOST }}
           username: ${{ secrets.ORACLE_USERNAME || 'ubuntu' }}
           key: ${{ secrets.ORACLE_SSH_KEY }}
           port: ${{ secrets.ORACLE_PORT || 22 }}
+          envs: DEPLOY_SHA
+          command_timeout: 10m
           script: |
-            # Navigate to bot directory
+            set -eu
+            case "$DEPLOY_SHA" in *[!0-9a-fA-F]*|'') exit 1;; esac
+            [ "${#DEPLOY_SHA}" -eq 40 ]
             cd ~/discord-bot || cd ~/openfront-discord-bot
-
-            # Run update script
-            chmod +x deploy.sh
-            ./deploy.sh
+            git fetch origin main
+            # Execute the deployment script from the same commit that passed CI.
+            script_file="$(mktemp)"
+            trap 'rm -f "$script_file"' EXIT
+            git show "$DEPLOY_SHA:deploy.sh" > "$script_file"
+            BOT_DIRECTORY="$PWD" bash "$script_file" "$DEPLOY_SHA"

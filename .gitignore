@@ -3,6 +3,7 @@ node_modules/
 
 # Build artifacts
 dist/
+.deploy/
 
 # Local databases & persistent runtime data
 data/

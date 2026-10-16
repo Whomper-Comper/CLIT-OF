@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, afterEach, test } from "node:test";
-import { mkdtempSync, unlinkSync, rmdirSync } from "node:fs";
+import { mkdtempSync, unlinkSync, rmdirSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -31,7 +31,15 @@ function guildFixture(id) {
     roles: { fetch: async () => new Map([["member", { id: "member", managed: false }]]) } };
 }
 function interaction(action, guild = guildFixture(`guild-${action}`), values = {}, permission = true) {
+  const accessRoles = new Map(permission ? [["clan-access", true]] : []);
+  if (guild) {
+    if (!db.getGuildSettings(guild.id)) db.setManagerRole(guild.id, "clan-access");
+    const fetch = guild.members.fetch;
+    guild.members.fetch = async (request) => request && typeof request === "object" && request.user === `actor-${guild.id}`
+      ? { id: request.user, roles: { cache: accessRoles }, permissions: { has: () => permission } } : fetch(request);
+  }
   return { guild, guildId: guild?.id ?? null, inCachedGuild: () => !!guild,
+    member: { roles: { cache: accessRoles } },
     user: { id: `actor-${guild?.id ?? action}`, username: "Actor" }, memberPermissions: { has: () => permission },
     options: { getSubcommand: () => action, getUser: (name) => values[name] ?? null,
       getString: (name) => values[name] ?? null, getInteger: (name) => values[name] ?? null,
@@ -54,10 +62,10 @@ after(() => db.close());
 
 test("command registration has one definition per command and bounded clan pages", () => {
   const data = commands.map((command) => command.data.toJSON());
-  assert.deepEqual(data.map((command) => command.name), ["link", "unlink", "whois", "clan"]);
+  assert.deepEqual(data.map((command) => command.name), ["link", "unlink", "whois", "clan", "config"]);
   const clan = data.find((command) => command.name === "clan");
-  assert.equal(clan.options.length, 9);
-  for (const name of ["config", "sync", "pending", "roster", "audit"]) assert.ok(clan.options.find((sub) => sub.name === name).options.some((option) => option.name === "page"));
+  assert.equal(clan.options.length, 11);
+  for (const name of ["config", "sync", "pending", "roster", "audit", "coverage", "doctor"]) assert.ok(clan.options.find((sub) => sub.name === name).options.some((option) => option.name === "page"));
 });
 
 test("configuration rejects missing credentials and invalid intervals", () => {
@@ -69,10 +77,10 @@ test("configuration rejects missing credentials and invalid intervals", () => {
   } finally { Object.assign(CONFIG, saved); }
 });
 
-test("mutations, other-member sync, and server audit deny insufficient permissions before work", async () => {
-  for (const action of ["setup", "remove", "link", "unlink", "sync", "audit"]) {
+test("every clan subcommand requires its configured role before work", async () => {
+  for (const action of ["setup", "remove", "link", "unlink", "sync", "audit", "pending", "roster", "doctor", "coverage", "config"]) {
     const i = interaction(action, guildFixture(`deny-${action}`), { user: { id: "someone-else" } }, false);
-    await assert.rejects(clanCommand.execute(i, {}), /permission/);
+    await assert.rejects(clanCommand.execute(i, {}), /role/);
     assert.equal(i.deferred, false);
   }
   await assert.rejects(clanCommand.execute(interaction("config", null), {}), /server/);
@@ -100,7 +108,11 @@ test("removal defers before fetching members and queues cleanup for unlinked rol
   db.setGuildClanConfig(c);
   const holder = memberFixture(guild, "unlinked-holder", ["member"]);
   const i = interaction("remove", guild, { clan_tag: "TEST" });
-  guild.members.fetch = async () => { assert.equal(i.deferred, true); return new Map([[holder.id, holder]]); };
+  const fetch = guild.members.fetch;
+  guild.members.fetch = async (request) => {
+    assert.equal(i.deferred, true);
+    return request && typeof request === "object" ? fetch(request) : new Map([[holder.id, holder]]);
+  };
   await clanCommand.execute(i, {});
   assert.equal(db.getGuildClanConfig(guild.id, "TEST"), null);
   assert.ok(JSON.parse(db.getJob(guild.id, holder.id).role_ids).includes("member"));
@@ -210,7 +222,12 @@ test("migrated column ordering cannot corrupt role and interval settings", () =>
     const saved = config("migration", "TEST", { join_role_id: "approval", log_channel_id: "logs", sync_interval_mins: 31 });
     store.setGuildClanConfig(saved);
     assert.deepEqual({ ...store.getGuildClanConfig("migration", "TEST") }, saved);
-  } finally { store.close(); unlinkSync(file); rmdirSync(directory); }
+  } finally {
+    store.close(); unlinkSync(file);
+    const backups = join(directory, "backups");
+    for (const entry of readdirSync(backups)) unlinkSync(join(backups, entry));
+    rmdirSync(backups); rmdirSync(directory);
+  }
 });
 
 test("shared officer roles require officer rank in at least one configured clan", () => {

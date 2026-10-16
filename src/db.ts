@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { CONFIG } from "./config.js";
+import { backupDatabaseBeforeMigration } from "./backups.js";
 
 export interface LinkedUser {
   discord_id: string; openfront_id: string; openfront_username: string | null;
@@ -15,8 +16,9 @@ export interface GuildClanConfig {
 }
 export interface RoleJob {
   guild_id: string; discord_id: string; role_ids: string; version: string;
-  attempts: number; available_at: number; last_error: string | null;
+  attempts: number; available_at: number; last_error: string | null; priority: number; created_at: number;
 }
+export interface GuildSettings { guild_id: string; manager_role_id: string; revision: number }
 export interface AuditEntry {
   id: number; guild_id: string | null; actor_id: string; discord_id: string;
   action: string; old_id: string | null; new_id: string | null; created_at: string;
@@ -28,6 +30,7 @@ export class BotDatabase {
   private db: DatabaseSync;
   constructor(filename = CONFIG.DB_PATH) {
     fs.mkdirSync(path.dirname(filename), { recursive: true });
+    backupDatabaseBeforeMigration(filename);
     this.db = new DatabaseSync(filename);
     this.db.exec("PRAGMA busy_timeout = 5000");
     this.transaction(() => {
@@ -54,11 +57,18 @@ export class BotDatabase {
         CREATE TABLE IF NOT EXISTS role_jobs (
           guild_id TEXT NOT NULL, discord_id TEXT NOT NULL, role_ids TEXT NOT NULL,
           version TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
-          available_at INTEGER NOT NULL DEFAULT 0, last_error TEXT, PRIMARY KEY(guild_id, discord_id));
+          available_at INTEGER NOT NULL DEFAULT 0, last_error TEXT, priority INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(guild_id, discord_id));
+        CREATE TABLE IF NOT EXISTS guild_settings (
+          guild_id TEXT PRIMARY KEY, manager_role_id TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS legacy_manual_links (
           discord_id TEXT PRIMARY KEY, openfront_id TEXT NOT NULL, openfront_username TEXT,
           linked_at TEXT NOT NULL, migrated_at TEXT NOT NULL);
       `);
+      const jobColumns = this.db.prepare("PRAGMA table_info(role_jobs)").all();
+      if (!jobColumns.some((c) => c.name === "priority")) this.db.exec("ALTER TABLE role_jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0");
+      if (!jobColumns.some((c) => c.name === "created_at")) this.db.exec("ALTER TABLE role_jobs ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0");
+      this.db.prepare("UPDATE role_jobs SET created_at=? WHERE created_at=0").run(Date.now());
       if (oldSchema) {
         const joinColumn = columns.some(c => c.name === "join_role_id") ? "join_role_id" : "NULL";
         this.db.exec(`INSERT INTO guild_clan_configs SELECT guild_id, clan_tag, member_role_id,
@@ -75,7 +85,7 @@ export class BotDatabase {
       const legacy = this.db.prepare("SELECT * FROM linked_users WHERE verified_method = 'admin_manual'").all() as unknown as LinkedUser[];
       for (const link of legacy) {
         this.audit(null, "migration", link.discord_id, "legacy_manual_revoked", link.openfront_id, null);
-        this.enqueueAll(link.discord_id);
+        this.enqueueAll(link.discord_id, 10);
       }
       this.db.exec(`INSERT OR IGNORE INTO legacy_manual_links SELECT discord_id, openfront_id,
         openfront_username, linked_at, '${new Date().toISOString()}' FROM linked_users WHERE verified_method = 'admin_manual'`);
@@ -88,6 +98,18 @@ export class BotDatabase {
     catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   close() { this.db.close(); }
+  getGuildSettings(guild: string): GuildSettings | null {
+    return this.db.prepare("SELECT * FROM guild_settings WHERE guild_id=?").get(guild) as unknown as GuildSettings ?? null;
+  }
+  setManagerRole(guild: string, role: string, expectedRevision = 0): GuildSettings {
+    return this.transaction(() => {
+      const previous = this.getGuildSettings(guild);
+      if ((previous?.revision ?? 0) !== expectedRevision) throw new Error("The access role changed in another session. Open the configuration menu again.");
+      this.db.prepare(`INSERT INTO guild_settings(guild_id,manager_role_id,revision) VALUES(?,?,1)
+        ON CONFLICT(guild_id) DO UPDATE SET manager_role_id=excluded.manager_role_id,revision=guild_settings.revision+1`).run(guild,role);
+      return this.getGuildSettings(guild)!;
+    });
+  }
   private audit(guild: string | null, actor: string, user: string, action: string, oldId: string | null, newId: string | null) {
     this.db.prepare(`INSERT INTO link_audit(guild_id,actor_id,discord_id,action,old_id,new_id,created_at)
       VALUES(?,?,?,?,?,?,?)`).run(guild,actor,user,action,oldId,newId,new Date().toISOString());
@@ -123,7 +145,7 @@ export class BotDatabase {
       const locals = this.db.prepare("SELECT * FROM guild_links WHERE discord_id = ? OR openfront_id = ?").all(id,ofId) as unknown as (LinkedUser & {guild_id:string})[];
       for (const local of locals) {
         this.audit(local.guild_id,id,local.discord_id,"local_superseded",local.openfront_id,null);
-        this.enqueueGuild(local.guild_id,local.discord_id);
+        this.enqueueGuild(local.guild_id,local.discord_id,[],10);
       }
       this.db.prepare("DELETE FROM guild_links WHERE discord_id = ? OR openfront_id = ?").run(id,ofId);
       this.audit(originGuild,id,id,"global_link",old?.openfront_id ?? null,ofId);
@@ -137,9 +159,12 @@ export class BotDatabase {
       if (!global && !locals.length) return false;
       this.db.prepare("DELETE FROM linked_users WHERE discord_id = ?").run(id);
       this.db.prepare("DELETE FROM guild_links WHERE discord_id = ?").run(id);
-      for (const local of locals) this.audit(local.guild_id,id,id,"local_self_unlink",local.openfront_id,null);
+      for (const local of locals) {
+        this.audit(local.guild_id,id,id,"local_self_unlink",local.openfront_id,null);
+        this.enqueueGuild(local.guild_id,id,[],10);
+      }
       this.audit(originGuild,id,id,"global_unlink",global?.openfront_id ?? null,null);
-      this.enqueueAll(id);
+      this.enqueueAll(id, 10);
       return true;
     });
   }
@@ -162,7 +187,7 @@ export class BotDatabase {
       if (!old) return false;
       this.db.prepare("DELETE FROM guild_links WHERE guild_id=? AND discord_id=?").run(guild,id);
       this.audit(guild,actor,id,"local_unlink",old.openfront_id,null);
-      this.enqueueGuild(guild,id);
+      this.enqueueGuild(guild,id,[],10);
       return true;
     });
   }
@@ -188,19 +213,31 @@ export class BotDatabase {
     return this.db.prepare(`SELECT * FROM link_audit WHERE ${where} ORDER BY id DESC LIMIT 10 OFFSET ?`)
       .all(...parameters, (page - 1) * 10) as unknown as AuditEntry[];
   }
-  enqueueGuild(guild: string, id: string, extraRoles: string[] = []) {
+  enqueueGuild(guild: string, id: string, extraRoles: string[] = [], priority = 0) {
     const previous = this.db.prepare("SELECT role_ids FROM role_jobs WHERE guild_id=? AND discord_id=?").get(guild,id);
     const roles = [...new Set([...managedRoles(this.getGuildConfigs(guild)), ...extraRoles,
       ...(previous ? JSON.parse(String(previous.role_ids)) as string[] : [])])];
-    this.db.prepare(`INSERT INTO role_jobs(guild_id,discord_id,role_ids,version) VALUES(?,?,?,?)
+    this.db.prepare(`INSERT INTO role_jobs(guild_id,discord_id,role_ids,version,priority,created_at) VALUES(?,?,?,?,?,?)
       ON CONFLICT(guild_id,discord_id) DO UPDATE SET role_ids=excluded.role_ids,version=excluded.version,
-      available_at=0,attempts=0,last_error=NULL`).run(guild,id,JSON.stringify(roles),randomUUID());
+      available_at=0,attempts=0,last_error=NULL,priority=MAX(role_jobs.priority,excluded.priority)`).run(guild,id,JSON.stringify(roles),randomUUID(),priority,Date.now());
   }
-  private enqueueAll(id: string) {
-    for (const guild of new Set(this.getAllGuildConfigs().map(c=>c.guild_id))) this.enqueueGuild(guild,id);
+  private enqueueAll(id: string, priority = 0) {
+    for (const guild of new Set(this.getAllGuildConfigs().map(c=>c.guild_id))) this.enqueueGuild(guild,id,[],priority);
   }
-  nextJob(now = Date.now()): RoleJob | null {
-    return this.db.prepare("SELECT * FROM role_jobs WHERE available_at <= ? ORDER BY available_at, rowid LIMIT 1").get(now) as unknown as RoleJob ?? null;
+  nextJob(now = Date.now(), afterGuild = ""): RoleJob | null {
+    return this.db.prepare(`SELECT * FROM role_jobs WHERE available_at <= ? ORDER BY priority DESC,
+      CASE WHEN guild_id > ? THEN 0 ELSE 1 END, guild_id, available_at, rowid LIMIT 1`).get(now,afterGuild) as unknown as RoleJob ?? null;
+  }
+  progressJob(job: RoleJob, remainingRoleIds: string[]) {
+    this.db.prepare("UPDATE role_jobs SET role_ids=? WHERE guild_id=? AND discord_id=? AND version=?")
+      .run(JSON.stringify(remainingRoleIds),job.guild_id,job.discord_id,job.version);
+  }
+  getQueueSummary(guild: string) {
+    const row = this.db.prepare(`SELECT COUNT(*) AS pending,COALESCE(SUM(attempts>0),0) AS retrying,
+      MIN(CASE WHEN available_at=0 THEN created_at ELSE available_at END) AS oldestAvailableAt
+      FROM role_jobs WHERE guild_id=?`).get(guild)!;
+    const error = this.db.prepare("SELECT last_error FROM role_jobs WHERE guild_id=? AND last_error IS NOT NULL ORDER BY created_at LIMIT 1").get(guild);
+    return { pending: Number(row.pending), retrying: Number(row.retrying), oldestAvailableAt: row.oldestAvailableAt === null ? null : Number(row.oldestAvailableAt), lastError: error ? String(error.last_error) : null };
   }
   finishJob(job: RoleJob) {
     this.db.prepare("DELETE FROM role_jobs WHERE guild_id=? AND discord_id=? AND version=?").run(job.guild_id,job.discord_id,job.version);

@@ -8,7 +8,7 @@ export const clanCommand = {
     .addSubcommand((sub) =>
       sub
         .setName("setup")
-        .setDescription("Configure an OpenFront clan for this server (requires Manage Server)")
+        .setDescription("Configure an OpenFront clan (requires the server's clan access role)")
         .addStringOption((opt) =>
           opt.setName("clan_tag").setMinLength(2).setMaxLength(5).setDescription("The OpenFront Clan Tag (e.g. UN, ABC)").setRequired(true)
         )
@@ -46,16 +46,16 @@ export const clanCommand = {
     .addSubcommand((sub) =>
       sub
         .setName("config")
-        .setDescription("View clan configurations for this server")
+        .setDescription("Open the configuration menu, or view saved settings with tag/page")
         .addStringOption((opt) =>
-          opt.setName("clan_tag").setDescription("View a specific clan config (omit to see all)").setRequired(false)
+          opt.setName("clan_tag").setDescription("View a saved clan configuration; omit tag/page to open menu").setRequired(false)
         )
         .addIntegerOption((opt) => opt.setName("page").setDescription("Result page").setMinValue(1))
     )
     .addSubcommand((sub) =>
       sub
         .setName("remove")
-        .setDescription("Remove a clan configuration from this server (requires Manage Server)")
+        .setDescription("Remove a clan configuration from this server")
         .addStringOption((opt) =>
           opt.setName("clan_tag").setDescription("The clan tag to remove").setRequired(true)
         )
@@ -88,18 +88,24 @@ export const clanCommand = {
     )
     .addSubcommand((sub) =>
       sub.setName("audit").setDescription("View link changes made in this server")
-        .addUserOption((opt) => opt.setName("user").setDescription("Member to inspect (Manage Server required for others)").setRequired(false))
+        .addUserOption((opt) => opt.setName("user").setDescription("Member to inspect").setRequired(false))
         .addIntegerOption((opt) => opt.setName("page").setDescription("Page number").setMinValue(1).setRequired(false))
     )
     .addSubcommand((sub) =>
-      sub.setName("link").setDescription("Link a member in this server only (requires Manage Server)")
+      sub.setName("link").setDescription("Approve a member's OpenFront link in this server only")
         .addUserOption((opt) => opt.setName("user").setDescription("Member to link").setRequired(true))
         .addStringOption((opt) => opt.setName("openfront_id").setDescription("OpenFront public ID or profile URL").setRequired(true))
     )
     .addSubcommand((sub) =>
-      sub.setName("unlink").setDescription("Remove a server-only member link (requires Manage Server)")
+      sub.setName("unlink").setDescription("Remove a server-only member link")
         .addUserOption((opt) => opt.setName("user").setDescription("Member to unlink").setRequired(true))
-    ),
+    )
+    .addSubcommand((sub) => sub.setName("coverage").setDescription("Compare current Discord and OpenFront clan link coverage")
+      .addStringOption((opt) => opt.setName("clan_tag").setDescription("Clan tag to inspect; omit for all configured clans"))
+      .addIntegerOption((opt) => opt.setName("page").setDescription("Result page").setMinValue(1)))
+    .addSubcommand((sub) => sub.setName("doctor").setDescription("Check roles, permissions, API connectivity and cleanup jobs")
+      .addStringOption((opt) => opt.setName("clan_tag").setDescription("Clan tag to inspect; omit for all configured clans"))
+      .addIntegerOption((opt) => opt.setName("page").setDescription("Result page").setMinValue(1))),
 
   execute: executeClanCommand,
 };

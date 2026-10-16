@@ -14,6 +14,9 @@ A standalone Discord bot that connects Discord accounts with OpenFront accounts,
 - **Multi-Clan Support**: A single Discord server can configure multiple OpenFront clans (e.g. Clan `MARS`, Clan `VENUS`, etc.).
 - **Guild-Scoped Admin Links**: Admin-approved links are isolated to one server; member-verified links work bot-wide and admins cannot overwrite them.
 - **Link History and Clan Rosters**: `/clan audit` shows scoped link changes and `/clan roster` lists verified or approved clan members in the current server.
+- **Private Configuration Menu**: Use `/clan config` to edit clans, role mappings, approval roles, log channels and sync intervals with Discord buttons, selectors and forms. Each server chooses its own required clan access role.
+- **Player Statistics**: `/whois` includes recorded games, wins, losses, win rate, recent results and available lifetime counters from OpenFront.
+- **Link Coverage and Diagnostics**: `/clan coverage` compares linked people with current Discord membership and OpenFront clan sizes; `/clan doctor` checks roles, permissions, API connectivity and queued work.
 - **Role-Based Closed Clan Approvals (`join_role`)**:
   - Assign a Discord role (e.g. `@Mars`) to approve a user to join a closed clan in OpenFront.
   - Automatically notifies clan officers in the log channel with a clickable profile link to invite them in-game.
@@ -43,21 +46,27 @@ A standalone Discord bot that connects Discord accounts with OpenFront accounts,
 
 ### Clan Management Commands (`/clan`)
 
+Clan actions require the server's selected **config role**, including for administrators and the server owner. Configuration is the exception: **Manage Server permission or the config role** grants access to `/config` and `/clan config`. To begin, someone with Manage Server opens the menu, chooses a server role and assigns it to the people who should manage clans. Manage Server always allows configuration recovery if the role is deleted or no longer assigned.
+
 | Subcommand | Description | Permissions |
 |---|---|---|
-| `/clan setup <clan_tag> <member_role> [officer_role] [leader_role] [join_role] [log_channel] [sync_interval]` | Configure an OpenFront clan for this server (supports multiple clans per server). | `Manage Server` |
-| `/clan config [clan_tag] [page]` | View server clan configurations, three per page. | Everyone |
-| `/clan pending [clan_tag] [page]` | List pending clan invitations, 15 per page. | Everyone |
-| `/clan roster <clan_tag> [page]` | Browse linked members in this server who belong to the clan, with OpenFront rank. | Everyone |
-| `/clan audit [user] [page]` | View link and unlink history for this server, or your own history. | Everyone (own history) / `Manage Server` (others or server history) |
-| `/clan link <user> <openfront_id>` | Create a manual link scoped to this server. Members can replace it with a verified bot-wide `/link`. | `Manage Server` |
-| `/clan unlink <user>` | Remove a manual link in this server. Bot-wide verified links can only be removed by their owner with `/unlink`. | `Manage Server` |
-| `/clan remove <clan_tag>` | Remove a clan configuration from this server. | `Manage Server` |
-| `/clan sync [user] [clan_tag] [page]` | Sync a member or the server, up to ten clan configurations per page. | Everyone (self) / `Manage Roles` or `Manage Server` (others or server) |
+| `/clan setup <clan_tag> <member_role> [officer_role] [leader_role] [join_role] [log_channel] [sync_interval]` | Configure an OpenFront clan for this server. | Clan access role |
+| `/clan config [clan_tag] [page]` | Open the private GUI; supply a tag or page to view saved settings, three per page. | Manage Server or config role |
+| `/clan pending [clan_tag] [page]` | List pending clan invitations, 15 per page. | Clan access role |
+| `/clan roster <clan_tag> [page]` | Browse linked people currently in this Discord who belong to the clan, with OpenFront rank. | Clan access role |
+| `/clan audit [user] [page]` | View link changes recorded in this server, or your own history. | Clan access role |
+| `/clan link <user> <openfront_id>` | Approve a manual link in this server. A verified bot-wide `/link` supersedes it. | Clan access role |
+| `/clan unlink <user>` | Remove a server-only link. Verified bot-wide links can only be removed by their owner. | Clan access role |
+| `/clan remove <clan_tag>` | Remove a clan configuration and queue obsolete role cleanup. | Clan access role |
+| `/clan sync [user] [clan_tag] [page]` | Sync a member or the server, up to ten clan configurations per page. | Clan access role |
+| `/clan coverage [clan_tag] [page]` | Compare current human Discord membership and clan link coverage, ten clans per page. | Clan access role |
+| `/clan doctor [clan_tag] [page]` | Check live configuration, Discord permissions, OpenFront connectivity and queue health, five clans per page. | Clan access role |
 
-Role changes share a queue with a one-second gap between writes. Cleanup survives restarts, retries failed operations, and rechecks identity and configuration before applying changes. Public server-sync messages are updated when the run completes, including long runs.
+Role changes share a queue with a one-second gap between writes. Unlink cleanup has priority over ordinary sync, and equal-priority work rotates between servers after each write. Cleanup survives restarts, backs off failed jobs without blocking other servers, and rechecks identity and configuration before applying changes. Obsolete ranks are removed before new roles are granted. Public server-sync messages are updated when the run completes, including long runs.
 
-Setup accepts OpenFront tags of 2–5 letters or numbers and checks role hierarchy, duplicate mappings, and log-channel permissions before saving. Invalid input and missing permissions fail before changes are made. API outages leave current clan roles intact and are reported separately from missing profiles. Members can view their own global link history with `/clan audit user:@yourself`; server managers see only events recorded in the current server.
+Setup accepts OpenFront tags of 2–5 letters or numbers and checks role hierarchy, duplicate mappings, and log-channel permissions before saving. The GUI saves drafts explicitly, expires after ten minutes, rechecks access, and rejects concurrent edits. API outages leave current clan roles intact. Public profiles and clan information are cached for 15 seconds, with simultaneous requests shared; ownership verification always fetches fresh data.
+
+Coverage excludes Discord bots and departed members. The Discord linked/total count is exact for the fetched membership snapshot. OpenFront's complete clan roster requires account authentication, so clan coverage is the **minimum confirmed linked clan members present in this Discord / OpenFront clan size**. Membership checks examine up to 250 linked people in 90 seconds and clearly mark partial results. Missing statistics are reported as unavailable.
 
 ---
 
@@ -126,10 +135,14 @@ npm run dev
 
 ## Verification and deployment
 
-Run `npm test` to compile and run isolated regression tests. Tests use an in-memory database and mocked API calls.
+Run `npm test` to compile and run isolated regression tests. Tests use in-memory or temporary databases and mocked API calls.
 
 `DEFAULT_SYNC_INTERVAL_MINS` must be an integer from 2 to 1440 and is used when `/clan setup` omits `sync_interval`. Existing clan intervals are preserved.
 
-For Linux hosting, install PM2 separately and run `npm run pm2:start` after building. `npm run update` pulls `main`, installs locked dependencies, runs tests, registers commands, and restarts the bot. The GitHub deployment workflow runs this script on pushes to `main` using the configured Oracle SSH secrets. Keep `.env` and `data/` on the host; neither is tracked by Git.
+For Linux hosting, install PM2 separately and run `npm run pm2:start` after building. `npm run update` fetches `main`, stages an immutable commit in `.deploy/releases`, installs locked dependencies and tests it while the old bot stays online. It then restarts PM2, verifies that the expected commit and process reached Discord's ready event, registers commands, and saves the process list. A failed health check attempts to restart the previous code. Database files are preserved rather than automatically rolled back.
+
+The GitHub workflow tests the pushed SHA before SSH deployment and deploys that same SHA with serialized production runs. The runtime directory stays at the host checkout so `.env` and relative database paths remain stable. `.deploy/current-commit` identifies the verified running release. After success, a clean canonical checkout is fast-forwarded so manual updates use the current deployment script; a dirty or divergent checkout is left untouched. Keep `.env`, `data/` and `.deploy/` on the host; they are ignored by Git. Deployment sets `BOT_DEPLOY_COMMIT`, `BOT_RELEASE_DIR`, `BOT_RUNTIME_DIR` and `BOT_HEALTH_FILE`; these do not need to be added to `.env`.
+
+Before opening an existing database for migrations, the bot creates a consistent SQLite snapshot, verifies its integrity and retains the newest five snapshots for that database in the adjacent `backups` directory (normally `data/backups`). A failed backup stops migration. New and in-memory databases do not require a snapshot.
 
 Role cleanup uses a persistent queue that removes at most one configured role per second across the bot. Failed Discord role operations retry with increasing delays. Existing legacy admin-created links are quarantined during migration because their original server cannot be determined safely; admins can recreate them as server-scoped links with `/clan link`.

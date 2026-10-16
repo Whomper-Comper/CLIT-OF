@@ -1,4 +1,4 @@
-import { ChatInputCommandInteraction, EmbedBuilder, Guild, GuildMember, PermissionFlagsBits } from "discord.js";
+import { ChatInputCommandInteraction, EmbedBuilder, Guild, GuildMember } from "discord.js";
 import { db, GuildClanConfig, managedRoles } from "../db.js";
 import { openfrontApi } from "../api.js";
 import { ClanSyncService, SyncResult } from "../clanSync.js";
@@ -6,10 +6,11 @@ import { configSnapshot, newClanDraft, normalizeClanTag, validateClanDraft } fro
 import { toEpochSeconds } from "../utils.js";
 import { desiredRoles } from "../roles.js";
 import { CommandError, identityLocks, label, pageOf, playerId, privateReply, profileLink, sendEmbeds, shortText, throttle } from "./support.js";
+import { checkClanAccess, checkConfigAccess, requireClanAccess, requireConfigAccess } from "../access.js";
+import { configCommand } from "./config.js";
+import { buildCoverageEmbeds, buildDoctorEmbeds } from "../reporting.js";
 
 type GuildCommand = ChatInputCommandInteraction<"cached">;
-const managesServer = (i: GuildCommand) => i.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false;
-const canSyncOthers = (i: GuildCommand) => managesServer(i) || !!i.memberPermissions?.has(PermissionFlagsBits.ManageRoles);
 const pageNumber = (i: GuildCommand) => i.options.getInteger("page") ?? 1;
 
 async function members(guild: Guild) {
@@ -36,21 +37,18 @@ export async function executeClanCommand(interaction: ChatInputCommandInteractio
   if (!interaction.inCachedGuild()) throw new CommandError("Use `/clan` in a Discord server where the bot is installed.");
   const i = interaction;
   const action = i.options.getSubcommand();
-  if (["setup", "remove", "link", "unlink"].includes(action) && !managesServer(i)) {
-    throw new CommandError("You need Manage Server permission for that command.");
-  }
+  if (action === "config") checkConfigAccess(i);
+  else checkClanAccess(i);
+  if (action === "config" && !i.options.getString("clan_tag") && !i.options.getInteger("page")) return configCommand.execute(i);
   if (action === "sync") {
     const target = i.options.getUser("user");
-    if ((!target || target.id !== i.user.id) && !canSyncOthers(i)) throw new CommandError("You need Manage Roles or Manage Server permission to sync other members or the server. You can sync yourself with `/clan sync user:@yourself`.");
     throttle(target ? `sync:${i.guildId}:${target.id}` : `sync:${i.guildId}:all`, target ? 10_000 : 60_000);
   }
-  if (action === "audit") {
-    const target = i.options.getUser("user");
-    if ((!target || target.id !== i.user.id) && !managesServer(i)) throw new CommandError("You need Manage Server permission to view other members' history. Select yourself in `user` to view your own history.");
-  }
-  if (["roster", "pending"].includes(action)) throttle(`${action}:${i.guildId}`, 15_000);
+  if (["roster", "pending", "coverage", "doctor"].includes(action)) throttle(`${action}:${i.guildId}`, 15_000);
   if (["setup", "remove", "link", "unlink"].includes(action)) throttle(`${action}:${i.guildId}:${i.user.id}`, 3000);
   await i.deferReply(action === "roster" || (action === "sync" && !i.options.getUser("user")) ? {} : privateReply);
+  if (action === "config") await requireConfigAccess(i.guild, i.user.id);
+  else await requireClanAccess(i.guild, i.user.id);
   switch (action) {
     case "setup": return setup(i);
     case "remove": return remove(i);
@@ -61,8 +59,16 @@ export async function executeClanCommand(interaction: ChatInputCommandInteractio
     case "audit": return audit(i);
     case "link": return guildLink(i);
     case "unlink": return guildUnlink(i);
+    case "coverage": return sendEmbeds(i, await buildCoverageEmbeds(i.guild, reportConfigs(i), pageNumber(i)));
+    case "doctor": return sendEmbeds(i, await buildDoctorEmbeds(i.guild, reportConfigs(i), {
+      page: pageNumber(i), accessRoleId: db.getGuildSettings(i.guildId)?.manager_role_id, jobs: db.getQueueSummary(i.guildId),
+    }));
     default: throw new CommandError("That command is no longer available. Refresh Discord and try again.");
   }
+}
+
+function reportConfigs(i: GuildCommand) {
+  return i.options.getString("clan_tag") ? configs(i) : db.getGuildConfigs(i.guildId);
 }
 
 async function setup(i: GuildCommand) {
@@ -81,6 +87,7 @@ async function setup(i: GuildCommand) {
   const clan = await openfrontApi.getClanInfo(tag);
   if (!clan) throw new CommandError("That OpenFront clan does not exist. Check the clan tag.");
   const allMembers = await members(i.guild);
+  await requireClanAccess(i.guild, i.user.id);
   if (configSnapshot(db.getGuildClanConfig(i.guildId, tag)) !== snapshot) throw new CommandError("This clan configuration changed while setup was running. Run setup again.");
   const oldRoles = managedRoles(previous ? [previous] : []);
   const affected = [...allMembers.values()].filter((m) => db.getEffectiveLink(i.guildId, m.id) || oldRoles.some((role) => m.roles.cache.has(role))).map((m) => m.id);
@@ -93,6 +100,7 @@ async function remove(i: GuildCommand) {
   const [selected] = configs(i);
   const snapshot = configSnapshot(selected);
   const allMembers = await members(i.guild);
+  await requireClanAccess(i.guild, i.user.id);
   if (configSnapshot(db.getGuildClanConfig(i.guildId, selected.clan_tag)) !== snapshot) throw new CommandError("The configuration changed while removal was running. Try again.");
   const oldRoles = managedRoles([selected]);
   const affected = [...allMembers.values()].filter((m) => db.getEffectiveLink(i.guildId, m.id) || oldRoles.some((role) => m.roles.cache.has(role))).map((m) => m.id);
@@ -228,6 +236,7 @@ async function guildLink(i: GuildCommand) {
     await member(i.guild, target.id);
     const profile = await openfrontApi.getPlayerProfile(id);
     if (!profile) throw new CommandError("That OpenFront profile was not found.");
+    await requireClanAccess(i.guild, i.user.id);
     try { db.linkGuildUser(i.guildId, i.user.id, target.id, id, profile.username ?? null); }
     catch (error) { throw new CommandError(error instanceof Error ? error.message : "Could not create the server link."); }
     await i.editReply({ content: `Approved <@${target.id}> as ${profileLink(id, profile.username || id)} in this server. Role updates are queued. The member can verify a bot-wide identity with \`/link\`.` });
@@ -237,6 +246,7 @@ async function guildLink(i: GuildCommand) {
 async function guildUnlink(i: GuildCommand) {
   const target = i.options.getUser("user", true);
   await identityLocks.run(target.id, async () => {
+    await requireClanAccess(i.guild, i.user.id);
     if (db.getUserByDiscordId(target.id)) throw new CommandError("This member has a verified bot-wide identity. Only they can remove it with `/unlink`.");
     const removed = db.unlinkGuildUser(i.guildId, i.user.id, target.id);
     await i.editReply({ content: removed ? `Removed <@${target.id}>'s approval in this server. Role cleanup is queued.` : "This member has no server-only link to remove." });

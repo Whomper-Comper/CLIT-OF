@@ -35,6 +35,7 @@ export class ClanSyncService {
   private readonly guildLocks = new MemberLocks();
   private readonly memberLocks = new MemberLocks();
   private readonly rolePacer = new PacedQueue(1000);
+  private lastCleanupGuild: string | undefined;
 
   constructor(client: Client) {
     this.client = client;
@@ -79,8 +80,9 @@ export class ClanSyncService {
     this.cleaning = true;
     try {
       while (!this.stopping) {
-        const job = db.nextJob();
+        const job = db.nextJob(Date.now(), this.lastCleanupGuild);
         if (!job) break;
+        this.lastCleanupGuild = job.guild_id;
         const key = `${job.guild_id}:${job.discord_id}`;
         try {
           await this.memberLocks.run(key, async () => {
@@ -101,51 +103,72 @@ export class ClanSyncService {
               return;
             }
 
-            // Reconcile against a replacement link, or remove roles if no link remains.
+            // Each pass handles at most one write, allowing unlinks and other guilds
+            // to run between roles even when a linked member belongs to many clans.
             const currentLink = db.getEffectiveLink(job.guild_id, job.discord_id);
+            const configs = db.getGuildConfigs(job.guild_id);
+            const snapshot = configs.map(configSnapshot).join("\n");
+            const remaining = JSON.parse(job.role_ids) as string[];
+            const wanted = new Set<string>();
+            let clans: { tag: string; role: string }[] = [];
+            let username: string | undefined;
             if (currentLink) {
-              const configs = db.getGuildConfigs(job.guild_id);
-              const failures: string[] = [];
-              for (const config of configs) {
-                const result = await this.syncMemberForClanLocked(member, currentLink, config);
-                if (result.error) failures.push(result.error);
-                if (result.rolesAdded.length || result.rolesRemoved.length) {
-                  await this.logRoleChange(guild, config, member, result);
-                }
+              if (configs.length) {
+                const profile = await openfrontApi.getPlayerProfile(currentLink.openfront_id);
+                if (!profile || !Array.isArray(profile.clans)) throw new Error("OpenFront clan membership is unavailable; cleanup will retry");
+                clans = profile.clans;
+                for (const role of desiredRoles(configs, profile.clans)) wanted.add(role);
+                username = profile.username ?? undefined;
               }
-              const stillManaged = new Set(db.getGuildConfigs(job.guild_id)
-                .flatMap((config) => [config.member_role_id, config.officer_role_id, config.leader_role_id, config.join_role_id]
-                  .filter((roleId): roleId is string => Boolean(roleId))));
-              for (const roleId of JSON.parse(job.role_ids) as string[]) {
-                if (stillManaged.has(roleId)) continue;
-                await this.rolePacer.run(async () => {
-                  const current = db.getJob(job.guild_id, job.discord_id);
-                  if (current?.version === job.version && member.roles.cache.has(roleId)) {
-                    await member.roles.remove(roleId);
-                  }
-                });
-              }
-              if (failures.length) throw new Error(failures.join("; "));
-              if (this.stopping) return;
-              db.finishJob(job);
-              return;
             }
 
-            for (const roleId of JSON.parse(job.role_ids) as string[]) {
-              await this.rolePacer.run(async () => {
-                if (this.stopping || db.getJob(job.guild_id, job.discord_id)?.version !== job.version || db.getEffectiveLink(job.guild_id, job.discord_id)) return;
-                if (db.getGuildConfigs(job.guild_id).some((config) => config.join_role_id === roleId)) return;
-                if (member.roles.cache.has(roleId)) await member.roles.remove(roleId);
-              });
+            const isCurrent = () => {
+              const link = db.getEffectiveLink(job.guild_id, job.discord_id);
+              return !this.stopping && db.getJob(job.guild_id, job.discord_id)?.version === job.version &&
+                link?.openfront_id === currentLink?.openfront_id && link?.linked_at === currentLink?.linked_at &&
+                db.getGuildConfigs(job.guild_id).map(configSnapshot).join("\n") === snapshot;
+            };
+            if (!isCurrent()) return;
+            if (username) db.updateUsername(member.id, username, guild.id);
+            // Revoke obsolete ranks before attempting grants that may fail.
+            remaining.sort((left, right) => Number(wanted.has(left)) - Number(wanted.has(right)));
+            while (remaining.length) {
+              const roleId = remaining[0];
+              const add = wanted.has(roleId);
+              // Join approval roles are owned by server staff, including after unlink.
+              if ((!add && configs.some((config) => config.join_role_id === roleId)) || member.roles.cache.has(roleId) === add) {
+                remaining.shift();
+                continue;
+              }
+              const changed = await this.rolePacer.run(async () => {
+                if (!isCurrent()) return false;
+                if (member.roles.cache.has(roleId) !== add) {
+                  if (add) await member.roles.add(roleId);
+                  else await member.roles.remove(roleId);
+                }
+                return true;
+              }, { priority: job.priority, guildId: job.guild_id });
+              if (!changed) return;
+              remaining.shift();
+              db.progressJob(job, remaining);
+              if (currentLink) {
+                const config = configs.find((config) => managedRoles([config]).includes(roleId));
+                if (config) {
+                  const membership = clans.find((clan) => clan.tag.toUpperCase() === config.clan_tag);
+                  await this.logRoleChange(guild, config, member, { discordId: member.id, openfrontId: currentLink.openfront_id,
+                    clanTag: config.clan_tag, inClan: !!membership, clanRole: membership?.role,
+                    rolesAdded: add ? [roleId] : [], rolesRemoved: add ? [] : [roleId] });
+                }
+              }
+              if (!this.stopping && !remaining.length) db.finishJob(job);
+              return;
             }
-            if (this.stopping) return;
-            db.finishJob(job);
+            if (isCurrent()) db.finishJob(job);
           });
         } catch (error) {
           db.retryJob(job, error instanceof Error ? error.message : String(error));
           console.warn(`[ClanSync] Role cleanup for ${job.discord_id} in guild ${job.guild_id} will retry:`, error);
-          // Retry after backoff without blocking other queued removals.
-          break;
+          // The failed job backs off; other guilds can still make progress.
         }
       }
     } finally {
@@ -339,7 +362,7 @@ export class ClanSyncService {
             if (member.roles.cache.has(operation.role) === operation.add) return;
             if (operation.add) { await member.roles.add(operation.role); result.rolesAdded.push(operation.role); }
             else { await member.roles.remove(operation.role); result.rolesRemoved.push(operation.role); }
-          });
+          }, { guildId: config.guild_id });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           result.error = [result.error, message].filter(Boolean).join("; ");

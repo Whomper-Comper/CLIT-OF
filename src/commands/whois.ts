@@ -2,6 +2,7 @@ import { ChatInputCommandInteraction, SlashCommandBuilder, EmbedBuilder } from "
 import { db, LinkedUser } from "../db.js";
 import { openfrontApi, OpenFrontPlayerProfile } from "../api.js";
 import { extractDiscordId, toEpochSeconds } from "../utils.js";
+import { summarizePlayerStats, winRate } from "../playerStats.js";
 import { CommandError, label, playerId, profileLink, shortText, throttle } from "./support.js";
 
 export const whoisCommand = {
@@ -51,6 +52,24 @@ export const whoisCommand = {
       : !profile.clans ? "Clan membership was not included in the API response."
       : profile.clans.length ? shortText(profile.clans.map((clan) => `• **[${label(clan.tag)}]** ${label(clan.name)} — ${clan.role}`).join("\n"), 1024)
       : "No current clan memberships." });
+    if (profile) {
+      const stats = summarizePlayerStats(profile.stats);
+      if (!stats) embed.addFields({ name: "OpenFront Statistics", value: "No recorded statistics were provided by OpenFront." });
+      else {
+        const number = (value: bigint) => value.toLocaleString("en-US");
+        embed.addFields(
+          { name: "Games Played", value: number(stats.games), inline: true },
+          { name: "Wins / Losses", value: `${number(stats.wins)} / ${number(stats.losses)}`, inline: true },
+          { name: "Win Rate", value: winRate(stats.wins, stats.games), inline: true },
+        );
+        if (stats.recent?.games) embed.addFields({ name: `Last ${stats.recent.games} Games`,
+          value: `${stats.recent.wins} wins · ${winRate(BigInt(stats.recent.wins), BigInt(stats.recent.games))} win rate`, inline: true });
+        if (stats.details.length) embed.addFields({ name: "Lifetime Totals", value: stats.details.map((item) => `${item.name}: **${number(item.value)}**`).join("\n") });
+        embed.setFooter({ text: `All recorded public, private, singleplayer and ranked games.${stats.partial ? " Some statistics were unavailable; totals are partial." : ""}` });
+      }
+      const created = toEpochSeconds(profile.createdAt);
+      if (created !== null) embed.addFields({ name: "OpenFront Account Created", value: `<t:${created}:D>`, inline: true });
+    }
     await interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
   },
 };

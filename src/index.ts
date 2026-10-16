@@ -12,6 +12,8 @@ import { ClanSyncService } from "./clanSync.js";
 import { commandsByName } from "./commands/index.js";
 import { CommandError, privateReply } from "./commands/support.js";
 import { OpenFrontApiError } from "./api.js";
+import { handleConfigInteraction } from "./commands/config.js";
+import { clearDeploymentHealth, writeDeploymentHealth } from "./deploymentHealth.js";
 
 validateConfig();
 
@@ -32,6 +34,7 @@ client.once(Events.ClientReady, (c) => {
 
   // Start periodic background clan role sync
   clanSyncService.startScheduler();
+  writeDeploymentHealth();
 });
 
 // Auto-sync roles when a member joins the Discord server
@@ -61,6 +64,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
 
 // Slash Command Router
 client.on(Events.InteractionCreate, async (interaction) => {
+  if (await handleConfigInteraction(interaction)) return;
   if (!interaction.isChatInputCommand()) return;
 
   const { commandName } = interaction;
@@ -85,6 +89,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 // Stop the scheduler and release resources on either shutdown signal.
 async function shutdown() {
   console.log("[Bot] Shutting down gracefully...");
+  clearDeploymentHealth();
   clanSyncService.stopScheduler();
   await client.destroy();
   db.close();
@@ -96,6 +101,7 @@ process.once("SIGTERM", shutdown);
 
 client.login(CONFIG.DISCORD_TOKEN).catch(async (err) => {
   console.error("[Bot] Login failed:", err);
+  clearDeploymentHealth();
   clanSyncService.stopScheduler();
   await client.destroy();
   db.close();
