@@ -202,7 +202,7 @@ test("whois shows FFA graph and switches to the Teams stats tab", async (t) => {
   t.mock.method(openfrontApi, "getPlayerProfile", async () => profile({ stats: { Public: {
     "Free For All": { Easy: leaf(3, 1, { units: { city: ["9"] } }) }, Team: { Easy: leaf(2, 2) },
   } } }));
-  const interaction = { guildId: "guild", user: { id: "stats-reader" }, options: { getUser: () => null, getString: () => "player" }, deferReply: async () => {}, editReply: async function (value) { this.output = value; } };
+  const interaction = { guildId: "guild", user: { id: "stats-reader" }, options: { getUser: () => null, getString: () => "player" }, deferReply: async () => {}, editReply: async function (value) { this.output = value; return { id: "stats-message" }; } };
   await whoisCommand.execute(interaction);
   const fields = interaction.output.embeds[0].toJSON().fields;
   assert.match(fields.find((field) => field.name === "Free For All Stats").value, /75\.0%/);
@@ -210,8 +210,8 @@ test("whois shows FFA graph and switches to the Teams stats tab", async (t) => {
   assert.deepEqual(interaction.output.components[0].components.map((button) => button.data.label), ["Free For All", "Teams"]);
   assert.match(fields.find((field) => field.name === "Lifetime totals").value, /Cities built: \*\*9\*\*/);
   const switched = { customId: interaction.output.components[0].components[1].data.custom_id,
-    user: { id: "stats-reader" }, isButton: () => true,
-    update: async function (value) { this.output = value; }, reply: async () => { throw new Error("unexpected stale tab"); } };
+    user: { id: "stats-reader" }, guildId: "guild", message: { id: "stats-message" }, isButton: () => true,
+    deferUpdate: async () => {}, editReply: async function (value) { this.output = value; }, reply: async () => { throw new Error("unexpected stale tab"); } };
   assert.equal(await handleWhoisStatsInteraction(switched), true);
   assert.match(switched.output.embeds[0].toJSON().fields.find((field) => field.name === "Teams Stats").value, /50\.0%/);
 });

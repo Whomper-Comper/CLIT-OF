@@ -1,5 +1,11 @@
 import { decodeJwt } from "jose";
 import { CONFIG } from "./config.js";
+import type {
+  OpenFrontClanSession, OpenFrontClanSessionsPage, OpenFrontClanSessionsQuery, OpenFrontDeletedPlayer,
+  OpenFrontPlayerGame, OpenFrontPlayerGamesPage, OpenFrontPlayerGamesQuery,
+  OpenFrontPlayerSession, OpenFrontPlayerSessionsPage, OpenFrontPlayerSessionsQuery,
+} from "./historyTypes.js";
+export type * from "./historyTypes.js";
 
 export interface OpenFrontDiscordUser {
   id: string; username: string; discriminator?: string; avatar?: string | null; global_name?: string | null;
@@ -21,6 +27,59 @@ export class OpenFrontApiError extends Error {
   }
 }
 const object = (data: unknown): data is Record<string, unknown> => typeof data === "object" && data !== null && !Array.isArray(data);
+const nonnegativeInteger = (data: unknown): data is number => typeof data === "number" && Number.isSafeInteger(data) && data >= 0;
+const timestamp = (data: unknown): data is string => typeof data === "string" &&
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(data) && Number.isFinite(Date.parse(data));
+const nullableString = (data: unknown): data is string | null => data === null || typeof data === "string";
+const modeFilters = new Set(["ffa", "team", "hvn", "ranked"]);
+const typeFilters = new Set(["public", "private", "singleplayer"]);
+
+function historyQuery(query: OpenFrontPlayerGamesQuery): URLSearchParams {
+  const params = new URLSearchParams();
+  if (query.filter !== undefined) {
+    if (!modeFilters.has(query.filter)) throw new RangeError("Unsupported player history filter.");
+    params.set("filter", query.filter);
+  }
+  if (query.type !== undefined) {
+    if (!typeFilters.has(query.type)) throw new RangeError("Unsupported player history game type.");
+    params.set("type", query.type);
+  }
+  if (query.cursor !== undefined) {
+    if (typeof query.cursor !== "string" || !query.cursor) throw new RangeError("History cursor must be a nonempty opaque token.");
+    params.set("cursor", query.cursor);
+  }
+  return params;
+}
+
+function dateBound(params: URLSearchParams, key: "start" | "end", value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!timestamp(value)) throw new RangeError(`History ${key} must be an ISO timestamp.`);
+  const ms = Date.parse(value);
+  params.set(key, new Date(ms).toISOString());
+  return ms;
+}
+
+function validPlayerGame(data: unknown): data is OpenFrontPlayerGame {
+  return object(data) && typeof data.gameId === "string" && !!data.gameId && timestamp(data.start) &&
+    nonnegativeInteger(data.durationSeconds) && typeof data.map === "string" && typeof data.mode === "string" &&
+    typeof data.type === "string" && nullableString(data.playerTeams) && typeof data.rankedType === "string" &&
+    ["victory", "defeat", "incomplete"].includes(String(data.result)) &&
+    (data.totalPlayers === null || nonnegativeInteger(data.totalPlayers)) && typeof data.username === "string" && nullableString(data.clanTag);
+}
+
+function validPlayerSession(data: unknown): data is OpenFrontPlayerSession {
+  return object(data) && typeof data.gameId === "string" && !!data.gameId && timestamp(data.gameStart) &&
+    (data.gameEnd === null || timestamp(data.gameEnd)) && typeof data.gameType === "string" && typeof data.gameMode === "string" &&
+    typeof data.gameRankedType === "string" && typeof data.clientId === "string" && typeof data.username === "string" &&
+    nullableString(data.clanTag) && typeof data.hasWon === "boolean";
+}
+
+function validClanSession(data: unknown): data is OpenFrontClanSession {
+  return object(data) && typeof data.gameId === "string" && !!data.gameId && typeof data.clanTag === "string" &&
+    nonnegativeInteger(data.clanPlayerCount) && typeof data.hasWon === "boolean" && nonnegativeInteger(data.numTeams) &&
+    nullableString(data.playerTeams) && nonnegativeInteger(data.totalPlayerCount) && timestamp(data.gameStart) &&
+    typeof data.score === "number" && Number.isFinite(data.score);
+}
 export interface PublicReadOptions { fresh?: boolean }
 interface CacheEntry { expires: number; value: unknown }
 interface ApiOptions { cacheTtlMs?: number; maxCacheEntries?: number; now?: () => number }
@@ -114,6 +173,71 @@ export class OpenFrontApi {
     if (!object(data) || typeof data.name !== "string" || typeof data.tag !== "string" || typeof data.description !== "string" ||
       (data.memberCount !== undefined && (typeof data.memberCount !== "number" || !Number.isSafeInteger(data.memberCount) || data.memberCount < 0))) throw new OpenFrontApiError();
     return data as unknown as OpenFrontClanInfo;
+  }
+
+  async getPlayerGames(publicId: string, query: OpenFrontPlayerGamesQuery = {}, options: PublicReadOptions = {}): Promise<OpenFrontPlayerGamesPage | null> {
+    const params = historyQuery(query);
+    const endpoint = `/public/player/${encodeURIComponent(publicId.trim())}/games${params.size ? `?${params}` : ""}`;
+    return this.publicRead(endpoint, () => this.loadCursorPage(endpoint, validPlayerGame, (row) => ({
+      ...row, start: new Date(row.start).toISOString(),
+    })), options);
+  }
+
+  async getPlayerSessions(publicId: string, query: OpenFrontPlayerSessionsQuery = {}, options: PublicReadOptions = {}): Promise<OpenFrontPlayerSessionsPage | null> {
+    const params = historyQuery(query);
+    const start = dateBound(params, "start", query.start), end = dateBound(params, "end", query.end);
+    if (start !== undefined && end !== undefined && start >= end) throw new RangeError("History start must be before end.");
+    const endpoint = `/public/player/${encodeURIComponent(publicId.trim())}/sessions${params.size ? `?${params}` : ""}`;
+    return this.publicRead(endpoint, () => this.loadCursorPage(endpoint, validPlayerSession, (row) => ({
+      ...row, gameStart: new Date(row.gameStart).toISOString(), gameEnd: row.gameEnd === null ? null : new Date(row.gameEnd).toISOString(),
+    })), options);
+  }
+
+  private async loadCursorPage<T>(endpoint: string, validate: (value: unknown) => value is T, normalize: (value: T) => T): Promise<{ results: T[]; nextCursor: string | null } | null> {
+    const response = await this.request(endpoint);
+    if (response.status === 404) return null;
+    const data = await this.json(response);
+    if (!object(data) || !Array.isArray(data.results) || data.results.length > 100 || data.results.some((row) => !validate(row)) ||
+      !nullableString(data.nextCursor) || data.nextCursor === "") throw new OpenFrontApiError();
+    return { results: (data.results as T[]).map(normalize), nextCursor: data.nextCursor };
+  }
+
+  async getClanSessions(tag: string, query: OpenFrontClanSessionsQuery, options: PublicReadOptions = {}): Promise<OpenFrontClanSessionsPage | null> {
+    const params = new URLSearchParams();
+    const start = dateBound(params, "start", query.start), end = dateBound(params, "end", query.end);
+    if (start === undefined || end === undefined || start >= end || end - start > 86_400_000) {
+      throw new RangeError("Public clan history requires start/end bounds no more than one day apart.");
+    }
+    const page = query.page ?? 1, limit = query.limit ?? 20;
+    if (!Number.isSafeInteger(page) || page < 1 || page > 200 || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
+      throw new RangeError("Clan history page must be 1–200 and limit must be 1–50.");
+    }
+    params.set("page", String(page));
+    params.set("limit", String(limit));
+    const endpoint = `/public/clan/${encodeURIComponent(tag.trim().toUpperCase())}/sessions?${params}`;
+    return this.publicRead(endpoint, async () => {
+      const response = await this.request(endpoint);
+      if (response.status === 404) return null;
+      const data = await this.json(response);
+      if (!object(data) || !Array.isArray(data.results) || data.results.length > limit || data.results.some((row) => !validClanSession(row)) ||
+        !nonnegativeInteger(data.total) || data.page !== page || data.limit !== limit) throw new OpenFrontApiError();
+      return { results: (data.results as OpenFrontClanSession[]).map((row) => ({ ...row, gameStart: new Date(row.gameStart).toISOString() })), total: data.total, page, limit };
+    }, options);
+  }
+
+  /** Poll daily when retaining player history; the API exposes only the last seven days of deletions. */
+  async getRecentlyDeletedPlayers(since?: string, options: PublicReadOptions = {}): Promise<OpenFrontDeletedPlayer[]> {
+    const params = new URLSearchParams();
+    if (since !== undefined) {
+      if (!timestamp(since)) throw new RangeError("Deletion sync requires an ISO timestamp.");
+      params.set("since", new Date(Date.parse(since)).toISOString());
+    }
+    const endpoint = `/public/players/recently-deleted${params.size ? `?${params}` : ""}`;
+    return this.publicRead(endpoint, async () => {
+      const data = await this.json(await this.request(endpoint));
+      if (!Array.isArray(data) || data.length > 100_000 || data.some((row) => !object(row) || typeof row.publicId !== "string" || !row.publicId || !timestamp(row.deletedAt))) throw new OpenFrontApiError();
+      return (data as OpenFrontDeletedPlayer[]).map((row) => ({ ...row, deletedAt: new Date(row.deletedAt).toISOString() }));
+    }, options);
   }
 
   async verifyIdentityToken(token: string): Promise<string | null> {

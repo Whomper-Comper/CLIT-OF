@@ -4,6 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { CONFIG } from "./config.js";
 import { backupDatabaseBeforeMigration } from "./backups.js";
+import { HistoryStore } from "./historyStore.js";
 
 export interface LinkedUser {
   discord_id: string; openfront_id: string; openfront_username: string | null;
@@ -29,6 +30,7 @@ export const managedRoles = (configs: GuildClanConfig[]) => [...new Set(configs.
 
 export class BotDatabase {
   private db: DatabaseSync;
+  readonly history: HistoryStore;
   constructor(filename = CONFIG.DB_PATH) {
     fs.mkdirSync(path.dirname(filename), { recursive: true });
     backupDatabaseBeforeMigration(filename);
@@ -96,7 +98,9 @@ export class BotDatabase {
       this.db.exec(`INSERT OR IGNORE INTO legacy_manual_links SELECT discord_id, openfront_id,
         openfront_username, linked_at, '${new Date().toISOString()}' FROM linked_users WHERE verified_method = 'admin_manual'`);
       this.db.exec("DELETE FROM linked_users WHERE verified_method = 'admin_manual'");
+      HistoryStore.initialize(this.db);
     });
+    this.history = new HistoryStore(this.db);
   }
   private transaction<T>(action: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
@@ -165,12 +169,14 @@ export class BotDatabase {
     if (!["identity_token", "profile_discord"].includes(method)) throw new Error("Global links require ownership verification.");
     this.transaction(() => {
       const old = this.getUserByDiscordId(id);
+      this.history.purgeIdentity(id);
       this.db.prepare(`INSERT INTO linked_users(discord_id,openfront_id,openfront_username,linked_at,verified_method) VALUES(?,?,?,?,?) ON CONFLICT(discord_id) DO UPDATE SET
         openfront_id=excluded.openfront_id, openfront_username=excluded.openfront_username,
         linked_at=excluded.linked_at, verified_method=excluded.verified_method`).run(id,ofId,username,new Date().toISOString(),method);
       // Verified ownership invalidates conflicting local claims and the owner's old local links.
       const locals = this.db.prepare("SELECT * FROM guild_links WHERE discord_id = ? OR openfront_id = ?").all(id,ofId) as unknown as (LinkedUser & {guild_id:string})[];
       for (const local of locals) {
+        this.history.purgeMember(local.guild_id,local.discord_id);
         this.audit(local.guild_id,id,local.discord_id,"local_superseded",local.openfront_id,null);
         this.enqueueGuild(local.guild_id,local.discord_id,[],10);
       }
@@ -184,6 +190,7 @@ export class BotDatabase {
       const global = this.getUserByDiscordId(id);
       const locals = this.db.prepare("SELECT * FROM guild_links WHERE discord_id = ?").all(id) as unknown as (LinkedUser & {guild_id:string})[];
       if (!global && !locals.length) return false;
+      this.history.purgeIdentity(id);
       this.db.prepare("DELETE FROM linked_users WHERE discord_id = ?").run(id);
       this.db.prepare("DELETE FROM guild_links WHERE discord_id = ?").run(id);
       for (const local of locals) {
@@ -199,6 +206,7 @@ export class BotDatabase {
     this.transaction(() => {
       if (this.getUserByDiscordId(id) || this.getUserByOpenFrontId(ofId)) throw new Error("A verified bot-wide link exists. Only its owner can change it with /link or /unlink.");
       const old = this.getGuildLink(guild,id);
+      this.history.purgeMember(guild,id);
       const other = this.db.prepare("SELECT discord_id FROM guild_links WHERE guild_id=? AND openfront_id=?").get(guild,ofId);
       if (other && other.discord_id !== id) throw new Error("That OpenFront account already has a manual link in this server.");
       this.db.prepare(`INSERT INTO guild_links(guild_id,discord_id,openfront_id,openfront_username,linked_at,verified_method) VALUES(?,?,?,?,?,?) ON CONFLICT(guild_id,discord_id) DO UPDATE SET
@@ -212,6 +220,7 @@ export class BotDatabase {
     return this.transaction(() => {
       const old = this.getGuildLink(guild,id);
       if (!old) return false;
+      this.history.purgeMember(guild,id);
       this.db.prepare("DELETE FROM guild_links WHERE guild_id=? AND discord_id=?").run(guild,id);
       this.audit(guild,actor,id,"local_unlink",old.openfront_id,null);
       this.enqueueGuild(guild,id,[],10);
@@ -279,6 +288,7 @@ export class BotDatabase {
   setGuildClanConfig(c: GuildClanConfig, guildMemberIds: string[] = []) {
     this.transaction(() => {
       const old = this.getGuildClanConfig(c.guild_id, c.clan_tag);
+      if (!old) this.history.clearGuildPlayerHistory(c.guild_id);
       for (const id of guildMemberIds) this.enqueueGuild(c.guild_id, id, [...managedRoles(old ? [old] : []), ...managedRoles([c])]);
       this.db.prepare(`INSERT INTO guild_clan_configs(guild_id,clan_tag,member_role_id,officer_role_id,leader_role_id,
         join_role_id,log_channel_id,sync_interval_mins,last_sync_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(guild_id,clan_tag) DO UPDATE SET
@@ -300,6 +310,7 @@ export class BotDatabase {
     return this.transaction(() => {
       const config = this.getGuildClanConfig(guild, tag);
       if (!config) return false;
+      this.history.purgeClan(guild,tag);
       for (const id of guildMemberIds) this.enqueueGuild(guild, id, managedRoles([config]));
       return Number(this.db.prepare("DELETE FROM guild_clan_configs WHERE guild_id=? AND clan_tag=?").run(guild,tag.trim().toUpperCase()).changes)>0;
     });

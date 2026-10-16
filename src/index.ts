@@ -11,7 +11,9 @@ import { ClanSyncService } from "./clanSync.js";
 
 import { commandsByName } from "./commands/index.js";
 import { CommandError, privateReply } from "./commands/support.js";
-import { OpenFrontApiError } from "./api.js";
+import { OpenFrontApiError, openfrontApi } from "./api.js";
+import { HistoryCollector } from "./historyCollector.js";
+import { buildWeeklyReport } from "./historyReports.js";
 import { handleConfigInteraction } from "./commands/config.js";
 import { handleWhoisStatsInteraction } from "./commands/whois.js";
 import { commandErrorMessage } from "./commands/errorMessages.js";
@@ -28,6 +30,13 @@ const client = new Client({
 });
 
 const clanSyncService = new ClanSyncService(client);
+const historyCollector = new HistoryCollector(client, db, openfrontApi, {
+  buildWeeklyReport: async (guildId, start, end) => {
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) throw new Error("The recap server is no longer available.");
+    return buildWeeklyReport(guild, start, end);
+  },
+});
 
 client.once(Events.ClientReady, (c) => {
   console.log(`[Bot] Ready! Logged in as ${c.user.tag} (${c.user.id})`);
@@ -36,6 +45,7 @@ client.once(Events.ClientReady, (c) => {
 
   // Start periodic background clan role sync
   clanSyncService.startScheduler();
+  historyCollector.start();
   writeDeploymentHealth();
 });
 
@@ -51,6 +61,8 @@ client.on(Events.GuildMemberAdd, async (member) => {
     console.warn(`[Bot] Error auto-syncing new member ${member.id}:`, err);
   }
 });
+
+client.on(Events.GuildMemberRemove, (member) => { db.history.purgeMember(member.guild.id, member.id); });
 
 // Detect when a member is assigned roles (e.g. given the join_role like "@Mars")
 client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
@@ -94,6 +106,7 @@ async function shutdown() {
   console.log("[Bot] Shutting down gracefully...");
   clearDeploymentHealth();
   clanSyncService.stopScheduler();
+  await historyCollector.stop();
   await client.destroy();
   db.close();
   process.exit(0);
@@ -106,6 +119,7 @@ client.login(CONFIG.DISCORD_TOKEN).catch(async (err) => {
   console.error("[Bot] Login failed:", err);
   clearDeploymentHealth();
   clanSyncService.stopScheduler();
+  await historyCollector.stop();
   await client.destroy();
   db.close();
   process.exitCode = 1;

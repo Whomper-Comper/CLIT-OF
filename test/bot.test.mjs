@@ -64,9 +64,9 @@ test("command registration exposes one clan command with an action choice and sh
   const data = commands.map((command) => command.data.toJSON());
   assert.deepEqual(data.map((command) => command.name), ["link", "unlink", "whois", "clan", "config", "debug"]);
   const clan = data.find((command) => command.name === "clan");
-  assert.equal(clan.options.length, 11);
+  assert.equal(clan.options.length, 13);
   assert.equal(clan.options[0].name, "action");
-  assert.deepEqual(clan.options[0].choices.map((choice) => choice.value), ["setup", "config", "remove", "sync", "pending", "roster", "audit", "link", "unlink", "coverage", "doctor"]);
+  assert.deepEqual(clan.options[0].choices.map((choice) => choice.value), ["setup", "config", "remove", "sync", "pending", "roster", "audit", "link", "unlink", "coverage", "doctor", "recent", "summary"]);
   assert.ok(clan.options.some((option) => option.name === "clan_tag"));
   assert.ok(clan.options.some((option) => option.name === "user"));
   assert.ok(clan.options.some((option) => option.name === "openfront_id"));
@@ -83,12 +83,27 @@ test("configuration rejects missing credentials and invalid intervals", () => {
 });
 
 test("every clan subcommand requires its configured role before work", async () => {
-  for (const action of ["setup", "remove", "link", "unlink", "sync", "audit", "pending", "roster", "doctor", "coverage", "config"]) {
+  for (const action of ["setup", "remove", "link", "unlink", "sync", "audit", "pending", "roster", "doctor", "coverage", "config", "recent", "summary"]) {
     const i = interaction(action, guildFixture(`deny-${action}`), { user: { id: "someone-else" } }, false);
     await assert.rejects(clanCommand.execute(i, {}), /role/);
     assert.equal(i.deferred, false);
   }
   await assert.rejects(clanCommand.execute(interaction("config", null), {}), /server/);
+});
+
+test("recent clan history requires a configured tag and rechecks disabled settings after loading", async (t) => {
+  const missing = interaction("recent", guildFixture("history-missing"));
+  await assert.rejects(clanCommand.execute(missing, {}), /clan_tag/);
+  const guild = guildFixture("history-during-fetch");
+  db.setGuildClanConfig(config(guild.id));
+  const i = interaction("recent", guild, {clan_tag:"TEST",days:1});
+  t.mock.method(openfrontApi, "getClanSessions", async (_tag,q) => {
+    const settings = db.history.getSettings(guild.id);
+    db.history.saveSettings(guild.id, {...settings,clan_history_enabled:0}, settings.revision);
+    return {results:[],total:0,page:1,limit:50};
+  });
+  await assert.rejects(clanCommand.execute(i,{}), /settings changed/);
+  assert.equal(i.output, undefined);
 });
 
 test("setup validates real bot role hierarchy and rejects duplicate rank roles", async () => {

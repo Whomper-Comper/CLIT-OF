@@ -11,11 +11,13 @@ import { ClanDraft, clanDraft, configSnapshot, newClanDraft, normalizeClanTag, v
 import { CommandError, label, privateReply, shortText, throttle } from "./support.js";
 import { buildCoverageEmbeds, buildDoctorEmbeds } from "../reporting.js";
 import { commandErrorMessage } from "./errorMessages.js";
+import { HistorySettings } from "../historyStore.js";
 
-type Screen = "home" | "draft" | "roles" | "logs" | "confirm";
+type Screen = "home" | "draft" | "roles" | "logs" | "confirm" | "history";
 interface Session {
   id: string; user: string; guild: string; expires: number; page: number; screen: Screen;
   draft: ClanDraft | null; tag: string | null; snapshot: string; accessRevision: number; debugRevision: number;
+  historyDraft: Omit<HistorySettings, "guild_id" | "revision">; historyRevision: number;
   busy?: boolean;
 }
 const sessions = new Map<string, Session>();
@@ -35,9 +37,10 @@ export const configCommand = {
     if (!allowed) throw new CommandError("You need Manage Server permission or the configured config role to open this menu.");
     for (const [id, session] of sessions) if (session.expires <= Date.now()) sessions.delete(id);
     if (sessions.size >= 200) sessions.delete(sessions.keys().next().value!);
+    const { guild_id: _guild, revision: historyRevision, ...historyDraft } = db.history.getSettings(i.guildId);
     const s: Session = { id: randomUUID(), user: i.user.id, guild: i.guildId, expires: Date.now() + lifetime,
       page: 0, screen: "home", draft: null, tag: null, snapshot: "null", accessRevision: db.getGuildSettings(i.guildId)?.revision ?? 0,
-      debugRevision: db.getDebugSettings(i.guildId)?.revision ?? 0 };
+      debugRevision: db.getDebugSettings(i.guildId)?.revision ?? 0, historyDraft, historyRevision };
     sessions.set(s.id, s);
     await i.editReply(render(s, allowed));
   },
@@ -72,7 +75,17 @@ function render(s: Session, allowed: boolean, notice = "") {
       components.push(row(button(s, "new", "New clan", ButtonStyle.Primary), button(s, "previous", "Previous").setDisabled(s.page === 0),
         button(s, "next", "Next").setDisabled(s.page >= pages - 1), button(s, "doctor", "Diagnostics"), button(s, "coverage", "Link coverage")));
     }
-    components.push(row(button(s, "close", "Close")));
+    components.push(row(button(s, "history", "Match history / weekly recap"), button(s, "close", "Close")));
+  } else if (s.screen === "history") {
+    const h = s.historyDraft, on = (value: number) => value ? "On" : "Off";
+    embed.setTitle("Match history and weekly recap settings").setDescription(`**Clan match commands:** ${on(h.clan_history_enabled)}\n**Player history page:** ${on(h.player_history_enabled)}\n**Automatic collection:** ${on(h.collection_enabled)} · every ${h.poll_minutes} minutes\n**Retention:** ${h.retention_days} days\n**Weekly recap:** ${on(h.weekly_enabled)}\n**Destination:** ${h.channel_id ? `<#${h.channel_id}>` : "Not selected"}\n**Schedule:** ${["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][h.weekly_day]} at ${String(h.weekly_hour).padStart(2, "0")}:00 (${h.timezone})\n\nChanges are drafts until you choose Save. Recaps describe the previous completed week. Collection initially backfills seven days; partial coverage is labelled.${notice ? `\n\n${notice}` : ""}`);
+    components.push(row(button(s, "history_clans", `Clan history: ${on(h.clan_history_enabled)}`), button(s, "history_players", `Player history: ${on(h.player_history_enabled)}`),
+      button(s, "history_collect", `Collect: ${on(h.collection_enabled)}`), button(s, "history_weekly", `Weekly: ${on(h.weekly_enabled)}`), button(s, "history_timing", "Timing / retention")));
+    const channel = new ChannelSelectMenuBuilder().setCustomId(`${prefix}${s.id}:history_channel`).setPlaceholder("Weekly recap channel (clear to disable recap)")
+      .setChannelTypes(ChannelType.GuildText).setMinValues(0).setMaxValues(1);
+    if (h.channel_id) channel.setDefaultChannels(h.channel_id);
+    components.push(new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(channel));
+    components.push(row(button(s, "history_save", "Save", ButtonStyle.Success), button(s, "home", "Back to clans"), button(s, "close", "Close")));
   } else if (s.draft) {
     const d = s.draft;
     const role = (id: string | null) => id ? `<@&${id}>` : "Not selected";
@@ -135,8 +148,19 @@ export async function handleConfigInteraction(i: Interaction): Promise<boolean> 
         .setLabel("Sync interval in minutes (2–1440)").setStyle(TextInputStyle.Short).setValue(String(s.draft.sync_interval_mins)).setMaxLength(4)));
       await i.showModal(modal); return true;
     }
+    if (action === "history_timing" && i.isButton() && s.screen === "history") {
+      const role = db.getGuildSettings(i.guildId)?.manager_role_id;
+      if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild) && !(role && i.member.roles.cache.has(role))) throw new CommandError("You need Manage Server permission or the config role.");
+      const h = s.historyDraft;
+      const modal = new ModalBuilder().setCustomId(`${prefix}${s.id}:history_details`).setTitle("History collection and recap timing");
+      for (const [key, title, value] of [["poll", "Collection interval minutes (5–1440)", h.poll_minutes], ["retention", "Retention days (14–365)", h.retention_days],
+        ["day", "Weekly day (0 Sunday through 6 Saturday)", h.weekly_day], ["hour", "Weekly hour (0–23)", h.weekly_hour], ["timezone", "Time zone (e.g. America/Bahia or UTC)", h.timezone]] as const) {
+        modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId(key).setLabel(title).setStyle(TextInputStyle.Short).setValue(String(value)).setMaxLength(64)));
+      }
+      await i.showModal(modal); return true;
+    }
     // A modal must be shown as the initial response; all other actions can defer immediately.
-    if (action !== "basics") {
+    if (action !== "basics" && action !== "history_timing") {
       if (i.isMessageComponent() || i.isModalSubmit() && i.isFromMessage()) await i.deferUpdate();
       else throw new CommandError("Open the configuration menu again.");
     }
@@ -171,6 +195,41 @@ export async function handleConfigInteraction(i: Interaction): Promise<boolean> 
       const c = db.getGuildClanConfig(i.guildId, i.values[0]);
       if (!c) throw new CommandError("That clan was removed. Open the menu again.");
       s.draft = clanDraft(c); s.tag = c.clan_tag; s.snapshot = configSnapshot(c); s.screen = "draft";
+    } else if (action === "history") {
+      const { guild_id: _guild, revision, ...draft } = db.history.getSettings(i.guildId);
+      s.historyDraft = draft; s.historyRevision = revision; s.screen = "history";
+    } else if (action === "history_details" && i.isModalSubmit() && s.screen === "history") {
+      const h = s.historyDraft;
+      h.poll_minutes = Number(i.fields.getTextInputValue("poll")); h.retention_days = Number(i.fields.getTextInputValue("retention"));
+      h.weekly_day = Number(i.fields.getTextInputValue("day")); h.weekly_hour = Number(i.fields.getTextInputValue("hour"));
+      h.timezone = i.fields.getTextInputValue("timezone").trim();
+    } else if (action === "history_channel" && i.isChannelSelectMenu() && s.screen === "history") {
+      s.historyDraft.channel_id = i.values[0] ?? null;
+      if (!s.historyDraft.channel_id) s.historyDraft.weekly_enabled = 0;
+    } else if (["history_clans", "history_players", "history_collect", "history_weekly"].includes(action) && s.screen === "history") {
+      const fields = { history_clans: "clan_history_enabled", history_players: "player_history_enabled", history_collect: "collection_enabled", history_weekly: "weekly_enabled" } as const;
+      const field = fields[action as keyof typeof fields];
+      s.historyDraft[field] = s.historyDraft[field] ? 0 : 1;
+      if (field === "weekly_enabled" && s.historyDraft.weekly_enabled) s.historyDraft.collection_enabled = 1;
+      if (field === "collection_enabled" && !s.historyDraft.collection_enabled) s.historyDraft.weekly_enabled = 0;
+    } else if (action === "history_save" && s.screen === "history") {
+      const h = { ...s.historyDraft };
+      if (h.channel_id) {
+        const channel = await i.guild.channels.fetch(h.channel_id), me = await i.guild.members.fetchMe();
+        if (!channel || channel.type !== ChannelType.GuildText || !channel.permissionsFor(me)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.ReadMessageHistory])) {
+          throw new CommandError("Choose a text channel where the bot can view, send, embed links and read message history for recap delivery.");
+        }
+      }
+      await requireConfigAccess(i.guild, i.user.id); ensureLive(s);
+      let saved: HistorySettings;
+      try { saved = db.history.saveSettings(i.guildId, h, s.historyRevision); }
+      catch (error) {
+        const message = error instanceof Error ? error.message : "Could not save history settings.";
+        if (/History toggles|Poll interval|Retention|Weekly day|Weekly hour|IANA timezone|Weekly recaps|server text channel|History settings changed/.test(message)) throw new CommandError(message);
+        throw error;
+      }
+      s.historyRevision = saved.revision;
+      await i.editReply(render(s, true, "History settings saved. Automatic collection and recaps use these settings.")); return true;
     } else if (action === "new") {
       s.draft = newClanDraft(); s.tag = null; s.snapshot = "null"; s.screen = "draft";
     } else if (action === "home") { s.screen = "home"; s.draft = null; }

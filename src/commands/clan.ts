@@ -13,6 +13,8 @@ const actions = [
   ["unlink", "Remove a server-only member link"],
   ["coverage", "Compare Discord and clan link coverage"],
   ["doctor", "Check roles, permissions, API and cleanup jobs"],
+  ["recent", "Recent clan matches with numerical analysis and graphs"],
+  ["summary", "Preview the collected weekly recap"],
 ] as const;
 
 export const clanCommand = {
@@ -31,7 +33,10 @@ export const clanCommand = {
     .addIntegerOption((option) => option.setName("sync_interval").setDescription("Setup: sync interval in minutes (2–1440)").setMinValue(2).setMaxValue(1440))
     .addUserOption((option) => option.setName("user").setDescription("Member for sync, audit, link, or unlink"))
     .addStringOption((option) => option.setName("openfront_id").setDescription("Link: OpenFront public ID or player profile URL"))
-    .addIntegerOption((option) => option.setName("page").setDescription("Result page for paged actions").setMinValue(1)),
+    .addIntegerOption((option) => option.setName("page").setDescription("Result page for paged actions").setMinValue(1))
+    .addIntegerOption((option) => option.setName("days").setDescription("Recent: number of days to analyse (default 7)").setMinValue(1).setMaxValue(14))
+    .addStringOption((option) => option.setName("view").setDescription("Recent: display numbers, graphs, or both")
+      .addChoices({ name: "Numbers and graphs", value: "both" }, { name: "Numbers", value: "numbers" }, { name: "Graphs", value: "graphs" })),
 
   execute: executeClanCommand,
 };

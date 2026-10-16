@@ -40,7 +40,8 @@ export const debugCommand = {
     if (action === "status") {
       const jobs = db.getQueueSummary(i.guildId);
       const settings = db.getDebugSettings(i.guildId)!;
-      await i.editReply({ content: `Current server members: **${members.size}**\nLinked members: **${links.length}**\nConfigured clans: **${db.getGuildConfigs(i.guildId).length}**\nRole queue: **${jobs.pending}** pending (**${jobs.retrying}** retrying)\nVerbose errors: **${settings.verbose_errors ? "on" : "off"}**\nEphemeral replies: **${settings.ephemeral_replies ? "on" : "off"}**`, allowedMentions: { parse: [] } });
+      const history = db.history.getStatus(i.guildId), historySettings = db.history.getSettings(i.guildId);
+      await i.editReply({ content: `Current server members: **${members.size}**\nLinked members: **${links.length}**\nConfigured clans: **${db.getGuildConfigs(i.guildId).length}**\nRole queue: **${jobs.pending}** pending (**${jobs.retrying}** retrying)\nVerbose errors: **${settings.verbose_errors ? "on" : "off"}**\nEphemeral replies: **${settings.ephemeral_replies ? "on" : "off"}**\nHistory collection: **${historySettings.collection_enabled ? "on" : "off"}** · ${history.clanMatches} clan and ${history.playerMatches} player records\nHistory sources: ${history.pending} configured · ${history.failed} retrying\nWeekly recap: **${historySettings.weekly_enabled ? "on" : "off"}** (${historySettings.timezone})${history.lastCollectedAt ? `\nLast collection: <t:${Math.floor(Date.parse(history.lastCollectedAt) / 1000)}:R>` : "\nNo history collection completed yet."}${history.lastError ? "\nA history error needs attention; use the clan doctor action for details." : ""}`, allowedMentions: { parse: [] } });
       return;
     }
     const data = {

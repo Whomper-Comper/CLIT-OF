@@ -9,6 +9,8 @@ import { CommandError, identityLocks, label, pageOf, playerId, privateReply, com
 import { checkClanAccess, checkConfigAccess, requireClanAccess, requireConfigAccess } from "../access.js";
 import { configCommand } from "./config.js";
 import { buildCoverageEmbeds, buildDoctorEmbeds } from "../reporting.js";
+import { buildWeeklyReport, HistoryView, loadRecentClanMatches, renderClanRecent } from "../historyReports.js";
+import { weeklyPeriod } from "../historySchedule.js";
 
 type GuildCommand = ChatInputCommandInteraction<"cached">;
 const pageNumber = (i: GuildCommand) => i.options.getInteger("page") ?? 1;
@@ -37,13 +39,13 @@ export async function executeClanCommand(interaction: ChatInputCommandInteractio
   if (!interaction.inCachedGuild()) throw new CommandError("Use `/clan` in a Discord server where the bot is installed.");
   const i = interaction;
   const action = i.options.getString("action") ?? i.options.getSubcommand();
-  if (!["setup", "config", "remove", "sync", "pending", "roster", "audit", "link", "unlink", "coverage", "doctor"].includes(action)) {
+  if (!["setup", "config", "remove", "sync", "pending", "roster", "audit", "link", "unlink", "coverage", "doctor", "recent", "summary"].includes(action)) {
     throw new CommandError("Choose a valid clan action.");
   }
   if (action === "config") checkConfigAccess(i);
   else checkClanAccess(i);
   const requiredByAction: Record<string, string[]> = {
-    setup: ["clan_tag", "member_role"], remove: ["clan_tag"], roster: ["clan_tag"],
+    setup: ["clan_tag", "member_role"], remove: ["clan_tag"], roster: ["clan_tag"], recent: ["clan_tag"],
     link: ["user", "openfront_id"], unlink: ["user"],
   };
   for (const name of requiredByAction[action] ?? []) {
@@ -57,7 +59,7 @@ export async function executeClanCommand(interaction: ChatInputCommandInteractio
     const target = i.options.getUser("user");
     throttle(target ? `sync:${i.guildId}:${target.id}` : `sync:${i.guildId}:all`, target ? 10_000 : 60_000);
   }
-  if (["roster", "pending", "coverage", "doctor"].includes(action)) throttle(`${action}:${i.guildId}`, 15_000);
+  if (["roster", "pending", "coverage", "doctor", "recent", "summary"].includes(action)) throttle(`${action}:${i.guildId}`, 15_000);
   if (["setup", "remove", "link", "unlink"].includes(action)) throttle(`${action}:${i.guildId}:${i.user.id}`, 3000);
   await i.deferReply(action === "roster" || (action === "sync" && !i.options.getUser("user")) ? {} : action === "config" ? privateReply : commandReplyOptions(i));
   if (action === "config") await requireConfigAccess(i.guild, i.user.id);
@@ -72,6 +74,25 @@ export async function executeClanCommand(interaction: ChatInputCommandInteractio
     case "audit": return audit(i);
     case "link": return guildLink(i);
     case "unlink": return guildUnlink(i);
+    case "recent": {
+      if (!db.history.getSettings(i.guildId).clan_history_enabled) throw new CommandError("Clan match history is disabled in /config.");
+      const [selected] = configs(i);
+      const view = i.options.getString("view") ?? "both";
+      if (!["numbers", "graphs", "both"].includes(view)) throw new CommandError("Choose numbers, graphs, or both for the history view.");
+      const sample = await loadRecentClanMatches(selected.clan_tag, i.options.getInteger("days") ?? 7);
+      await requireClanAccess(i.guild, i.user.id);
+      if (!db.history.getSettings(i.guildId).clan_history_enabled || !db.getGuildClanConfig(i.guildId, selected.clan_tag)) throw new CommandError("Clan history settings changed while loading. Try again.");
+      return sendEmbeds(i, [renderClanRecent(selected.clan_tag, sample, pageNumber(i), view as HistoryView)]);
+    }
+    case "summary": {
+      const settings = db.history.getSettings(i.guildId);
+      if (!settings.clan_history_enabled) throw new CommandError("Clan match history is disabled in /config.");
+      const period = weeklyPeriod({ ...settings, weekly_day: 1, weekly_hour: 0 });
+      const embed = await buildWeeklyReport(i.guild, period.start, period.end);
+      await requireClanAccess(i.guild, i.user.id);
+      if (db.history.getSettings(i.guildId).revision !== settings.revision) throw new CommandError("History settings changed while loading. Try again.");
+      return sendEmbeds(i, [embed]);
+    }
     case "coverage": return sendEmbeds(i, await buildCoverageEmbeds(i.guild, reportConfigs(i), pageNumber(i)));
     case "doctor": return sendEmbeds(i, await buildDoctorEmbeds(i.guild, reportConfigs(i), {
       page: pageNumber(i), accessRoleId: db.getGuildSettings(i.guildId)?.manager_role_id, jobs: db.getQueueSummary(i.guildId),

@@ -91,6 +91,18 @@ export async function buildDoctorEmbeds(guild: Guild, configs: GuildClanConfig[]
     }
     if (jobs.lastError) general.push(`Latest queue error: ${label(shortText(jobs.lastError, 240))}`);
   }
+  const history = db.history.getSettings(guild.id), historyJobs = db.history.getStatus(guild.id);
+  general.push(`Match collection: ${history.collection_enabled ? `on, every ${history.poll_minutes} minutes` : "off"}; ${historyJobs.clanMatches} stored clan records; ${historyJobs.failed} retrying source(s).`);
+  if (historyJobs.failed) problems++;
+  if (historyJobs.lastError) general.push(`History issue: ${label(shortText(historyJobs.lastError, 180))}`);
+  if (history.weekly_enabled) {
+    try {
+      const channel = history.channel_id ? await guild.channels.fetch(history.channel_id) : null;
+      if (!channel || channel.type !== ChannelType.GuildText || !channel.permissionsFor(bot)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.ReadMessageHistory])) {
+        general.push("✗ Weekly recap channel is unavailable or missing view/send/embed/read-history permissions."); problems++;
+      } else general.push(`✓ Weekly recap channel: <#${history.channel_id}>; schedule zone ${history.timezone}.`);
+    } catch { general.push("✗ Could not access the weekly recap channel."); problems++; }
+  }
   const embed = new EmbedBuilder().setTitle("Clan configuration health").setDescription(general.join("\n"));
   for (const config of selected.items) {
     const checks: string[] = [];
@@ -128,7 +140,7 @@ export async function buildDoctorEmbeds(guild: Guild, configs: GuildClanConfig[]
     }
     embed.addFields({ name: `[${label(config.clan_tag)}]`, value: shortText(checks.join("\n"), 1024) });
   }
-  if (!selected.items.length) embed.addFields({ name: "Clans", value: "No clans are configured. Open `/clan config` to add one; API availability cannot be checked until a clan is selected." });
+  if (!selected.items.length) embed.addFields({ name: "Clans", value: "No clans are configured. Open `/clan` with action `config` to add one; API availability cannot be checked until a clan is selected." });
   embed.setColor(problems ? 0xf59e0b : 0x22c55e).setFooter({ text: `${selected.footer} · ${problems} issue(s) found on this page. Checks do not change settings or roles.` });
   return [embed];
 }

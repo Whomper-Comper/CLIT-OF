@@ -102,6 +102,43 @@ test("debug role selection is independent, rejects stale edits, and can be disab
   assert.equal(db.getDebugSettings(f.guild.id).debug_role_id, null);
 });
 
+test("history config integrates toggles, channel, validation and stale draft rejection", async () => {
+  const f = fixture(), first = await open(f), second = await open(f);
+  let screen = await action(f, first.id, "history");
+  assertComponentLimits(screen.output);
+  await action(f, second.id, "history");
+  await action(f, first.id, "history_weekly");
+  let saved = await action(f, first.id, "history_save");
+  assert.match(error(saved), /require collection and a recap channel/);
+  await action(f, first.id, "history_channel", "channel", [ids.logs]);
+  saved = await action(f, first.id, "history_save");
+  assert.equal(error(saved), "");
+  const settings = db.history.getSettings(f.guild.id);
+  assert.equal(settings.weekly_enabled, 1);
+  assert.equal(settings.collection_enabled, 1);
+  assert.equal(settings.channel_id, ids.logs);
+  assert.equal(settings.timezone, "America/Bahia");
+  const stale = await action(f, second.id, "history_save");
+  assert.match(error(stale), /changed in another session/);
+  screen = await action(f, first.id, "history_timing");
+  assert.equal(screen.modal.toJSON().components.length, 5);
+  await action(f, first.id, "history_details", "modal", [], { fields: { getTextInputValue: (key) => ({poll:"1",retention:"90",day:"1",hour:"9",timezone:"America/Bahia"})[key] } });
+  assert.match(error(await action(f, first.id, "history_save")), /Poll interval/);
+  assert.equal(db.history.getSettings(f.guild.id).poll_minutes, 15);
+});
+
+test("history config rechecks permission after channel validation before saving", async (t) => {
+  const f = fixture(), { id } = await open(f);
+  await action(f, id, "history");
+  await action(f, id, "history_channel", "channel", [ids.logs]);
+  t.mock.method(f.guild.channels, "fetch", async () => {
+    f.user.roles.cache.clear();
+    return { type: 0, permissionsFor: () => ({ has: () => true }) };
+  });
+  assert.match(error(await action(f, id, "history_save")), /Manage Server|config role/);
+  assert.equal(db.history.getSettings(f.guild.id).revision, 0);
+});
+
 test("debug role rejects everyone, managed roles and changes after access revocation", async (t) => {
   const f = fixture(), { id } = await open(f);
   f.roles.set(f.guild.id, { id: f.guild.id, managed: false });
