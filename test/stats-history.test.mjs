@@ -128,8 +128,8 @@ test("disabling history during a request prevents publication and removes the en
   assert.equal(f.interaction.output, original);
   const disabled = setup(t, async () => { throw new Error("disabled history must not fetch"); }, { enabled: 0 });
   await statsCommand.execute(disabled.interaction);
-  assert.equal(disabled.interaction.output.components.length, 2);
-  assert.deepEqual(disabled.interaction.output.components[1].components.map((item) => item.data.label), ["Statistics"]);
+  assert.equal(disabled.interaction.output.components.length, 3);
+  assert.deepEqual(disabled.interaction.output.components[1].components.map((item) => item.data.label), ["Statistics", "Buildings"]);
 });
 
 test("expiry during a request cannot refresh the original message", async (t) => {

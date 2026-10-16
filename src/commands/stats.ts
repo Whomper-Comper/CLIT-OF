@@ -23,7 +23,7 @@ interface StatsTabs {
   id: string; userId: string; guildId: string | null; messageId: string | null; playerId: string; discordId: string | null;
   expiresAt: number; now: number; busy: boolean; base: EmbedBuilder; stats: unknown; identityVersion: string | null;
   mode: AnalyticsMode; view: "graphs" | "numbers"; scope: PlayerStatsType; period: AnalyticsPeriod;
-  map?: string; page: "stats" | "history" | "elo"; ladder: Ladder;
+  map?: string; page: "stats" | "buildings" | "history" | "elo"; ladder: Ladder;
   history: Map<AnalyticsMode, HistoryPages>; analytics: Map<AnalyticsMode, Analytics>;
   elo?: { points: RatingGraphPoint[]; current?: number; message?: string; ladder: Ladder };
   eloAttemptedAt?: number; eloRefreshMessage?: string;
@@ -93,12 +93,14 @@ export const statsCommand = {
     if (tabs.size >= 500) tabs.delete(tabs.keys().next().value!);
     tabs.set(session.id, session);
     try {
+      let error: string | undefined;
       if (usesHistoryStats(session)) {
-        await ensureAnalytics(session);
+        try { await ensureAnalytics(session); }
+        catch (cause) { error = commandErrorMessage(cause, session.guildId); }
         if (!sessionLive(session)) throw new CommandError("These statistics expired while loading. Run `/stats` again.");
         if (!historyEnabled(session.guildId)) throw new CommandError("Player game history was disabled while these statistics loaded.");
       }
-      const message = await interaction.editReply(render(session));
+      const message = await interaction.editReply(render(session, error));
       session.messageId = message?.id ?? null;
     } catch (error) { tabs.delete(session.id); throw error; }
   },
@@ -111,7 +113,7 @@ export async function handleStatsInteraction(interaction: Interaction): Promise<
   }
   if (!interaction.isButton() || !interaction.customId.startsWith(tabPrefix)) return false;
   const [, id, action, extra] = interaction.customId.split(":");
-  if (extra !== undefined || ![...modes, "stats", "history", "elo", "previous", "next", "elo-1v1", "elo-2v2", "elo-ffa"].includes(action)) return false;
+  if (extra !== undefined || ![...modes, "stats", "buildings", "history", "elo", "graphs", "numbers", "previous", "next", "elo-1v1", "elo-2v2", "elo-ffa"].includes(action)) return false;
   const session = tabs.get(id);
   const reject = async (content: string) => { await interaction.reply({ content, flags: MessageFlags.Ephemeral }); return true; };
   if (!session || session.expiresAt <= Date.now()) {
@@ -121,21 +123,24 @@ export async function handleStatsInteraction(interaction: Interaction): Promise<
   if (interaction.user.id !== session.userId) return reject("Only the person who ran `/stats` can change these pages.");
   if (interaction.guildId !== session.guildId || !session.messageId || interaction.message.id !== session.messageId) return reject("These controls belong to a different statistics message. Run `/stats` again.");
   if (session.busy) return reject("A statistics page is still loading. Please try again in a moment.");
-  const needsHistory = usesHistoryStats(session) || action === "history" || action.startsWith("elo") || action === "next" || action === "previous"
-    || (modes.includes(action as AnalyticsMode) && session.page !== "stats");
+  if ((action === "next" || action === "previous") && session.page !== "history") return reject("Open Game history before changing its page.");
+  const targetPage = action === "stats" || action === "buildings" || action === "history" || action === "elo" ? action
+    : action.startsWith("elo-") ? "elo" : session.page;
+  const needsHistory = targetPage === "history" || targetPage === "elo" || (targetPage === "stats" && usesHistoryStats(session));
   if (needsHistory && !historyEnabled(session.guildId)) return reject("Player game history is disabled in this server's configuration.");
   session.busy = true;
   try {
     await interaction.deferUpdate();
     if (!sessionLive(session)) { await interaction.followUp({ content: "These statistics expired. Run `/stats` again.", flags: MessageFlags.Ephemeral }); return true; }
     if (modes.includes(action as AnalyticsMode)) session.mode = action as AnalyticsMode;
-    else if (action === "stats" || action === "history" || action === "elo") session.page = action;
+    else if (action === "stats" || action === "buildings" || action === "history" || action === "elo") session.page = action;
+    else if (action === "graphs" || action === "numbers") session.view = action;
     else if (action.startsWith("elo-")) { session.ladder = action.slice(4) as Ladder; session.page = "elo"; if (session.elo?.ladder !== session.ladder) session.elo = undefined; }
     let error: string | undefined;
     try {
-      if (usesHistoryStats(session) && session.page !== "elo") await ensureAnalytics(session);
+      if (usesHistoryStats(session) && (session.page === "stats" || session.page === "history")) await ensureAnalytics(session);
       if (session.page === "history") await loadHistory(session, action === "next");
-      if (session.page === "elo") await loadElo(session);
+      if (session.page === "elo" && (!session.elo || (action !== "graphs" && action !== "numbers"))) await loadElo(session);
     } catch (cause) { error = commandErrorMessage(cause, session.guildId); }
     if (!sessionLive(session) || (needsHistory && !historyEnabled(session.guildId))) {
       await interaction.followUp({ content: sessionLive(session) ? "Player game history was disabled while this page loaded."
@@ -239,18 +244,21 @@ function controls(session: StatsTabs): ActionRowBuilder<ButtonBuilder>[] {
     .setCustomId(`${tabPrefix}${session.id}:${action}`).setLabel(title).setStyle(selected ? ButtonStyle.Primary : ButtonStyle.Secondary).setDisabled(disabled);
   const rows = [new ActionRowBuilder<ButtonBuilder>().addComponents(...modes.map(mode => button(mode, modeLabel(mode), session.mode === mode, session.page === "elo"))),
     new ActionRowBuilder<ButtonBuilder>().addComponents(button("stats", "Statistics", session.page === "stats"),
-      ...(historyEnabled(session.guildId) ? [button("history", "Game history", session.page === "history"), button("elo", "Elo", session.page === "elo")] : []))];
+      ...(historyEnabled(session.guildId) ? [button("history", "Game history", session.page === "history"), button("elo", "Elo", session.page === "elo")] : []),
+      button("buildings", "Buildings", session.page === "buildings"))];
   if (session.page === "history") {
     const state = session.history.get(session.mode), next = !!state && (state.index + 1 < state.pages.length || state.nextCursor !== null);
     rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(button("previous", "Previous", false, !state || state.index === 0), button("next", "Next", false, !next)));
   } else if (session.page === "elo") rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(button("elo-1v1", "1v1", session.ladder === "1v1"), button("elo-2v2", "2v2", session.ladder === "2v2"), button("elo-ffa", "Ranked FFA", session.ladder === "ffa")));
+  rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(button("graphs", "Graphs", session.view === "graphs"), button("numbers", "Numbers", session.view === "numbers")));
   return rows;
 }
 
 function render(session: StatsTabs, error?: string) {
   let embed: EmbedBuilder;
   const files: AttachmentBuilder[] = [];
-  if (session.page === "history") embed = renderHistory(session, error);
+  if (session.page === "buildings") embed = renderBuildings(session);
+  else if (session.page === "history") embed = renderHistory(session, error);
   else if (session.page === "elo") {
     embed = renderElo(session, error);
     const graph = session.view === "graphs" ? eloLineGraph(session.elo?.points ?? []) : null;
@@ -289,6 +297,7 @@ function renderStats(session: StatsTabs, error?: string) {
   if (usesHistoryStats(session)) {
     const result = session.analytics.get(session.mode);
     embed.addFields({ name: "Match selection", value: selectionLabel(session) });
+    embed.addFields({ name: "Building stats", value: "Open **Buildings** for lifetime cities, ports, defense posts, factories and missile silos. Use **Graphs** or **Numbers** to change the display. Period and map filters apply to match results." });
     if (!result) { embed.addFields({ name: "Recorded statistics", value: "The selected history could not be loaded. Use Statistics to try again." }); return embed; }
     embed.addFields({ name: `${modeLabel(session.mode)} · recorded results`, value: `**Games:** ${result.total.toLocaleString("en-US")} · **Wins:** ${result.wins.toLocaleString("en-US")} · **Losses:** ${result.losses.toLocaleString("en-US")} · **Incomplete:** ${result.incomplete.toLocaleString("en-US")}\n**Completed win rate:** ${result.winRate}` });
     const rows = [{ name: "Wins", value: BigInt(result.wins) }, { name: "Losses", value: BigInt(result.losses) }, { name: "Incomplete", value: BigInt(result.incomplete) }];
@@ -299,8 +308,7 @@ function renderStats(session: StatsTabs, error?: string) {
     embed.setFooter({ text: `${scopeLabel(session.scope)} · ${modeLabel(session.mode)} · dated/map-filtered history has no building counters` });
     return embed;
   }
-  const filter = session.mode === "all" ? undefined : session.mode === "team" ? "teams" : session.mode;
-  const stats = summarizePlayerStats(session.stats, filter, { type: session.scope, includeRanked: true });
+  const stats = lifetimeSummary(session);
   const title = `${modeLabel(session.mode)} Stats`;
   if (!stats) {
     embed.addFields({ name: title, value: "No recorded statistics were provided by OpenFront for this scope and mode." });
@@ -309,6 +317,25 @@ function renderStats(session: StatsTabs, error?: string) {
   addLifetime(embed, stats, title, session.view);
   const incomplete = stats.partial || stats.buildings.some(item => item.partial) || stats.details.some(item => item.partial);
   embed.setFooter({ text: `${scopeLabel(session.scope)} · ${modeLabel(session.mode)} · lifetime totals${incomplete ? " · some counters unavailable or partial" : ""}` });
+  return embed;
+}
+
+function lifetimeSummary(session: StatsTabs) {
+  const filter = session.mode === "all" ? undefined : session.mode === "team" ? "teams" : session.mode;
+  return summarizePlayerStats(session.stats, filter, { type: session.scope, includeRanked: true });
+}
+
+function renderBuildings(session: StatsTabs) {
+  const stats = lifetimeSummary(session);
+  const buildings = stats?.buildings ?? ["Cities", "Ports", "Defense posts", "Factories", "Missile silos"]
+    .map(name => ({ name, value: null, partial: false }));
+  const embed = EmbedBuilder.from(session.base)
+    .addFields({ name: "Building stats · lifetime totals", value: `${scopeLabel(session.scope)} · ${modeLabel(session.mode)}\nPeriod and map filters do not apply to these building totals.` },
+      { name: "Buildings built", value: session.view === "graphs" ? alignedBarChart(buildings) : numericRows(buildings) });
+  if (session.view === "graphs") embed.addFields({ name: "Exact available building totals", value: numericRows(buildings) });
+  if (!stats) embed.addFields({ name: "Building data unavailable", value: "OpenFront did not provide building counters for this mode and scope." });
+  const partial = buildings.some(item => item.partial || item.value === null);
+  embed.setFooter({ text: `${scopeLabel(session.scope)} · ${modeLabel(session.mode)} · lifetime buildings${partial ? " · some counters unavailable or partial" : ""}` });
   return embed;
 }
 
