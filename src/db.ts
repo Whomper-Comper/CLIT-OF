@@ -19,6 +19,7 @@ export interface RoleJob {
   attempts: number; available_at: number; last_error: string | null; priority: number; created_at: number;
 }
 export interface GuildSettings { guild_id: string; manager_role_id: string; revision: number }
+export interface DebugSettings { guild_id: string; debug_role_id: string | null; revision: number }
 export interface AuditEntry {
   id: number; guild_id: string | null; actor_id: string; discord_id: string;
   action: string; old_id: string | null; new_id: string | null; created_at: string;
@@ -61,6 +62,8 @@ export class BotDatabase {
           created_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(guild_id, discord_id));
         CREATE TABLE IF NOT EXISTS guild_settings (
           guild_id TEXT PRIMARY KEY, manager_role_id TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS guild_debug_settings (
+          guild_id TEXT PRIMARY KEY, debug_role_id TEXT, revision INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS legacy_manual_links (
           discord_id TEXT PRIMARY KEY, openfront_id TEXT NOT NULL, openfront_username TEXT,
           linked_at TEXT NOT NULL, migrated_at TEXT NOT NULL);
@@ -113,6 +116,17 @@ export class BotDatabase {
   private audit(guild: string | null, actor: string, user: string, action: string, oldId: string | null, newId: string | null) {
     this.db.prepare(`INSERT INTO link_audit(guild_id,actor_id,discord_id,action,old_id,new_id,created_at)
       VALUES(?,?,?,?,?,?,?)`).run(guild,actor,user,action,oldId,newId,new Date().toISOString());
+  }
+  getDebugSettings(guild: string): DebugSettings | null {
+    return this.db.prepare("SELECT * FROM guild_debug_settings WHERE guild_id=?").get(guild) as unknown as DebugSettings ?? null;
+  }
+  setDebugRole(guild: string, role: string | null, expectedRevision = 0): DebugSettings {
+    return this.transaction(() => {
+      if ((this.getDebugSettings(guild)?.revision ?? 0) !== expectedRevision) throw new Error("The debug role changed in another session. Open the configuration menu again.");
+      this.db.prepare(`INSERT INTO guild_debug_settings(guild_id,debug_role_id,revision) VALUES(?,?,1)
+        ON CONFLICT(guild_id) DO UPDATE SET debug_role_id=excluded.debug_role_id,revision=guild_debug_settings.revision+1`).run(guild,role);
+      return this.getDebugSettings(guild)!;
+    });
   }
   getUserByDiscordId(id: string): LinkedUser | null {
     return this.db.prepare("SELECT * FROM linked_users WHERE discord_id = ?").get(id) as unknown as LinkedUser ?? null;

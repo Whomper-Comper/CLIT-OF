@@ -36,3 +36,11 @@ export async function hasConfigAccess(guild: Guild, user: string): Promise<boole
 export async function requireConfigAccess(guild: Guild, user: string) {
   if (!await hasConfigAccess(guild, user)) throw new CommandError("You need Manage Server permission or the configured config role to change configuration.");
 }
+
+/** Debug exports require the explicitly selected role, including for owners and administrators. */
+export async function requireDebugAccess(guild: Guild, user: string) {
+  if (!db.getDebugSettings(guild.id)?.debug_role_id) throw new CommandError("Choose a debug role in `/config` before using `/debug`.");
+  const member = await guild.members.fetch({ user, force: true });
+  const role = db.getDebugSettings(guild.id)?.debug_role_id;
+  if (!role || !member.roles.cache.has(role)) throw new CommandError("You need this server's configured debug role to use `/debug`.");
+}

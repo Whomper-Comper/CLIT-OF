@@ -89,6 +89,30 @@ test("all clan access checks require the selected role even for an administrator
   assert.throws(() => checkClanAccess(command(unconfigured)), /choose.*role|configure.*role/i);
 });
 
+test("debug role selection is independent, rejects stale edits, and can be disabled", async () => {
+  const f = fixture(), first = await open(f), second = await open(f);
+  const saved = await action(f, first.id, "debug_access", "role", [ids.replacement]);
+  assert.equal(error(saved), "");
+  assert.equal(db.getDebugSettings(f.guild.id).debug_role_id, ids.replacement);
+  assert.equal(db.getGuildSettings(f.guild.id).manager_role_id, ids.manager);
+  const stale = await action(f, second.id, "debug_access", "role", [ids.member]);
+  assert.match(error(stale), /changed in another session/);
+  const disabled = await action(f, first.id, "debug_access", "role", []);
+  assert.equal(error(disabled), "");
+  assert.equal(db.getDebugSettings(f.guild.id).debug_role_id, null);
+});
+
+test("debug role rejects everyone, managed roles and changes after access revocation", async (t) => {
+  const f = fixture(), { id } = await open(f);
+  f.roles.set(f.guild.id, { id: f.guild.id, managed: false });
+  assert.match(error(await action(f, id, "debug_access", "role", [f.guild.id])), /normal server role/);
+  f.roles.get(ids.replacement).managed = true;
+  assert.match(error(await action(f, id, "debug_access", "role", [ids.replacement])), /normal server role/);
+  t.mock.method(f.guild.roles, "fetch", async (roleId) => { f.user.roles.cache.clear(); return f.roles.get(roleId); });
+  assert.match(error(await action(f, id, "debug_access", "role", [ids.member])), /Manage Server|config role/);
+  assert.equal(db.getDebugSettings(f.guild.id), null);
+});
+
 test("Manage Server can bootstrap and recover configuration while clan commands still require the chosen role", async () => {
   const denied = fixture({ bootstrap: true });
   await assert.rejects(configCommand.execute(command(denied)), /Manage Server|configuration|configured role|access role/i);

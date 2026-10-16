@@ -44,6 +44,17 @@ A standalone Discord bot that connects Discord accounts with OpenFront accounts,
 | `/unlink` | Remove all your bot-wide and server-only links, including in DMs, and queue clan role cleanup. |
 | `/whois [user] [openfront_id]` | Provide exactly one Discord user or OpenFront ID/profile URL. Shows server-only links only in their server, with separate Free For All and Teams stats tabs. |
 
+### Debug tools (`/debug`)
+
+Choose a separate **debug role** in `/config`. Only members holding that role can use `/debug`, including administrators and the server owner. Clearing the selector disables `/debug`. Manage Server permission or the config role allows changing this setting, with fresh permission checks and protection against overlapping edits.
+
+| Command | Description |
+|---|---|
+| `/debug action:export_links` | Privately download a JSON snapshot of all linked users currently in this server. |
+| `/debug action:status` | Privately show current member/link counts, configured clan count, and pending/retrying role jobs. |
+
+The JSON includes `schema_version`, `exported_at`, server ID/name, member/link counts, and a `users` array containing Discord ID/username/display name, stored OpenFront ID/username, link timestamp, scope, and verification method. IDs remain strings. Verified bot-wide links take precedence over approvals from this server. Departed members and approvals belonging to other servers are excluded. Names are the stored/current snapshot; the export does not call OpenFront. Tokens, credentials, private configuration, and audit history are not exported. Empty results produce a valid JSON file; failed membership reads or an attachment exceeding Discord's limit produce an error instead of a partial file. Access is checked again after fetching membership.
+
 ### Clan Management (`/clan`)
 
 Use the single `/clan` command and select an `action`; the remaining inputs are optional and apply to the selected action. Clan actions require the server's selected **config role**, including for administrators and the server owner. Configuration is the exception: **Manage Server permission or the config role** grants access to `/config` and `/clan` with action `config`. To begin, someone with Manage Server opens the menu, chooses a server role and assigns it to the people who should manage clans. Manage Server always allows configuration recovery if the role is deleted or no longer assigned.

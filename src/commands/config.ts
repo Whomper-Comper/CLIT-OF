@@ -14,7 +14,7 @@ import { buildCoverageEmbeds, buildDoctorEmbeds } from "../reporting.js";
 type Screen = "home" | "draft" | "roles" | "logs" | "confirm";
 interface Session {
   id: string; user: string; guild: string; expires: number; page: number; screen: Screen;
-  draft: ClanDraft | null; tag: string | null; snapshot: string; accessRevision: number;
+  draft: ClanDraft | null; tag: string | null; snapshot: string; accessRevision: number; debugRevision: number;
   busy?: boolean;
 }
 const sessions = new Map<string, Session>();
@@ -35,7 +35,8 @@ export const configCommand = {
     for (const [id, session] of sessions) if (session.expires <= Date.now()) sessions.delete(id);
     if (sessions.size >= 200) sessions.delete(sessions.keys().next().value!);
     const s: Session = { id: randomUUID(), user: i.user.id, guild: i.guildId, expires: Date.now() + lifetime,
-      page: 0, screen: "home", draft: null, tag: null, snapshot: "null", accessRevision: db.getGuildSettings(i.guildId)?.revision ?? 0 };
+      page: 0, screen: "home", draft: null, tag: null, snapshot: "null", accessRevision: db.getGuildSettings(i.guildId)?.revision ?? 0,
+      debugRevision: db.getDebugSettings(i.guildId)?.revision ?? 0 };
     sessions.set(s.id, s);
     await i.editReply(render(s, allowed));
   },
@@ -48,13 +49,18 @@ function render(s: Session, allowed: boolean, notice = "") {
   const embed = new EmbedBuilder().setTitle(allowed ? "OpenFront server configuration" : "Set or recover clan access")
     .setColor(0x3b82f6).setFooter({ text: "Private menu · expires after 10 minutes · every change rechecks access" });
   const access = settings ? `<@&${settings.manager_role_id}>` : "Not selected";
-  const summary = `**Config role:** ${access}\n**Configured clans:** ${configs.length}\n**Role jobs:** ${jobs.pending} queued (${jobs.retrying} retrying)`;
+  const debugRole = db.getDebugSettings(s.guild)?.debug_role_id;
+  const summary = `**Config role:** ${access}\n**Debug role:** ${debugRole ? `<@&${debugRole}>` : "Disabled"}\n**Configured clans:** ${configs.length}\n**Role jobs:** ${jobs.pending} queued (${jobs.retrying} retrying)`;
   const components: ActionRowBuilder<any>[] = [];
   if (!allowed || s.screen === "home") {
     embed.setDescription(`${summary}\n\n${allowed ? "Choose a clan to edit, or create one. Changing the config role below saves immediately. Manage Server permission also grants configuration access; other /clan actions require the selected role." : "Open this menu with Manage Server permission or the config role."}${notice ? `\n\n${notice}` : ""}`);
     components.push(new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(new RoleSelectMenuBuilder()
       .setCustomId(`${prefix}${s.id}:access`).setPlaceholder("Set config role (saves immediately)").setMinValues(1).setMaxValues(1)));
     if (allowed) {
+      const debugSelect = new RoleSelectMenuBuilder().setCustomId(`${prefix}${s.id}:debug_access`)
+        .setPlaceholder("Set debug role (clear to disable; saves immediately)").setMinValues(0).setMaxValues(1);
+      if (debugRole) debugSelect.setDefaultRoles(debugRole);
+      components.push(new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(debugSelect));
       const pages = Math.max(1, Math.ceil(configs.length / 25));
       s.page = Math.min(s.page, pages - 1);
       const choices = configs.slice(s.page * 25, (s.page + 1) * 25);
@@ -134,6 +140,20 @@ export async function handleConfigInteraction(i: Interaction): Promise<boolean> 
     }
     const allowed = await hasConfigAccess(i.guild, i.user.id);
     if (!allowed) throw new CommandError("You no longer have Manage Server permission or the config role. A server manager can recover access with /config.");
+    if (action === "debug_access" && i.isRoleSelectMenu()) {
+      const selected = i.values[0] ?? null;
+      if (selected) {
+        const role = await i.guild.roles.fetch(selected);
+        if (!role || role.id === i.guildId || role.managed) throw new CommandError("Choose a normal server role other than @everyone.");
+      }
+      await requireConfigAccess(i.guild, i.user.id);
+      ensureLive(s);
+      const saved = db.setDebugRole(i.guildId, selected, s.debugRevision);
+      s.debugRevision = saved.revision;
+      s.screen = "home";
+      await i.editReply(render(s, true, selected ? "Debug role saved." : "Debug command disabled."));
+      return true;
+    }
     if (action === "access" && i.isRoleSelectMenu()) {
       const role = await i.guild.roles.fetch(i.values[0]);
       if (!role || role.id === i.guildId || role.managed) throw new CommandError("Choose a normal server role other than @everyone.");
