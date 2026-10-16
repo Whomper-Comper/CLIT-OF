@@ -6,7 +6,7 @@ process.env.DISCORD_TOKEN = "test";
 process.env.CLIENT_ID = "test";
 const { db } = await import("../dist/db.js");
 const { openfrontApi, OpenFrontApiError } = await import("../dist/api.js");
-const { whoisCommand, handleWhoisStatsInteraction } = await import("../dist/commands/whois.js");
+const { statsCommand, handleStatsInteraction } = await import("../dist/commands/stats.js");
 after(() => db.close());
 
 let sequence = 0;
@@ -21,7 +21,7 @@ function setup(t, games, options = {}) {
   t.mock.method(openfrontApi, "getPlayerProfile", async () => ({ username: "Player", createdAt: "2025-01-01T00:00:00Z", clans: [], stats: options.stats }));
   t.mock.method(openfrontApi, "getPlayerGames", games);
   const interaction = { guildId: options.dm ? null : `history-guild-${suffix}`, user: { id: `history-reader-${suffix}` },
-    options: { getUser: () => null, getString: (name) => ({ openfront_id: "player", view: options.view, scope: options.scope })[name] ?? null }, deferReply: async () => {},
+    options: { getUser: () => null, getString: (name) => ({ openfront_id: "player", view: options.view, scope: options.scope, mode: options.mode })[name] ?? null }, deferReply: async () => {},
     editReply: async function (value) { this.output = value; return { id: `history-message-${suffix}` }; } };
   const click = async (customId, overrides = {}) => {
     const i = { customId, guildId: interaction.guildId, user: interaction.user, message: { id: `history-message-${suffix}` },
@@ -29,7 +29,7 @@ function setup(t, games, options = {}) {
       editReply: async function (value) { this.output = value; interaction.output = value; },
       reply: async function (value) { this.replyOutput = value; },
       followUp: async function (value) { this.followUpOutput = value; }, ...overrides };
-    assert.equal(await handleWhoisStatsInteraction(i), true);
+    assert.equal(await handleStatsInteraction(i), true);
     return i;
   };
   return { interaction, click, setEnabled: (value) => { enabled = value; } };
@@ -41,14 +41,14 @@ test("history loads lazily for profiles without lifetime stats, and incomplete g
   let calls = 0;
   const f = setup(t, async (id, query) => {
     calls++;
-    assert.equal(id, "player"); assert.deepEqual(query, { type: "public" });
+    assert.equal(id, "player"); assert.deepEqual(query, { filter: "ffa", type: "public" });
     return { results: [game(1, { username: "**unsafe**", map: "@everyone *map*" }),
       game(2, { result: "incomplete", totalPlayers: null }), game(3, { result: "defeat" })], nextCursor: null };
   });
-  await whoisCommand.execute(f.interaction);
+  await statsCommand.execute(f.interaction);
   assert.equal(calls, 0);
-  assert.match(fields(f.interaction).find((field) => field.name === "OpenFront Statistics").value, /No recorded statistics/);
-  await f.click(button(f.interaction, 1, 0));
+  assert.match(fields(f.interaction).find((field) => field.name === "Free For All Stats").value, /No recorded statistics/);
+  await f.click(button(f.interaction, 1, 1));
   assert.equal(calls, 1);
   assert.match(fields(f.interaction).find((field) => field.name.includes("completed win rate")).name, /50\.0%/);
   assert.match(fields(f.interaction).find((field) => field.name.startsWith("Incomplete")).value, /Unknown player count/);
@@ -64,9 +64,9 @@ test("history splits bounded API batches into five-game pages and preserves cach
     if (query.filter) return { results: [game(100, { mode: "Free For All" })], nextCursor: null };
     return query.cursor ? { results: Array.from({ length: 6 }, (_, index) => game(index + 6)), nextCursor: null }
       : { results: Array.from({ length: 6 }, (_, index) => game(index)), nextCursor: "next-batch" };
-  });
-  await whoisCommand.execute(f.interaction);
-  await f.click(button(f.interaction, 1, 0));
+  }, { mode: "all" });
+  await statsCommand.execute(f.interaction);
+  await f.click(button(f.interaction, 1, 1));
   assert.equal(fields(f.interaction).filter((field) => field.value.includes("Match ID:")).length, 5);
   await f.click(button(f.interaction, 2, 1));
   assert.equal(queries.length, 1);
@@ -77,20 +77,20 @@ test("history splits bounded API batches into five-game pages and preserves cach
   await f.click(button(f.interaction, 2, 0));
   assert.equal(queries.length, 2);
   assert.match(fields(f.interaction).find((field) => field.value.includes("Match ID:")).value, /match-5/);
-  await f.click(button(f.interaction, 1, 1));
+  await f.click(button(f.interaction, 0, 0));
   assert.deepEqual(queries.at(-1), { filter: "ffa", type: "public" });
-  await f.click(button(f.interaction, 1, 0));
+  await f.click(button(f.interaction, 0, 4));
   assert.equal(queries.length, 3);
   assert.match(f.interaction.output.embeds[0].toJSON().footer.text, /page 2/);
-  await f.click(button(f.interaction, 0, 0));
-  assert.deepEqual(f.interaction.output.components[0].components.map((item) => item.data.label), ["Free For All", "Teams"]);
+  await f.click(button(f.interaction, 1, 0));
+  assert.deepEqual(f.interaction.output.components[0].components.map((item) => item.data.label), ["Free For All", "Teams", "Humans Vs Nations", "Ranked", "All modes"]);
 });
 
 test("history controls require their original user, server, and message", async (t) => {
   let calls = 0;
   const f = setup(t, async () => { calls++; return { results: [], nextCursor: null }; });
-  await whoisCommand.execute(f.interaction);
-  const history = button(f.interaction, 1, 0);
+  await statsCommand.execute(f.interaction);
+  const history = button(f.interaction, 1, 1);
   for (const overrides of [{ user: { id: "another-user" } }, { guildId: "another-guild" }, { message: { id: "another-message" } }]) {
     const click = await f.click(history, overrides);
     assert.ok(click.replyOutput);
@@ -103,8 +103,8 @@ test("busy history controls prevent overlapping requests", async (t) => {
   let release, entered;
   const waiting = new Promise((resolve) => { entered = resolve; });
   const f = setup(t, async () => { entered(); await new Promise((resolve) => { release = resolve; }); return { results: [game(1)], nextCursor: null }; });
-  await whoisCommand.execute(f.interaction);
-  const history = button(f.interaction, 1, 0);
+  await statsCommand.execute(f.interaction);
+  const history = button(f.interaction, 1, 1);
   const first = f.click(history);
   await waiting;
   const second = await f.click(history);
@@ -117,9 +117,9 @@ test("disabling history during a request prevents publication and removes the en
   let release, entered;
   const waiting = new Promise((resolve) => { entered = resolve; });
   const f = setup(t, async () => { entered(); await new Promise((resolve) => { release = resolve; }); return { results: [game(1)], nextCursor: null }; });
-  await whoisCommand.execute(f.interaction);
+  await statsCommand.execute(f.interaction);
   const original = f.interaction.output;
-  const pending = f.click(button(f.interaction, 1, 0));
+  const pending = f.click(button(f.interaction, 1, 1));
   await waiting;
   f.setEnabled(0);
   release();
@@ -127,8 +127,9 @@ test("disabling history during a request prevents publication and removes the en
   assert.match(result.followUpOutput.content, /disabled while/);
   assert.equal(f.interaction.output, original);
   const disabled = setup(t, async () => { throw new Error("disabled history must not fetch"); }, { enabled: 0 });
-  await whoisCommand.execute(disabled.interaction);
-  assert.equal(disabled.interaction.output.components.length, 1);
+  await statsCommand.execute(disabled.interaction);
+  assert.equal(disabled.interaction.output.components.length, 2);
+  assert.deepEqual(disabled.interaction.output.components[1].components.map((item) => item.data.label), ["Statistics"]);
 });
 
 test("expiry during a request cannot refresh the original message", async (t) => {
@@ -136,9 +137,9 @@ test("expiry during a request cannot refresh the original message", async (t) =>
   t.mock.method(Date, "now", () => now);
   const waiting = new Promise((resolve) => { entered = resolve; });
   const f = setup(t, async () => { entered(); await new Promise((resolve) => { release = resolve; }); return { results: [game(1)], nextCursor: null }; });
-  await whoisCommand.execute(f.interaction);
+  await statsCommand.execute(f.interaction);
   const original = f.interaction.output;
-  const pending = f.click(button(f.interaction, 1, 0));
+  const pending = f.click(button(f.interaction, 1, 1));
   await waiting;
   now += 11 * 60_000;
   release();
@@ -150,10 +151,10 @@ test("expiry during a request cannot refresh the original message", async (t) =>
 test("history errors leave a retry control and DMs permit public player history", async (t) => {
   let calls = 0;
   const f = setup(t, async () => { if (++calls === 1) throw new OpenFrontApiError("http", 503); return { results: [], nextCursor: null }; }, { dm: true });
-  await whoisCommand.execute(f.interaction);
-  await f.click(button(f.interaction, 1, 0));
+  await statsCommand.execute(f.interaction);
+  await f.click(button(f.interaction, 1, 1));
   assert.match(fields(f.interaction).find((field) => field.name === "History could not be refreshed").value, /temporarily unavailable/);
-  await f.click(button(f.interaction, 0, 1));
+  await f.click(button(f.interaction, 1, 1));
   assert.equal(calls, 2);
   assert.match(fields(f.interaction).find((field) => field.name === "Recorded games").value, /No recorded games/);
 });
@@ -161,14 +162,14 @@ test("history errors leave a retry control and DMs permit public player history"
 test("unknown or deleted accounts are distinguished from known empty game history", async (t) => {
   let calls = 0;
   const f = setup(t, async () => ++calls === 1 ? null : { results: [], nextCursor: null });
-  await whoisCommand.execute(f.interaction);
-  await f.click(button(f.interaction, 1, 0));
+  await statsCommand.execute(f.interaction);
+  await f.click(button(f.interaction, 1, 1));
   const error = fields(f.interaction).find((field) => field.name === "History could not be refreshed");
   assert.match(error.value, /could not find this player's game history/);
   assert.match(error.value, /deleted/);
   assert.equal(fields(f.interaction).some((field) => field.name === "Recorded games"), false);
   assert.doesNotMatch(JSON.stringify(f.interaction.output), /No recorded games/);
-  await f.click(button(f.interaction, 0, 1));
+  await f.click(button(f.interaction, 1, 1));
   assert.equal(calls, 2);
   assert.match(fields(f.interaction).find((field) => field.name === "Recorded games").value, /No recorded games/);
 });
@@ -178,8 +179,8 @@ test("history respects Discord field limits with long escaped names and caps ret
   const long = "*_[`".repeat(100);
   const f = setup(t, async () => { calls++; return { results: Array.from({ length: 100 }, (_, index) => game(index,
     { username: long, map: long, mode: long, type: long, rankedType: long, clanTag: long })), nextCursor: "more" }; });
-  await whoisCommand.execute(f.interaction);
-  await f.click(button(f.interaction, 1, 0));
+  await statsCommand.execute(f.interaction);
+  await f.click(button(f.interaction, 1, 1));
   for (let index = 0; index < 19; index++) await f.click(button(f.interaction, 2, 1));
   assert.equal(calls, 1);
   assert.equal(f.interaction.output.components[2].components[1].data.disabled, true);
@@ -191,18 +192,18 @@ test("history respects Discord field limits with long escaped names and caps ret
 test("raw numbers selection persists across statistics tabs and history without graph glyphs", async (t) => {
   const leaf = (wins, losses, units) => ({ wins: String(wins), losses: String(losses), total: String(wins + losses), stats: { units } });
   const f = setup(t, async (_id, query) => {
-    assert.deepEqual(query, { type: "public" });
+    assert.deepEqual(query, { filter: "team", type: "public" });
     return { results: [game(1), game(2, { result: "defeat" }), game(3, { result: "incomplete" })], nextCursor: null };
   }, { view: "numbers", stats: { Public: { "Free For All": { Easy: leaf(3, 1, { city: ["12345678901234567890"] }) },
     Team: { Easy: leaf(2, 2, { city: ["15"], port: ["0"] }) } } } });
-  await whoisCommand.execute(f.interaction);
+  await statsCommand.execute(f.interaction);
   assert.match(fields(f.interaction).find((field) => field.name.startsWith("Buildings built")).value, /Cities: \*\*12,345,678,901,234,567,890\*\*/);
   assert.match(fields(f.interaction).find((field) => field.name.startsWith("Buildings built")).value, /Ports: Unavailable/);
   assert.equal(fields(f.interaction).some((field) => field.name === "Wins / losses"), false);
   assert.doesNotMatch(JSON.stringify(f.interaction.output), /[█░]|N\/A = unavailable/);
   await f.click(button(f.interaction, 0, 1));
   assert.match(fields(f.interaction).find((field) => field.name.startsWith("Buildings built")).value, /Cities: \*\*15\*\*\nPorts: \*\*0\*\*/);
-  await f.click(button(f.interaction, 1, 0));
+  await f.click(button(f.interaction, 1, 1));
   const results = fields(f.interaction).find((field) => field.name.includes("completed win rate"));
   assert.match(results.name, /50\.0%/);
   assert.equal(results.value, "Wins: **1**\nLosses: **1**\nIncomplete: **1**");
@@ -213,10 +214,10 @@ test("graph view removes the old legend and keeps aligned building and history c
   const f = setup(t, async () => ({ results: [game(1)], nextCursor: null }), { stats: {
     Public: { "Free For All": { Easy: { wins: "1", losses: "0", total: "1", stats: { units: { city: ["12"] } } } } },
   } });
-  await whoisCommand.execute(f.interaction);
+  await statsCommand.execute(f.interaction);
   assert.match(fields(f.interaction).find((field) => field.name.startsWith("Buildings built")).value, /^```text\nCities\s+█/);
   assert.doesNotMatch(JSON.stringify(f.interaction.output), /N\/A = unavailable|Exact available totals below/);
-  await f.click(button(f.interaction, 1, 0));
+  await f.click(button(f.interaction, 1, 1));
   assert.match(fields(f.interaction).find((field) => field.name.includes("completed win rate")).value, /^```text\nWins\s+█/);
 });
 
@@ -227,21 +228,21 @@ test("scope filters lifetime counters and every history cursor request consisten
     return { results: [game(queries.length, { type: "Private" })], nextCursor: query.cursor ? null : "private-next" };
   }, { scope: "private", stats: { Public: { "Free For All": { Easy: { wins: "10", losses: "0", total: "10" } } },
     Private: { "Free For All": { Easy: { wins: "1", losses: "3", total: "4" } } }, Ranked: { "1v1": { wins: "5", losses: "0", total: "5" } } } });
-  await whoisCommand.execute(f.interaction);
+  await statsCommand.execute(f.interaction);
   assert.match(fields(f.interaction).find((field) => field.name === "Free For All Stats").value, /\*\*Games:\*\* 4.*25\.0%/);
   assert.equal(fields(f.interaction).some((field) => field.name.startsWith("Ranked Record")), false);
   assert.match(f.interaction.output.embeds[0].toJSON().footer.text, /^Private matches/);
-  await f.click(button(f.interaction, 1, 0));
+  await f.click(button(f.interaction, 1, 1));
   await f.click(button(f.interaction, 2, 1));
-  await f.click(button(f.interaction, 1, 2));
-  assert.deepEqual(queries, [{ type: "private" }, { type: "private", cursor: "private-next" }, { filter: "team", type: "private" }]);
+  await f.click(button(f.interaction, 0, 1));
+  assert.deepEqual(queries, [{ filter: "ffa", type: "private" }, { filter: "ffa", type: "private", cursor: "private-next" }, { filter: "team", type: "private" }]);
   assert.match(f.interaction.output.embeds[0].toJSON().footer.text, /^Private matches/);
 });
 
 test("all scope omits the API type constraint and is clearly labelled", async (t) => {
-  const f = setup(t, async (_id, query) => { assert.deepEqual(query, {}); return { results: [game(1)], nextCursor: null }; }, { scope: "all" });
-  await whoisCommand.execute(f.interaction);
-  await f.click(button(f.interaction, 1, 0));
+  const f = setup(t, async (_id, query) => { assert.deepEqual(query, { filter: "ffa" }); return { results: [game(1)], nextCursor: null }; }, { scope: "all" });
+  await statsCommand.execute(f.interaction);
+  await f.click(button(f.interaction, 1, 1));
   assert.match(f.interaction.output.embeds[0].toJSON().footer.text, /^All public, private and singleplayer matches/);
 });
 
@@ -252,7 +253,7 @@ test("exact lifetime totals remain within Discord limits with very large counter
     bombs: { abomb: [huge], hbomb: [huge], mirv: [huge] }, attacks: [huge], gold: ["0", "0", huge],
   } } } } };
   const f = setup(t, async () => ({ results: [], nextCursor: null }), { stats });
-  await whoisCommand.execute(f.interaction);
+  await statsCommand.execute(f.interaction);
   const lifetime = fields(f.interaction).filter((field) => field.name.startsWith("Lifetime totals"));
   assert.equal(lifetime.length, 2);
   assert.ok(lifetime.every((field) => field.value.length <= 1024));

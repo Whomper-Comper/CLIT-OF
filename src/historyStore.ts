@@ -44,6 +44,12 @@ export class HistoryStore {
         game_id TEXT NOT NULL, game_start TEXT NOT NULL, payload TEXT NOT NULL,
         PRIMARY KEY(guild_id,public_id,game_id));
       CREATE INDEX IF NOT EXISTS history_player_time ON history_player_matches(guild_id,game_start);
+      CREATE TABLE IF NOT EXISTS history_observed_elo (
+        guild_id TEXT NOT NULL, public_id TEXT NOT NULL, discord_id TEXT, ladder TEXT NOT NULL,
+        hour_bucket INTEGER NOT NULL, observed_at TEXT NOT NULL, rating REAL NOT NULL,
+        PRIMARY KEY(guild_id,public_id,ladder,hour_bucket));
+      CREATE INDEX IF NOT EXISTS history_elo_time ON history_observed_elo(guild_id,observed_at);
+      CREATE INDEX IF NOT EXISTS history_elo_player ON history_observed_elo(public_id);
       CREATE TABLE IF NOT EXISTS history_jobs (
         guild_id TEXT NOT NULL, kind TEXT NOT NULL, subject TEXT NOT NULL, discord_id TEXT, identity_version TEXT,
         window_start TEXT NOT NULL, window_end TEXT NOT NULL, page INTEGER NOT NULL DEFAULT 1, cursor TEXT,
@@ -129,6 +135,43 @@ export class HistoryStore {
       ON CONFLICT(guild_id,public_id,game_id) DO UPDATE SET discord_id=excluded.discord_id,game_start=excluded.game_start,payload=excluded.payload`);
     for (const match of matches) statement.run(guild,publicId,discordId,match.gameId,iso(Date.parse(match.gameStart)),JSON.stringify(match));
   }
+  recordElo(guild: string, publicId: string, discordId: string | null, ladder: string, rating: number, now = Date.now()): void {
+    const settings = this.getSettings(guild);
+    if ((guild !== "dm" && !settings.player_history_enabled) || this.isDeleted(publicId)
+      || !["1v1","2v2","ffa"].includes(ladder) || !Number.isFinite(rating)
+      || Math.abs(rating) > Number.MAX_SAFE_INTEGER || !Number.isFinite(now) || !Number.isFinite(new Date(now).getTime())) return;
+    const observedAt = iso(now), hourBucket = Math.floor(now / 3_600_000);
+    this.db.prepare(`INSERT INTO history_observed_elo(guild_id,public_id,discord_id,ladder,hour_bucket,observed_at,rating)
+      VALUES(?,?,?,?,?,?,?) ON CONFLICT(guild_id,public_id,ladder,hour_bucket) DO UPDATE SET
+      discord_id=COALESCE(excluded.discord_id,history_observed_elo.discord_id),
+      observed_at=excluded.observed_at,rating=excluded.rating
+      WHERE excluded.observed_at>=history_observed_elo.observed_at`)
+      .run(guild,publicId,discordId,ladder,hourBucket,observedAt,rating);
+    const days = Number.isFinite(settings.retention_days) ? Math.max(1,Math.min(365,settings.retention_days)) : 90;
+    this.db.prepare("DELETE FROM history_observed_elo WHERE guild_id=? AND observed_at<?").run(guild,iso(now-days*DAY));
+  }
+  getEloHistory(guild: string, publicId: string, ladder: string, startISO: string, endISO: string): {at:string;rating:number}[] {
+    const start = Date.parse(startISO), end = Date.parse(endISO);
+    const settings = this.getSettings(guild);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || this.isDeleted(publicId)
+      || (guild !== "dm" && !settings.player_history_enabled) || !["1v1","2v2","ffa"].includes(ladder)) return [];
+    const days = Number.isFinite(settings.retention_days) ? Math.max(1,Math.min(365,settings.retention_days)) : 90;
+    const retainedStart = Math.max(start,Date.now()-days*DAY);
+    if (end <= retainedStart) return [];
+    return this.db.prepare(`SELECT observed_at,rating FROM history_observed_elo
+      WHERE guild_id=? AND public_id=? AND ladder=? AND observed_at>=? AND observed_at<? ORDER BY observed_at`)
+      .all(guild,publicId,ladder,iso(retainedStart),iso(end)).map(row => ({at:String(row.observed_at),rating:Number(row.rating)}));
+  }
+  pruneEloObservations(now = Date.now()): void {
+    if (!Number.isFinite(now) || !Number.isFinite(new Date(now).getTime())) return;
+    const guilds = this.db.prepare("SELECT DISTINCT guild_id FROM history_observed_elo").all();
+    const remove = this.db.prepare("DELETE FROM history_observed_elo WHERE guild_id=? AND observed_at<?");
+    for (const row of guilds) {
+      const guild = String(row.guild_id), settings = this.getSettings(guild);
+      const days = Number.isFinite(settings.retention_days) ? Math.max(1,Math.min(365,settings.retention_days)) : 90;
+      remove.run(guild,iso(now-days*DAY));
+    }
+  }
   private coverage(guild: string, kind: string, subject: string, start: string, end: string): HistoryCoverage {
     const from = Date.parse(start), until = Date.parse(end);
     if (!Number.isFinite(from) || !Number.isFinite(until) || until <= from) return { complete: false, coveredDays: 0, totalDays: 0 };
@@ -206,42 +249,61 @@ export class HistoryStore {
   }
   prunePlayerMembers(guild: string, valid: {discord_id:string;openfront_id:string}[]) {
     const validMap = new Map(valid.map(link=>[link.discord_id,link.openfront_id]));
-    const rows = this.db.prepare("SELECT DISTINCT public_id,discord_id FROM history_player_matches WHERE guild_id=? UNION SELECT subject AS public_id,discord_id FROM history_jobs WHERE guild_id=? AND kind='player'").all(guild,guild);
-    for (const row of rows) if (validMap.get(String(row.discord_id)) !== String(row.public_id)) this.purgeGuildPlayer(guild,String(row.public_id));
+    const rows = this.db.prepare(`SELECT DISTINCT public_id,discord_id FROM history_player_matches WHERE guild_id=?
+      UNION SELECT subject AS public_id,discord_id FROM history_jobs WHERE guild_id=? AND kind='player'
+      UNION SELECT public_id,discord_id FROM history_observed_elo WHERE guild_id=? AND discord_id IS NOT NULL`).all(guild,guild,guild);
+    for (const row of rows) if (validMap.get(String(row.discord_id)) !== String(row.public_id)) {
+      this.purgeGuildPlayerMatches(guild,String(row.public_id));
+      // Public profile observations have no membership association and expire through retention.
+      this.db.prepare("DELETE FROM history_observed_elo WHERE guild_id=? AND public_id=? AND discord_id=?")
+        .run(guild,String(row.public_id),row.discord_id);
+    }
   }
-  purgeGuildPlayer(guild: string, publicId: string) {
+  private purgeGuildPlayerMatches(guild: string, publicId: string) {
     this.db.prepare("DELETE FROM history_player_matches WHERE guild_id=? AND public_id=?").run(guild,publicId);
     this.db.prepare("DELETE FROM history_jobs WHERE guild_id=? AND kind='player' AND subject=?").run(guild,publicId);
     this.db.prepare("DELETE FROM history_coverage WHERE guild_id=? AND kind='player' AND subject=?").run(guild,publicId);
   }
+  purgeGuildPlayer(guild: string, publicId: string) {
+    this.purgeGuildPlayerMatches(guild,publicId);
+    this.db.prepare("DELETE FROM history_observed_elo WHERE guild_id=? AND public_id=?").run(guild,publicId);
+  }
   purgeMember(guild: string, discordId: string) {
-    const ids = this.db.prepare("SELECT public_id FROM history_player_matches WHERE guild_id=? AND discord_id=? UNION SELECT subject AS public_id FROM history_jobs WHERE guild_id=? AND discord_id=? AND kind='player'")
-      .all(guild,discordId,guild,discordId);
+    const ids = this.db.prepare(`SELECT public_id FROM history_player_matches WHERE guild_id=? AND discord_id=?
+      UNION SELECT subject AS public_id FROM history_jobs WHERE guild_id=? AND discord_id=? AND kind='player'
+      UNION SELECT public_id FROM history_observed_elo WHERE guild_id=? AND discord_id=?`)
+      .all(guild,discordId,guild,discordId,guild,discordId);
     for (const row of ids) this.purgeGuildPlayer(guild,String(row.public_id));
   }
   purgeIdentity(discordId: string) {
-    const guilds = this.db.prepare("SELECT DISTINCT guild_id FROM history_player_matches WHERE discord_id=? UNION SELECT guild_id FROM history_jobs WHERE discord_id=? AND kind='player'").all(discordId,discordId);
+    const guilds = this.db.prepare(`SELECT DISTINCT guild_id FROM history_player_matches WHERE discord_id=?
+      UNION SELECT guild_id FROM history_jobs WHERE discord_id=? AND kind='player'
+      UNION SELECT guild_id FROM history_observed_elo WHERE discord_id=?`).all(discordId,discordId,discordId);
     for (const row of guilds) this.purgeMember(String(row.guild_id),discordId);
   }
   purgePlayer(publicId: string, deletedAt = iso(Date.now())) {
     this.db.prepare("INSERT INTO history_deleted_players(public_id,deleted_at) VALUES(?,?) ON CONFLICT(public_id) DO UPDATE SET deleted_at=excluded.deleted_at").run(publicId,deletedAt);
     this.db.prepare("DELETE FROM history_player_matches WHERE public_id=?").run(publicId);
+    this.db.prepare("DELETE FROM history_observed_elo WHERE public_id=?").run(publicId);
     this.db.prepare("DELETE FROM history_jobs WHERE kind='player' AND subject=?").run(publicId);
     this.db.prepare("DELETE FROM history_coverage WHERE kind='player' AND subject=?").run(publicId);
   }
   isDeleted(publicId: string): boolean { return !!this.db.prepare("SELECT 1 FROM history_deleted_players WHERE public_id=?").get(publicId); }
   clearGuildPlayerHistory(guild: string) {
     this.db.prepare("DELETE FROM history_player_matches WHERE guild_id=?").run(guild);
+    this.db.prepare("DELETE FROM history_observed_elo WHERE guild_id=?").run(guild);
     this.db.prepare("DELETE FROM history_jobs WHERE guild_id=? AND kind='player'").run(guild);
     this.db.prepare("DELETE FROM history_coverage WHERE guild_id=? AND kind='player'").run(guild);
   }
   clearAllPlayerHistory() {
-    this.db.exec("DELETE FROM history_player_matches; DELETE FROM history_jobs WHERE kind='player'; DELETE FROM history_coverage WHERE kind='player';");
+    this.db.exec("DELETE FROM history_player_matches; DELETE FROM history_observed_elo; DELETE FROM history_jobs WHERE kind='player'; DELETE FROM history_coverage WHERE kind='player';");
   }
   retain(guild: string, days: number, now: number) {
     const cutoff = iso(dayFloor(now-days*DAY));
     this.db.prepare("DELETE FROM history_clan_matches WHERE guild_id=? AND game_start<?").run(guild,cutoff);
     this.db.prepare("DELETE FROM history_player_matches WHERE guild_id=? AND game_start<?").run(guild,cutoff);
+    const eloDays = Number.isFinite(days) ? Math.max(1,Math.min(365,days)) : 90;
+    this.db.prepare("DELETE FROM history_observed_elo WHERE guild_id=? AND observed_at<?").run(guild,iso(now-eloDays*DAY));
     this.db.prepare("DELETE FROM history_coverage WHERE guild_id=? AND end<?").run(guild,cutoff);
     this.db.prepare("DELETE FROM history_weekly_deliveries WHERE guild_id=? AND period_end<? AND status='sent'").run(guild,cutoff);
     // An interrupted old backfill cannot keep collecting beyond the configured retention horizon.
@@ -249,6 +311,7 @@ export class HistoryStore {
       .run(cutoff,iso(Math.min(Date.parse(cutoff)+DAY,now)),guild,cutoff);
   }
   getMeta(key: string): string | null { return this.db.prepare("SELECT value FROM history_meta WHERE key=?").get(key)?.value as string ?? null; }
+  hasEloObservations(): boolean { return !!this.db.prepare("SELECT 1 FROM history_observed_elo LIMIT 1").get(); }
   setMeta(key: string, value: string) { this.db.prepare("INSERT INTO history_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key,value); }
   getStatus(guild: string) {
     const count = (table: string) => Number(this.db.prepare(`SELECT count(*) AS value FROM ${table} WHERE guild_id=?`).get(guild)!.value);
@@ -256,7 +319,11 @@ export class HistoryStore {
     const coverage = this.db.prepare("SELECT min(start) AS first,max(end) AS last,max(collected_at) AS collected FROM history_coverage WHERE guild_id=?").get(guild)!;
     const error = this.db.prepare("SELECT last_error FROM history_jobs WHERE guild_id=? AND last_error IS NOT NULL ORDER BY last_work DESC LIMIT 1").get(guild);
     const deliveryError = this.db.prepare("SELECT last_error FROM history_weekly_deliveries WHERE guild_id=? AND last_error IS NOT NULL ORDER BY period_end DESC LIMIT 1").get(guild);
+    const elo = this.db.prepare("SELECT count(*) AS observations,max(observed_at) AS last FROM history_observed_elo WHERE guild_id=?").get(guild)!;
+    const settings = this.getSettings(guild);
     return { clanMatches: count("history_clan_matches"),playerMatches: count("history_player_matches"),pending: Number(jobs.pending),failed: Number(jobs.failed),
+      eloObservations: Number(elo.observations), eloLastObservedAt: elo.last as string | null,
+      eloError: settings.collection_enabled && settings.player_history_enabled ? this.getMeta("elo_error") : null,
       lastCollectedAt: coverage.collected as string | null,lastError: (error?.last_error as string | null ?? deliveryError?.last_error as string | null ?? this.getMeta(`guild_error:${guild}`)) || this.getMeta("deletions_error"),
       coverageStart: coverage.first as string | null,coveredThrough: coverage.last as string | null };
   }

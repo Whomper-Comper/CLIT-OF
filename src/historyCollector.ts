@@ -67,10 +67,10 @@ export class HistoryCollector {
   }
   private async tick() {
     const now = this.now(), allSettings = this.db.history.listSettings();
+    this.db.history.pruneEloObservations(now);
     for (const settings of allSettings) this.db.history.retain(settings.guild_id,settings.retention_days,now);
     let remaining = Math.max(1,Math.min(50,this.options.maxRequestsPerTick ?? 8));
-    const needsDeletionSync = allSettings.some(settings=>settings.player_history_enabled &&
-      (settings.collection_enabled || this.db.history.getStatus(settings.guild_id).playerMatches > 0));
+    const needsDeletionSync = allSettings.some(settings=>settings.player_history_enabled) || this.db.history.hasEloObservations();
     const deletion = needsDeletionSync ? await this.deletionSync(now) : {healthy:true,requests:0};
     remaining -= deletion.requests;
     if (this.stopping) return;
@@ -88,12 +88,20 @@ export class HistoryCollector {
         else this.db.history.removeJobs(guild.id,"clan");
         if (settings.player_history_enabled && tags.size && deletion.healthy) {
           for (const link of links) this.db.history.ensureJob(guild.id,"player",link.openfront_id,now,link.discord_id,link.linked_at);
-        } else if (!settings.player_history_enabled || !tags.size) this.db.history.clearGuildPlayerHistory(guild.id);
+        } else if (!settings.player_history_enabled) this.db.history.clearGuildPlayerHistory(guild.id);
+        else if (!tags.size) this.db.history.removeJobs(guild.id,"player");
         snapshots.set(guild.id,{guild,settings,links,tags});
         this.db.history.setMeta(`guild_error:${guild.id}`,"");
       } catch (error) {
         if (!this.stopping) this.db.history.setMeta(`guild_error:${guild.id}`,`Discord members unavailable: ${errorText(error)}`);
       }
+    }
+    // One shared leaderboard page covers every enabled server's linked humans.
+    // Reserve collection capacity for match history and persist the scan across restarts.
+    if (deletion.healthy && remaining > 2 && [...snapshots.values()].some(s=>s.settings.player_history_enabled && s.links.length) &&
+      Number(this.db.history.getMeta("elo_next_attempt") ?? 0) <= this.now()) {
+      remaining--;
+      await this.collectEloPage(snapshots);
     }
     while (!this.stopping && remaining-- > 0) {
       const job = this.db.history.nextJob(this.now(),[...snapshots.keys()],deletion.healthy);
@@ -110,6 +118,40 @@ export class HistoryCollector {
       if (this.stopping) return;
       await this.deliverWeekly(snapshot);
       if (!this.stopping) this.db.history.setMeta(`weekly_work:${snapshot.guild.id}`,String(this.now()));
+    }
+  }
+  private async collectEloPage(snapshots: Map<string,GuildSnapshot>) {
+    const storedPage = Number(this.db.history.getMeta("elo_scan_page") ?? 1);
+    const pageNumber = Number.isSafeInteger(storedPage) && storedPage >= 1 && storedPage <= 100 ? storedPage : 1;
+    try {
+      const page = await this.api.getRankedLeaderboardPage(pageNumber);
+      if (this.stopping) return;
+      for (const snapshot of snapshots.values()) {
+        const settings = this.db.history.getSettings(snapshot.guild.id);
+        if (!settings.player_history_enabled || !settings.collection_enabled || settings.revision !== snapshot.settings.revision) continue;
+        for (const link of snapshot.links) {
+          // Member removal updates this cache before the removal handler purges history.
+          const member = snapshot.guild.members.cache.get(link.discord_id);
+          if (!member || member.user.bot) continue;
+          const current = this.db.getEffectiveLink(snapshot.guild.id,link.discord_id);
+          if (!current || current.openfront_id !== link.openfront_id || current.linked_at !== link.linked_at) continue;
+          for (const rating of page.ratings) if (rating.publicId === link.openfront_id) {
+            this.db.history.recordElo(snapshot.guild.id,link.openfront_id,link.discord_id,rating.ladder,rating.rating,Date.parse(page.observedAt));
+          }
+        }
+      }
+      const continues = page.hasMore && pageNumber < 100;
+      const interval = Math.min(...[...snapshots.values()].filter(s=>s.settings.player_history_enabled).map(s=>s.settings.poll_minutes));
+      this.db.history.setMeta("elo_scan_page",String(continues ? pageNumber+1 : 1));
+      this.db.history.setMeta("elo_next_attempt",String(this.now()+(continues ? 60_000 : Math.max(5,interval)*60_000)));
+      this.db.history.setMeta("elo_attempts","0");
+      this.db.history.setMeta("elo_error","");
+    } catch (error) {
+      if (this.stopping) return;
+      const attempts = Math.min(6,Number(this.db.history.getMeta("elo_attempts") ?? 0)+1);
+      this.db.history.setMeta("elo_attempts",String(attempts));
+      this.db.history.setMeta("elo_next_attempt",String(this.now()+Math.min(3_600_000,60_000*2**attempts)));
+      this.db.history.setMeta("elo_error",`Elo observations could not refresh: ${errorText(error)}`);
     }
   }
   private current(job: HistoryJob, snapshot: GuildSnapshot): boolean {

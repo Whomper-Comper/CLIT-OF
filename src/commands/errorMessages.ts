@@ -19,7 +19,7 @@ export function commandErrorMessage(error: unknown, guildId: string | null): str
     detail = /role|permission|access/i.test(message) ? "Your assigned roles or the server's selected access role may have changed. Ask a server manager to check /config and your current roles. Clan and debug actions require their respective selected roles, even for administrators."
       : /another session|changed while|changed in|expired|menu/i.test(message) ? "The saved settings or menu session are no longer current. Open a fresh /config menu and repeat the change; expired or conflicting edits are blocked."
       : /member|server members|partial export/i.test(message) ? "Discord membership could not be confirmed. The user may have left, the Members intent may be unavailable, or Discord may be having connection problems. Retry and check the bot's Members intent."
-      : /exactly one|required|input|page|choose a valid/i.test(message) ? "The selected action needs different inputs. Check its required options; use either a Discord user or an OpenFront ID for /whois, and exactly one ID or token for /link."
+      : /exactly one|required|input|page|choose a valid/i.test(message) ? "The selected action needs different inputs. Check its required options; use either a Discord user or an OpenFront ID for /whois or /stats, and exactly one ID or token for /link."
       : /wait|trying/i.test(message) ? "This command has a cooldown to protect Discord and OpenFront from repeated requests. Wait before running it again."
       : "The bot stopped this action because a required condition was not met. Follow the message above; if it keeps happening, ask a manager to check configuration and use /debug status to inspect queued work.";
   } else {

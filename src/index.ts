@@ -15,7 +15,7 @@ import { OpenFrontApiError, openfrontApi } from "./api.js";
 import { HistoryCollector } from "./historyCollector.js";
 import { buildWeeklyReport } from "./historyReports.js";
 import { handleConfigInteraction } from "./commands/config.js";
-import { handleWhoisStatsInteraction } from "./commands/whois.js";
+import { handleStatsInteraction } from "./commands/stats.js";
 import { commandErrorMessage } from "./commands/errorMessages.js";
 import { clearDeploymentHealth, writeDeploymentHealth } from "./deploymentHealth.js";
 
@@ -79,7 +79,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
 // Slash Command Router
 client.on(Events.InteractionCreate, async (interaction) => {
   if (await handleConfigInteraction(interaction)) return;
-  if (await handleWhoisStatsInteraction(interaction)) return;
+  if (await handleStatsInteraction(interaction)) return;
   if (!interaction.isChatInputCommand()) return;
 
   const { commandName } = interaction;

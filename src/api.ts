@@ -4,6 +4,7 @@ import type {
   OpenFrontClanSession, OpenFrontClanSessionsPage, OpenFrontClanSessionsQuery, OpenFrontDeletedPlayer,
   OpenFrontPlayerGame, OpenFrontPlayerGamesPage, OpenFrontPlayerGamesQuery,
   OpenFrontPlayerSession, OpenFrontPlayerSessionsPage, OpenFrontPlayerSessionsQuery,
+  OpenFrontPlayerLadder, OpenFrontPlayerRatings, OpenFrontRankedLeaderboardPage,
 } from "./historyTypes.js";
 export type * from "./historyTypes.js";
 
@@ -181,6 +182,64 @@ export class OpenFrontApi {
     return this.publicRead(endpoint, () => this.loadCursorPage(endpoint, validPlayerGame, (row) => ({
       ...row, start: new Date(row.start).toISOString(),
     })), options);
+  }
+
+  /** Source: OpenFront's client fetchPlayerLeaderboard and RankedLeaderboardResponseSchema. */
+  async getRankedLeaderboardPage(page = 1, options: PublicReadOptions = {}): Promise<OpenFrontRankedLeaderboardPage> {
+    if (!Number.isSafeInteger(page) || page < 1 || page > 200) throw new RangeError("Leaderboard page must be 1–200.");
+    const endpoint = `/leaderboard/ranked?page=${page}`;
+    return this.publicRead(endpoint, async () => {
+      const response = await this.request(endpoint);
+      if (response.status === 400) {
+        const data = await this.jsonForPageBounds(response);
+        if (data) return { ratings: [], hasMore: false, observedAt: new Date(this.now()).toISOString() };
+      }
+      const data = await this.json(response);
+      if (!object(data) || !Array.isArray(data["1v1"])) throw new OpenFrontApiError();
+      const ratings: OpenFrontRankedLeaderboardPage["ratings"] = [];
+      let hasMore = false;
+      for (const ladder of ["1v1", "2v2", "ffa"] as const) {
+        // Older official APIs omit newer ladders, as the upstream schema permits.
+        const rows = data[ladder] ?? [];
+        if (!Array.isArray(rows) || rows.length > 100 || rows.some(row => !object(row) ||
+          typeof row.public_id !== "string" || !/^[A-Za-z0-9_-]{1,22}$/.test(row.public_id) ||
+          typeof row.elo !== "number" || !Number.isFinite(row.elo) ||
+          typeof row.rank !== "number" || !Number.isSafeInteger(row.rank) || row.rank < 1)) throw new OpenFrontApiError();
+        // The public client loads 50 entries per ladder/page. A full ladder
+        // may have another page; an empty next page safely terminates it.
+        hasMore ||= rows.length >= 50;
+        for (const row of rows) ratings.push({ publicId: row.public_id, ladder, rating: row.elo, rank: row.rank });
+      }
+      return { ratings, hasMore, observedAt: new Date(this.now()).toISOString() };
+    }, options);
+  }
+
+  private async jsonForPageBounds(response: Response): Promise<boolean> {
+    let data: unknown;
+    try { data = await response.clone().json(); } catch { return false; }
+    return object(data) && typeof data.message === "string" && /^Page must be between \d+ and \d+$/.test(data.message);
+  }
+
+  /** Exact public-ID matches only. A missing bounded-search result is not zero Elo. */
+  async getPlayerRatings(publicId: string, options: { maxPages?: number; fresh?: boolean } = {}): Promise<OpenFrontPlayerRatings> {
+    const id = publicId.trim();
+    if (!/^[A-Za-z0-9_-]{1,22}$/.test(id)) throw new RangeError("Invalid OpenFront player ID.");
+    const maxPages = options.maxPages ?? 3;
+    if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 5) throw new RangeError("Player rating scan must use 1–5 pages.");
+    const found = new Map<OpenFrontPlayerLadder, OpenFrontPlayerRatings["ratings"][number]>();
+    let complete = false, pages = 0, observedAt = new Date(this.now()).toISOString();
+    const started = Date.now();
+    for (let page = 1; page <= maxPages; page++) {
+      if (page > 1 && Date.now() - started >= 10_000) break;
+      let response: OpenFrontRankedLeaderboardPage;
+      try { response = await this.getRankedLeaderboardPage(page, { fresh: options.fresh }); }
+      catch (error) { if (!pages) throw error; break; }
+      pages++;
+      observedAt = response.observedAt;
+      for (const row of response.ratings) if (row.publicId === id && !found.has(row.ladder)) found.set(row.ladder, { ...row, observedAt: response.observedAt });
+      if (!response.hasMore || found.size === 3) { complete = true; break; }
+    }
+    return { ratings: [...found.values()], complete, pages, observedAt };
   }
 
   async getPlayerSessions(publicId: string, query: OpenFrontPlayerSessionsQuery = {}, options: PublicReadOptions = {}): Promise<OpenFrontPlayerSessionsPage | null> {

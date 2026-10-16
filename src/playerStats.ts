@@ -13,10 +13,10 @@ export interface PlayerStatsSummary {
   details: { name: string; value: bigint; partial?: boolean }[];
   buildings: { name: string; value: bigint | null; partial: boolean }[];
 }
-export type PlayerGameMode = "ffa" | "teams";
+export type PlayerGameMode = "ffa" | "teams" | "hvn";
 export type PlayerStatsFilter = PlayerGameMode | "ranked";
 export type PlayerStatsType = "all" | "public" | "private" | "singleplayer";
-export interface PlayerStatsOptions { type?: PlayerStatsType }
+export interface PlayerStatsOptions { type?: PlayerStatsType; includeRanked?: boolean }
 
 /** BigInt arithmetic keeps counters accurate above Number.MAX_SAFE_INTEGER. */
 export function winRate(wins: bigint, games: bigint): string {
@@ -42,6 +42,7 @@ export function summarizePlayerStats(stats: unknown, gameMode?: PlayerStatsFilte
   // Never recursively sum every object: stats.recent contains overlapping aggregates.
   const selectedModes = gameMode === "ffa" ? ["Free For All"]
     : gameMode === "teams" ? ["Team"]
+    : gameMode === "hvn" ? ["Humans Vs Nations"]
     : gameMode === "ranked" ? []
     : ["Free For All", "Team", "Humans Vs Nations"];
   for (const type of selectedTypes) {
@@ -57,7 +58,8 @@ export function summarizePlayerStats(stats: unknown, gameMode?: PlayerStatsFilte
       }
     }
   }
-  const includeRanked = (gameMode === undefined && type === "all") || (gameMode === "ranked" && (type === "public" || type === "all"));
+  const includeRanked = (gameMode === undefined && (type === "all" || (options.includeRanked && type === "public")))
+    || (gameMode === "ranked" && (type === "public" || type === "all"));
   if (includeRanked && stats.Ranked !== undefined) {
     if (!record(stats.Ranked)) partial = true;
     else for (const value of Object.values(stats.Ranked)) leaf(value);
@@ -76,7 +78,7 @@ export function summarizePlayerStats(stats: unknown, gameMode?: PlayerStatsFilte
   if (record(stats.recent)) {
     if (gameMode === "ranked") recentTree = record(stats.recent.Ranked) ? stats.recent.Ranked.all : undefined;
     else if (type === "all") recentTree = gameMode === undefined ? stats.recent.all : undefined;
-    else {
+    else if (!(gameMode === undefined && options.includeRanked && type === "public")) {
       const typeRecent = stats.recent[selectedTypes[0]];
       if (record(typeRecent)) {
         const modeRecent = gameMode === undefined ? typeRecent : typeRecent[selectedModes[0]];

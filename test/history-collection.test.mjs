@@ -22,7 +22,7 @@ function fixture(options={}) {
   const db = new BotDatabase(":memory:");
   let now = options.now ?? Date.parse("2026-10-16T12:00:00.000Z");
   const members = new Map();
-  const guild = {id:"guild",members:{fetch:async request=> {
+  const guild = {id:"guild",members:{cache:members,fetch:async request=> {
     if (request?.user) {
       const member=members.get(request.user);
       if (!member) throw Object.assign(new Error("Unknown member"),{code:10007});
@@ -32,7 +32,8 @@ function fixture(options={}) {
   }},channels:{fetch:async()=>null}};
   const client = {guilds:{cache:new Map([[guild.id,guild]])},user:{id:"bot"}};
   const api = {getClanSessions:async(tag,q)=>({results:[],total:0,page:q.page,limit:q.limit}),
-    getPlayerSessions:async()=>({results:[],nextCursor:null}),getRecentlyDeletedPlayers:async()=>[]};
+    getPlayerSessions:async()=>({results:[],nextCursor:null}),getRecentlyDeletedPlayers:async()=>[],
+    getRankedLeaderboardPage:async()=>({ratings:[],hasMore:false,observedAt:new Date(now).toISOString()})};
   const defaults=db.history.getSettings(guild.id);
   db.history.saveSettings(guild.id,{...defaults,collection_enabled:1},0);
   db.setGuildClanConfig(clanConfig(guild.id,"MARS"));

@@ -95,6 +95,8 @@ export async function buildDoctorEmbeds(guild: Guild, configs: GuildClanConfig[]
   general.push(`Match collection: ${history.collection_enabled ? `on, every ${history.poll_minutes} minutes` : "off"}; ${historyJobs.clanMatches} stored clan records; ${historyJobs.failed} retrying source(s).`);
   if (historyJobs.failed) problems++;
   if (historyJobs.lastError) general.push(`History issue: ${label(shortText(historyJobs.lastError, 180))}`);
+  general.push(`Elo history: ${historyJobs.eloObservations} retained observations${historyJobs.eloLastObservedAt ? `; last updated <t:${Math.floor(Date.parse(historyJobs.eloLastObservedAt)/1000)}:R>` : ""}.`);
+  if (historyJobs.eloError) { general.push(`Elo issue: ${label(shortText(historyJobs.eloError, 180))}`); problems++; }
   if (history.weekly_enabled) {
     try {
       const channel = history.channel_id ? await guild.channels.fetch(history.channel_id) : null;

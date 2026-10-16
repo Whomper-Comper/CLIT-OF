@@ -87,3 +87,27 @@ export interface OpenFrontDeletedPlayer {
   publicId: string;
   deletedAt: string;
 }
+
+/** Player ladders are independent; clan-wars Elo belongs to the clan. */
+export type OpenFrontPlayerLadder = "1v1" | "2v2" | "ffa";
+export interface OpenFrontPlayerRating {
+  publicId: string;
+  ladder: OpenFrontPlayerLadder;
+  rating: number;
+  rank: number | null;
+  /** Preserves the fetch time when a player lookup combines cached pages. */
+  observedAt?: string;
+}
+export interface OpenFrontRankedLeaderboardPage {
+  ratings: OpenFrontPlayerRating[];
+  hasMore: boolean;
+  /** When this API response was read, rather than an inferred match date. */
+  observedAt: string;
+}
+export interface OpenFrontPlayerRatings {
+  ratings: OpenFrontPlayerRating[];
+  /** False when the bounded leaderboard scan could have missed another ladder. */
+  complete: boolean;
+  pages: number;
+  observedAt: string;
+}
