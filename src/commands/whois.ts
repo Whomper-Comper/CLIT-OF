@@ -6,7 +6,7 @@ import {
 import { db, LinkedUser } from "../db.js";
 import { openfrontApi, OpenFrontPlayerGame, OpenFrontPlayerProfile } from "../api.js";
 import { extractDiscordId, toEpochSeconds } from "../utils.js";
-import { PlayerGameMode, PlayerStatsSummary, summarizePlayerStats, winRate } from "../playerStats.js";
+import { PlayerGameMode, PlayerStatsSummary, PlayerStatsType, summarizePlayerStats, winRate } from "../playerStats.js";
 import { CommandError, label, playerId, profileLink, shortText, throttle } from "./support.js";
 import { alignedBarChart } from "./statsGraph.js";
 import { commandErrorMessage } from "./errorMessages.js";
@@ -23,6 +23,8 @@ interface StatsTabs {
   ffa: PlayerStatsSummary | null;
   teams: PlayerStatsSummary | null;
   mode: PlayerGameMode;
+  view: "graphs" | "numbers";
+  scope: PlayerStatsType;
   page: "stats" | "history";
   filter: HistoryFilter;
   history: Map<HistoryFilter, HistoryPages>;
@@ -48,11 +50,19 @@ const historyEnabled = (guildId: string | null) => !guildId || db.history.getSet
 export const whoisCommand = {
   data: new SlashCommandBuilder().setName("whois").setDescription("Look up a Discord user or OpenFront public ID")
     .addUserOption((option) => option.setName("user").setDescription("Discord user to look up"))
-    .addStringOption((option) => option.setName("openfront_id").setDescription("OpenFront public ID, profile URL, or Discord ID")),
+    .addStringOption((option) => option.setName("openfront_id").setDescription("OpenFront public ID, profile URL, or Discord ID"))
+    .addStringOption((option) => option.setName("view").setDescription("Show aligned graphs or exact numbers (default: graphs)")
+      .addChoices({ name: "Graphs", value: "graphs" }, { name: "Raw numbers", value: "numbers" }))
+    .addStringOption((option) => option.setName("scope").setDescription("Match types to include (default: public)")
+      .addChoices({ name: "Public matches", value: "public" }, { name: "Private matches", value: "private" },
+        { name: "Singleplayer matches", value: "singleplayer" }, { name: "All match types", value: "all" })),
 
   async execute(interaction: ChatInputCommandInteraction) {
     const user = interaction.options.getUser("user");
     const input = interaction.options.getString("openfront_id")?.trim();
+    const view = interaction.options.getString("view") === "numbers" ? "numbers" : "graphs";
+    const selectedScope = interaction.options.getString("scope");
+    const scope: PlayerStatsType = selectedScope === "private" || selectedScope === "singleplayer" || selectedScope === "all" ? selectedScope : "public";
     if (Boolean(user) === Boolean(input)) throw new CommandError("Provide exactly one of `user` or `openfront_id`.");
     throttle(`whois:${interaction.user.id}`, 3000);
     await interaction.deferReply();
@@ -95,23 +105,23 @@ export const whoisCommand = {
     let ffa: PlayerStatsSummary | null = null;
     let teams: PlayerStatsSummary | null = null;
     if (profile) {
-      ffa = summarizePlayerStats(profile.stats, "ffa");
-      teams = summarizePlayerStats(profile.stats, "teams");
-      const ranked = summarizePlayerStats(profile.stats, "ranked");
-      const all = summarizePlayerStats(profile.stats);
+      ffa = summarizePlayerStats(profile.stats, "ffa", { type: scope });
+      teams = summarizePlayerStats(profile.stats, "teams", { type: scope });
+      const ranked = summarizePlayerStats(profile.stats, "ranked", { type: scope });
+      const all = summarizePlayerStats(profile.stats, undefined, { type: scope });
       const created = toEpochSeconds(profile.createdAt);
       if (created !== null) base.addFields({ name: "OpenFront Account Created", value: `<t:${created}:D>`, inline: true });
       if (ranked) {
         const number = (value: bigint) => value.toLocaleString("en-US");
-        base.addFields({ name: "Ranked Record", value: `${number(ranked.wins)} wins · ${number(ranked.losses)} losses · ${winRate(ranked.wins, ranked.games)} win rate`, inline: true });
+        base.addFields({ name: "Ranked Record (separate)", value: `${number(ranked.wins)} wins · ${number(ranked.losses)} losses · ${winRate(ranked.wins, ranked.games)} win rate`, inline: true });
       }
-      if (!all) {
-        base.addFields({ name: "OpenFront Statistics", value: "No recorded statistics were provided by OpenFront." });
+      if (!all && !ranked) {
+        base.addFields({ name: "OpenFront Statistics", value: "No recorded statistics were provided by OpenFront for this scope." });
       }
     }
     const session: StatsTabs = { id: randomUUID(), userId: interaction.user.id, guildId: interaction.guildId,
       messageId: null, playerId: id, expiresAt: Date.now() + tabLifetime, busy: false,
-      base, ffa, teams, mode: "ffa", page: "stats", filter: "all", history: new Map() };
+      base, ffa, teams, mode: "ffa", view, scope, page: "stats", filter: "all", history: new Map() };
     for (const [key, value] of tabs) if (value.expiresAt <= Date.now()) tabs.delete(key);
     if (tabs.size >= 500) tabs.delete(tabs.keys().next().value!);
     tabs.set(session.id, session);
@@ -198,7 +208,8 @@ async function loadHistory(session: StatsTabs, filter: HistoryFilter, advance: b
   const existing = session.history.get(filter);
   if (existing && (!advance || existing.index + 1 < existing.pages.length || !existing.nextCursor || existing.count >= historyMatchLimit)) return;
   const cursor = existing?.nextCursor ?? undefined;
-  const response = await openfrontApi.getPlayerGames(session.playerId, { ...(filter === "all" ? {} : { filter }), ...(cursor ? { cursor } : {}) });
+  const response = await openfrontApi.getPlayerGames(session.playerId, { ...(filter === "all" ? {} : { filter }),
+    ...(session.scope === "all" ? {} : { type: session.scope }), ...(cursor ? { cursor } : {}) });
   if (!sessionLive(session) || !historyEnabled(session.guildId)) return;
   if (response === null) throw new CommandError("OpenFront could not find this player's game history. The account may have been deleted or the public ID may no longer be available. Run `/whois` again to check the profile.");
   const state = existing ?? { pages: [], index: 0, nextCursor: null, cursors: new Set<string>(), gameIds: new Set<string>(), batches: 0, count: 0 };
@@ -267,11 +278,12 @@ function renderHistory(session: StatsTabs, error?: string) {
   if (games.length) {
     const wins = games.filter((game) => game.result === "victory").length;
     const losses = games.filter((game) => game.result === "defeat").length;
-    embed.addFields({ name: `This page · ${winRate(BigInt(wins), BigInt(wins + losses))} completed win rate`, value: alignedBarChart([
-      { name: "Wins", value: BigInt(wins) }, { name: "Losses", value: BigInt(losses) }, { name: "Incomplete", value: BigInt(games.length - wins - losses) },
-    ]) });
+    const results = [{ name: "Wins", value: BigInt(wins) }, { name: "Losses", value: BigInt(losses) },
+      { name: "Incomplete", value: BigInt(games.length - wins - losses) }];
+    embed.addFields({ name: `This page · ${winRate(BigInt(wins), BigInt(wins + losses))} completed win rate`,
+      value: session.view === "graphs" ? alignedBarChart(results) : numericRows(results) });
   }
-  embed.setFooter({ text: `History page ${(state?.index ?? 0) + 1} · up to ${historyMatchLimit} recent matches per filter · recorded history can differ from lifetime stats` });
+  embed.setFooter({ text: `${scopeLabel(session.scope)} · history page ${(state?.index ?? 0) + 1} · up to ${historyMatchLimit} recent matches per filter · history can differ from lifetime totals` });
   return embed;
 }
 
@@ -280,14 +292,40 @@ function renderStats(session: StatsTabs, mode: PlayerGameMode) {
   const stats = mode === "ffa" ? session.ffa : session.teams;
   const title = mode === "ffa" ? "Free For All Stats" : "Teams Stats";
   if (!stats) {
-    embed.addFields({ name: title, value: `No recorded ${mode === "ffa" ? "Free For All" : "Teams"} statistics were provided by OpenFront.` });
+    embed.addFields({ name: title, value: `No recorded ${mode === "ffa" ? "Free For All" : "Teams"} statistics were provided by OpenFront for this scope.` });
+    embed.setFooter({ text: `${scopeLabel(session.scope)} · ${mode === "ffa" ? "Free For All" : "Team games only"}` });
     return embed;
   }
   const number = (value: bigint) => value.toLocaleString("en-US");
-  embed.addFields({ name: title, value: `**Games:** ${number(stats.games)} · **Wins:** ${number(stats.wins)} · **Losses:** ${number(stats.losses)} · **Win rate:** ${winRate(stats.wins, stats.games)}` },
-    { name: "Wins / losses", value: alignedBarChart([{ name: "Wins", value: stats.wins }, { name: "Losses", value: stats.losses }]) },
-    { name: "Buildings built", value: alignedBarChart(stats.buildings) + "\nN/A = unavailable · + = partial total · ~ = abbreviated count. Exact available totals below." });
-  if (stats.details.length) embed.addFields({ name: "Lifetime totals", value: stats.details.map((item) => `${item.name}: **${number(item.value)}**`).join("\n") });
-  embed.setFooter({ text: `${title} · all recorded public, private and singleplayer matches${stats.partial ? " · some statistics were unavailable" : ""}` });
+  embed.addFields({ name: title, value: `**Games:** ${number(stats.games)} · **Wins:** ${number(stats.wins)} · **Losses:** ${number(stats.losses)} · **Win rate:** ${winRate(stats.wins, stats.games)}` });
+  if (session.view === "graphs") embed.addFields({ name: "Wins / losses", value: alignedBarChart([{ name: "Wins", value: stats.wins }, { name: "Losses", value: stats.losses }]) });
+  embed.addFields({ name: "Buildings built · lifetime totals", value: session.view === "graphs" ? alignedBarChart(stats.buildings) : numericRows(stats.buildings) });
+  const details = session.view === "graphs" ? stats.details : stats.details.filter((item) => !/^(Cities|Ports|Defense posts|Factories|Missile silos) built$/.test(item.name));
+  if (details.length) {
+    let lines: string[] = [];
+    let continued = false;
+    const flush = () => {
+      embed.addFields({ name: continued ? "Lifetime totals (continued)" : "Lifetime totals", value: lines.join("\n") });
+      lines = [];
+      continued = true;
+    };
+    for (const item of details) {
+      const line = `${item.name}: **${number(item.value)}**${item.partial ? " (partial)" : ""}`;
+      if (lines.join("\n").length + line.length + 1 > 1024) flush();
+      lines.push(line);
+    }
+    if (lines.length) flush();
+  }
+  const incomplete = stats.partial || stats.buildings.some((item) => item.partial) || stats.details.some((item) => item.partial);
+  embed.setFooter({ text: `${scopeLabel(session.scope)} · ${mode === "ffa" ? "Free For All" : "Team games only"} · lifetime totals${session.scope === "public" || session.scope === "all" ? " · ranked shown separately" : ""}${incomplete ? " · some counters unavailable or partial" : ""}` });
   return embed;
+}
+
+function scopeLabel(scope: PlayerStatsType): string {
+  return scope === "all" ? "All public, private and singleplayer matches" : scope === "public" ? "Public matches"
+    : scope === "private" ? "Private matches" : "Singleplayer matches";
+}
+
+function numericRows(rows: { name: string; value: bigint | null; partial?: boolean }[]): string {
+  return rows.map((item) => `${item.name}: ${item.value === null ? "Unavailable" : `**${item.value.toLocaleString("en-US")}**${item.partial ? " (partial)" : ""}`}`).join("\n");
 }

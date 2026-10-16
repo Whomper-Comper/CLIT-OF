@@ -34,7 +34,7 @@ export class HistoryStore {
         player_history_enabled INTEGER NOT NULL DEFAULT 1, collection_enabled INTEGER NOT NULL DEFAULT 0,
         weekly_enabled INTEGER NOT NULL DEFAULT 0, channel_id TEXT, poll_minutes INTEGER NOT NULL DEFAULT 15,
         retention_days INTEGER NOT NULL DEFAULT 90, weekly_day INTEGER NOT NULL DEFAULT 1,
-        weekly_hour INTEGER NOT NULL DEFAULT 9, timezone TEXT NOT NULL DEFAULT 'America/Bahia', weekly_since TEXT);
+        weekly_hour INTEGER NOT NULL DEFAULT 12, timezone TEXT NOT NULL DEFAULT 'UTC', weekly_since TEXT);
       CREATE TABLE IF NOT EXISTS history_clan_matches (
         guild_id TEXT NOT NULL, clan_tag TEXT NOT NULL, game_id TEXT NOT NULL, game_start TEXT NOT NULL,
         payload TEXT NOT NULL, PRIMARY KEY(guild_id,clan_tag,game_id));
@@ -60,13 +60,21 @@ export class HistoryStore {
       CREATE TABLE IF NOT EXISTS history_meta (key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS history_deleted_players (public_id TEXT PRIMARY KEY,deleted_at TEXT NOT NULL);
     `);
+    // Convert the original default once; later explicit/custom schedules remain user controlled.
+    if (!db.prepare("SELECT 1 FROM history_meta WHERE key='weekly_utc_noon_v1'").get()) {
+      const changedAt = new Date().toISOString();
+      db.prepare(`UPDATE history_settings SET weekly_hour=12,timezone='UTC',revision=revision+1,
+        weekly_since=CASE WHEN weekly_enabled=1 THEN ? ELSE weekly_since END
+        WHERE weekly_hour=9 AND timezone='America/Bahia'`).run(changedAt);
+      db.prepare("INSERT INTO history_meta(key,value) VALUES('weekly_utc_noon_v1',?)").run(changedAt);
+    }
   }
   getSettings(guild: string): HistorySettings {
     return this.db.prepare(`SELECT guild_id,revision,clan_history_enabled,player_history_enabled,collection_enabled,
       weekly_enabled,channel_id,poll_minutes,retention_days,weekly_day,weekly_hour,timezone FROM history_settings WHERE guild_id=?`)
       .get(guild) as unknown as HistorySettings ?? { guild_id: guild, revision: 0, clan_history_enabled: 1,
         player_history_enabled: 1, collection_enabled: 0, weekly_enabled: 0, channel_id: null,
-        poll_minutes: 15, retention_days: 90, weekly_day: 1, weekly_hour: 9, timezone: "America/Bahia" };
+        poll_minutes: 15, retention_days: 90, weekly_day: 1, weekly_hour: 12, timezone: "UTC" };
   }
   listSettings(): HistorySettings[] {
     return this.db.prepare("SELECT guild_id FROM history_settings").all().map(row => this.getSettings(String(row.guild_id)));

@@ -49,7 +49,8 @@ test("history settings default to opt-in collection and validate revisions, sche
   try {
     const defaults=db.history.getSettings("g");
     assert.equal(defaults.collection_enabled,0); assert.equal(defaults.weekly_enabled,0);
-    assert.equal(defaults.timezone,"America/Bahia");
+    assert.equal(defaults.timezone,"UTC");
+    assert.equal(defaults.weekly_hour,12);
     const saved=db.history.saveSettings("g",defaults,0);
     assert.equal(saved.revision,1);
     assert.throws(()=>db.history.saveSettings("g",defaults,0),/changed in another session/);

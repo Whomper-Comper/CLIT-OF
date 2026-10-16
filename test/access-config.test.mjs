@@ -117,7 +117,8 @@ test("history config integrates toggles, channel, validation and stale draft rej
   assert.equal(settings.weekly_enabled, 1);
   assert.equal(settings.collection_enabled, 1);
   assert.equal(settings.channel_id, ids.logs);
-  assert.equal(settings.timezone, "America/Bahia");
+  assert.equal(settings.timezone, "UTC");
+  assert.equal(settings.weekly_hour, 12);
   const stale = await action(f, second.id, "history_save");
   assert.match(error(stale), /changed in another session/);
   screen = await action(f, first.id, "history_timing");

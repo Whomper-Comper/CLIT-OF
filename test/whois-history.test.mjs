@@ -21,7 +21,7 @@ function setup(t, games, options = {}) {
   t.mock.method(openfrontApi, "getPlayerProfile", async () => ({ username: "Player", createdAt: "2025-01-01T00:00:00Z", clans: [], stats: options.stats }));
   t.mock.method(openfrontApi, "getPlayerGames", games);
   const interaction = { guildId: options.dm ? null : `history-guild-${suffix}`, user: { id: `history-reader-${suffix}` },
-    options: { getUser: () => null, getString: () => "player" }, deferReply: async () => {},
+    options: { getUser: () => null, getString: (name) => ({ openfront_id: "player", view: options.view, scope: options.scope })[name] ?? null }, deferReply: async () => {},
     editReply: async function (value) { this.output = value; return { id: `history-message-${suffix}` }; } };
   const click = async (customId, overrides = {}) => {
     const i = { customId, guildId: interaction.guildId, user: interaction.user, message: { id: `history-message-${suffix}` },
@@ -41,7 +41,7 @@ test("history loads lazily for profiles without lifetime stats, and incomplete g
   let calls = 0;
   const f = setup(t, async (id, query) => {
     calls++;
-    assert.equal(id, "player"); assert.deepEqual(query, {});
+    assert.equal(id, "player"); assert.deepEqual(query, { type: "public" });
     return { results: [game(1, { username: "**unsafe**", map: "@everyone *map*" }),
       game(2, { result: "incomplete", totalPlayers: null }), game(3, { result: "defeat" })], nextCursor: null };
   });
@@ -72,13 +72,13 @@ test("history splits bounded API batches into five-game pages and preserves cach
   assert.equal(queries.length, 1);
   assert.match(fields(f.interaction).find((field) => field.value.includes("Match ID:")).value, /match-5/);
   await f.click(button(f.interaction, 2, 1));
-  assert.deepEqual(queries, [{}, { cursor: "next-batch" }]);
+  assert.deepEqual(queries, [{ type: "public" }, { type: "public", cursor: "next-batch" }]);
   assert.match(fields(f.interaction).find((field) => field.value.includes("Match ID:")).value, /match-6/);
   await f.click(button(f.interaction, 2, 0));
   assert.equal(queries.length, 2);
   assert.match(fields(f.interaction).find((field) => field.value.includes("Match ID:")).value, /match-5/);
   await f.click(button(f.interaction, 1, 1));
-  assert.deepEqual(queries.at(-1), { filter: "ffa" });
+  assert.deepEqual(queries.at(-1), { filter: "ffa", type: "public" });
   await f.click(button(f.interaction, 1, 0));
   assert.equal(queries.length, 3);
   assert.match(f.interaction.output.embeds[0].toJSON().footer.text, /page 2/);
@@ -186,4 +186,76 @@ test("history respects Discord field limits with long escaped names and caps ret
   const embed = f.interaction.output.embeds[0];
   assert.ok(embed.length <= 6000);
   assert.ok(embed.toJSON().fields.every((field) => field.name.length <= 256 && field.value.length <= 1024));
+});
+
+test("raw numbers selection persists across statistics tabs and history without graph glyphs", async (t) => {
+  const leaf = (wins, losses, units) => ({ wins: String(wins), losses: String(losses), total: String(wins + losses), stats: { units } });
+  const f = setup(t, async (_id, query) => {
+    assert.deepEqual(query, { type: "public" });
+    return { results: [game(1), game(2, { result: "defeat" }), game(3, { result: "incomplete" })], nextCursor: null };
+  }, { view: "numbers", stats: { Public: { "Free For All": { Easy: leaf(3, 1, { city: ["12345678901234567890"] }) },
+    Team: { Easy: leaf(2, 2, { city: ["15"], port: ["0"] }) } } } });
+  await whoisCommand.execute(f.interaction);
+  assert.match(fields(f.interaction).find((field) => field.name.startsWith("Buildings built")).value, /Cities: \*\*12,345,678,901,234,567,890\*\*/);
+  assert.match(fields(f.interaction).find((field) => field.name.startsWith("Buildings built")).value, /Ports: Unavailable/);
+  assert.equal(fields(f.interaction).some((field) => field.name === "Wins / losses"), false);
+  assert.doesNotMatch(JSON.stringify(f.interaction.output), /[█░]|N\/A = unavailable/);
+  await f.click(button(f.interaction, 0, 1));
+  assert.match(fields(f.interaction).find((field) => field.name.startsWith("Buildings built")).value, /Cities: \*\*15\*\*\nPorts: \*\*0\*\*/);
+  await f.click(button(f.interaction, 1, 0));
+  const results = fields(f.interaction).find((field) => field.name.includes("completed win rate"));
+  assert.match(results.name, /50\.0%/);
+  assert.equal(results.value, "Wins: **1**\nLosses: **1**\nIncomplete: **1**");
+  assert.doesNotMatch(JSON.stringify(f.interaction.output), /[█░]/);
+});
+
+test("graph view removes the old legend and keeps aligned building and history charts", async (t) => {
+  const f = setup(t, async () => ({ results: [game(1)], nextCursor: null }), { stats: {
+    Public: { "Free For All": { Easy: { wins: "1", losses: "0", total: "1", stats: { units: { city: ["12"] } } } } },
+  } });
+  await whoisCommand.execute(f.interaction);
+  assert.match(fields(f.interaction).find((field) => field.name.startsWith("Buildings built")).value, /^```text\nCities\s+█/);
+  assert.doesNotMatch(JSON.stringify(f.interaction.output), /N\/A = unavailable|Exact available totals below/);
+  await f.click(button(f.interaction, 1, 0));
+  assert.match(fields(f.interaction).find((field) => field.name.includes("completed win rate")).value, /^```text\nWins\s+█/);
+});
+
+test("scope filters lifetime counters and every history cursor request consistently", async (t) => {
+  const queries = [];
+  const f = setup(t, async (_id, query) => {
+    queries.push(query);
+    return { results: [game(queries.length, { type: "Private" })], nextCursor: query.cursor ? null : "private-next" };
+  }, { scope: "private", stats: { Public: { "Free For All": { Easy: { wins: "10", losses: "0", total: "10" } } },
+    Private: { "Free For All": { Easy: { wins: "1", losses: "3", total: "4" } } }, Ranked: { "1v1": { wins: "5", losses: "0", total: "5" } } } });
+  await whoisCommand.execute(f.interaction);
+  assert.match(fields(f.interaction).find((field) => field.name === "Free For All Stats").value, /\*\*Games:\*\* 4.*25\.0%/);
+  assert.equal(fields(f.interaction).some((field) => field.name.startsWith("Ranked Record")), false);
+  assert.match(f.interaction.output.embeds[0].toJSON().footer.text, /^Private matches/);
+  await f.click(button(f.interaction, 1, 0));
+  await f.click(button(f.interaction, 2, 1));
+  await f.click(button(f.interaction, 1, 2));
+  assert.deepEqual(queries, [{ type: "private" }, { type: "private", cursor: "private-next" }, { filter: "team", type: "private" }]);
+  assert.match(f.interaction.output.embeds[0].toJSON().footer.text, /^Private matches/);
+});
+
+test("all scope omits the API type constraint and is clearly labelled", async (t) => {
+  const f = setup(t, async (_id, query) => { assert.deepEqual(query, {}); return { results: [game(1)], nextCursor: null }; }, { scope: "all" });
+  await whoisCommand.execute(f.interaction);
+  await f.click(button(f.interaction, 1, 0));
+  assert.match(f.interaction.output.embeds[0].toJSON().footer.text, /^All public, private and singleplayer matches/);
+});
+
+test("exact lifetime totals remain within Discord limits with very large counters", async (t) => {
+  const huge = "9".repeat(100);
+  const stats = { Public: { "Free For All": { Easy: { wins: "1", losses: "0", total: "1", stats: {
+    units: Object.fromEntries(["city", "port", "defp", "fact", "silo", "wshp"].map((key) => [key, [huge]])),
+    bombs: { abomb: [huge], hbomb: [huge], mirv: [huge] }, attacks: [huge], gold: ["0", "0", huge],
+  } } } } };
+  const f = setup(t, async () => ({ results: [], nextCursor: null }), { stats });
+  await whoisCommand.execute(f.interaction);
+  const lifetime = fields(f.interaction).filter((field) => field.name.startsWith("Lifetime totals"));
+  assert.equal(lifetime.length, 2);
+  assert.ok(lifetime.every((field) => field.value.length <= 1024));
+  assert.match(lifetime.map((field) => field.value).join("\n"), /Trade gold earned:/);
+  assert.ok(f.interaction.output.embeds[0].length <= 6000);
 });

@@ -10,11 +10,13 @@ const count = (value: unknown): bigint | null => {
 export interface PlayerStatsSummary {
   wins: bigint; losses: bigint; games: bigint; partial: boolean;
   recent: { games: number; wins: number } | null;
-  details: { name: string; value: bigint }[];
+  details: { name: string; value: bigint; partial?: boolean }[];
   buildings: { name: string; value: bigint | null; partial: boolean }[];
 }
 export type PlayerGameMode = "ffa" | "teams";
 export type PlayerStatsFilter = PlayerGameMode | "ranked";
+export type PlayerStatsType = "all" | "public" | "private" | "singleplayer";
+export interface PlayerStatsOptions { type?: PlayerStatsType }
 
 /** BigInt arithmetic keeps counters accurate above Number.MAX_SAFE_INTEGER. */
 export function winRate(wins: bigint, games: bigint): string {
@@ -23,8 +25,11 @@ export function winRate(wins: bigint, games: bigint): string {
   return `${tenths / 10n}.${tenths % 10n}%`;
 }
 
-export function summarizePlayerStats(stats: unknown, gameMode?: PlayerStatsFilter): PlayerStatsSummary | null {
+export function summarizePlayerStats(stats: unknown, gameMode?: PlayerStatsFilter, options: PlayerStatsOptions = {}): PlayerStatsSummary | null {
   if (!record(stats)) return null;
+  const type = options.type ?? "all";
+  const selectedTypes = type === "all" ? ["Public", "Private", "Singleplayer"]
+    : [type === "public" ? "Public" : type === "private" ? "Private" : "Singleplayer"];
   const leaves: Record<string, unknown>[] = [];
   let partial = false;
   const leaf = (value: unknown) => {
@@ -36,10 +41,10 @@ export function summarizePlayerStats(stats: unknown, gameMode?: PlayerStatsFilte
   };
   // Never recursively sum every object: stats.recent contains overlapping aggregates.
   const selectedModes = gameMode === "ffa" ? ["Free For All"]
-    : gameMode === "teams" ? ["Team", "Humans Vs Nations"]
+    : gameMode === "teams" ? ["Team"]
     : gameMode === "ranked" ? []
     : ["Free For All", "Team", "Humans Vs Nations"];
-  for (const type of ["Public", "Private", "Singleplayer"]) {
+  for (const type of selectedTypes) {
     const node = stats[type];
     if (node === undefined) continue;
     if (!record(node)) { partial = true; continue; }
@@ -52,52 +57,70 @@ export function summarizePlayerStats(stats: unknown, gameMode?: PlayerStatsFilte
       }
     }
   }
-  if ((gameMode === undefined || gameMode === "ranked") && stats.Ranked !== undefined) {
+  const includeRanked = (gameMode === undefined && type === "all") || (gameMode === "ranked" && (type === "public" || type === "all"));
+  if (includeRanked && stats.Ranked !== undefined) {
     if (!record(stats.Ranked)) partial = true;
     else for (const value of Object.values(stats.Ranked)) leaf(value);
   }
   if (!leaves.length) return null;
   const summary: PlayerStatsSummary = { wins: 0n, losses: 0n, games: 0n, partial, recent: null, details: [], buildings: [] };
-  const detailTotals = new Map<string, bigint>();
-  const add = (name: string, value: unknown) => {
-    const parsed = count(value);
-    if (parsed !== null) detailTotals.set(name, (detailTotals.get(name) ?? 0n) + parsed);
-  };
   const slot = (value: unknown, index: number): unknown => Array.isArray(value) ? value[index] : undefined;
   for (const item of leaves) {
     summary.wins += count(item.wins)!;
     summary.losses += count(item.losses)!;
     summary.games += count(item.total)!;
-    if (!record(item.stats)) continue;
-    const detail = item.stats;
-    if (record(detail.units)) {
-      add("Cities built", slot(detail.units.city, 0));
-      add("Ports built", slot(detail.units.port, 0));
-      add("Defense posts built", slot(detail.units.defp, 0));
-      add("Factories built", slot(detail.units.fact, 0));
-      add("Missile silos built", slot(detail.units.silo, 0));
-      add("Warships built", slot(detail.units.wshp, 0));
-    }
-    if (record(detail.bombs)) {
-      // mirvw are MIRV submunitions; counting them again would inflate launches.
-      for (const type of ["abomb", "hbomb", "mirv"]) add("Nukes launched", slot(detail.bombs[type], 0));
-    }
-    add("Troops sent", slot(detail.attacks, 0));
-    add("Trade gold earned", slot(detail.gold, 2));
   }
-  const recentTree = record(stats.recent) ? stats.recent.all : undefined;
+  // Recent aggregates are newest-100 windows, not additive counters. Only use
+  // the exact selection's aggregate; all modes/types would mislabel a tab.
+  let recentTree: unknown;
+  if (record(stats.recent)) {
+    if (gameMode === "ranked") recentTree = record(stats.recent.Ranked) ? stats.recent.Ranked.all : undefined;
+    else if (type === "all") recentTree = gameMode === undefined ? stats.recent.all : undefined;
+    else {
+      const typeRecent = stats.recent[selectedTypes[0]];
+      if (record(typeRecent)) {
+        const modeRecent = gameMode === undefined ? typeRecent : typeRecent[selectedModes[0]];
+        recentTree = record(modeRecent) ? modeRecent.all : undefined;
+      }
+    }
+  }
   const recent = recentTree ?? (leaves.length === 1 ? leaves[0].recent : undefined);
   if (record(recent) && typeof recent.games === "number" && Number.isInteger(recent.games) && recent.games >= 0 && recent.games <= 100 &&
     typeof recent.wins === "number" && Number.isInteger(recent.wins) && recent.wins >= 0 && recent.wins <= recent.games) {
     summary.recent = { games: recent.games, wins: recent.wins };
   }
-  summary.details = [...detailTotals].map(([name, value]) => ({ name, value }));
+  const aggregate = (values: (bigint | null)[]) => {
+    const known = values.filter((value): value is bigint => value !== null);
+    return { value: known.length ? known.reduce((total, value) => total + value, 0n) : null,
+      partial: partial || known.length !== leaves.length };
+  };
   // Wire counters use slot zero for built units. Missing buckets are not zero builds.
   summary.buildings = [["city", "Cities"], ["port", "Ports"], ["defp", "Defense posts"], ["fact", "Factories"], ["silo", "Missile silos"]].map(([key, name]) => {
     const values = leaves.map(item => record(item.stats) && record(item.stats.units) ? count(slot(item.stats.units[key], 0)) : null);
-    const known = values.filter((value): value is bigint => value !== null);
-    return { name, value: known.length ? known.reduce((total, value) => total + value, 0n) : null,
-      partial: partial || known.length !== leaves.length };
+    return { name, ...aggregate(values) };
   });
+  summary.details = summary.buildings.filter((item): item is typeof item & { value: bigint } => item.value !== null)
+    .map(({ name, value, partial }) => ({ name: `${name} built`, value, ...(partial ? { partial: true } : {}) }));
+  const extraMetrics: [string, (detail: Record<string, unknown>) => bigint | null][] = [
+    ["Warships built", detail => record(detail.units) ? count(slot(detail.units.wshp, 0)) : null],
+    ["Nukes launched", detail => {
+      if (!record(detail.bombs)) return null;
+      // Bomb records are sparse. mirvw are MIRV submunitions, not launches.
+      let total = 0n;
+      for (const key of ["abomb", "hbomb", "mirv"]) {
+        if (detail.bombs[key] === undefined) continue;
+        const value = count(slot(detail.bombs[key], 0));
+        if (value === null) return null;
+        total += value;
+      }
+      return total;
+    }],
+    ["Troops sent", detail => count(slot(detail.attacks, 0))],
+    ["Trade gold earned", detail => count(slot(detail.gold, 2))],
+  ];
+  for (const [name, valueFrom] of extraMetrics) {
+    const metric = aggregate(leaves.map(item => record(item.stats) ? valueFrom(item.stats) : null));
+    if (metric.value !== null) summary.details.push({ name, value: metric.value, ...(metric.partial ? { partial: true } : {}) });
+  }
   return summary;
 }
