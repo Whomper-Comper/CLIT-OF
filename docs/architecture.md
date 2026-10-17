@@ -1,0 +1,220 @@
+# Architecture and persistence
+
+This describes the checked-in implementation, not the state of a deployed bot or the availability of Discord/OpenFront. For user behavior see [commands](commands.md), [server administration](server-administration.md), and [statistics and history](statistics-and-history.md). Deployment and recovery belong in [operations](operations.md); contributor workflows are in [development](development.md). Return to the [README](../README.md).
+
+## Contents
+
+- [Runtime and source map](#runtime-and-source-map)
+- [Startup, events and shutdown](#startup-events-and-shutdown)
+- [Identity and access boundaries](#identity-and-access-boundaries)
+- [Role reconciliation and queue invariants](#role-reconciliation-and-queue-invariants)
+- [API adapter and cache boundaries](#api-adapter-and-cache-boundaries)
+- [SQLite schema catalog](#sqlite-schema-catalog)
+- [History worker, coverage and delivery](#history-worker-coverage-and-delivery)
+- [Reporting, arithmetic and graphs](#reporting-arithmetic-and-graphs)
+
+## Runtime and source map
+
+The bot is one Node.js process, written in strict TypeScript and compiled to ESM JavaScript in `dist/`. Discord interactions, background role synchronization, history collection, and synchronous SQLite access share that process. There is no web server, external queue broker, or separate history service in this repository.
+
+| Source | Responsibility |
+| --- | --- |
+| `src/index.ts` | Configuration validation, Discord client, event routing, service startup, shutdown, login-failure cleanup |
+| `src/config.ts` | Environment loading and defaults; validation of required credentials and default sync interval |
+| `src/deploy-commands.ts`, `src/commands/index.ts` | Shared slash-command definitions, registration, name-to-handler map |
+| `src/commands/link.ts`, `unlink.ts`, `whois.ts` | Verified identity linking, self-unlink, identity lookup |
+| `src/commands/clan.ts`, `clanHandlers.ts` | Clan action definitions and server administration handlers |
+| `src/commands/config.ts`, `src/setupConfig.ts` | Interactive drafts, permissions, revision checks, role/channel validation |
+| `src/commands/stats.ts` | Statistics selections, interactive page sessions, lazy game/Elo loading and rendering |
+| `src/commands/debug.ts`, `dice.ts` | Explicitly authorized diagnostic exports/settings and bounded animated dice rolls |
+| `src/commands/support.ts`, `errorMessages.ts`, `src/access.ts`, `src/utils.ts` | Safe replies, errors, identity locks, throttles, access decisions and input parsing |
+| `src/clanSync.ts`, `src/roles.ts`, `src/queues.ts` | Role reconciliation, desired-role union, paced writes and in-memory locks |
+| `src/api.ts`, `src/historyTypes.ts` | OpenFront transport, runtime validation, short cache and wire types |
+| `src/db.ts`, `src/historyStore.ts`, `src/backups.ts` | SQLite schema, state transitions, history checkpoints/cleanup, pre-migration snapshots |
+| `src/historyCollector.ts`, `historySchedule.ts` | Bounded background history/Elo collection, deletion synchronization and weekly delivery |
+| `src/playerStats.ts`, `playerAnalytics.ts` | Exact lifetime counters and bounded filtered-match analysis |
+| `src/reporting.ts`, `historyReports.ts` | Coverage/doctor output, recent clan analysis and stored weekly recap analysis |
+| `src/commands/statsGraph.ts`, `statsLineGraph.ts` | Text bar charts and dependency-free PNG Elo line graphs |
+| `src/deploymentHealth.ts`, `tools/check-deployment-health.mjs` | Process-owned readiness marker and deployment check |
+
+## Startup, events and shutdown
+
+Importing `db.ts` creates the exported database singleton; importing command definitions can therefore open/migrate the database even in the command registration process. Configuration is loaded at module evaluation, so test/environment overrides must precede imports. `validateConfig()` runs in the bot and registration entry points, but it does not remove these import side effects.
+
+The Discord client requests `Guilds` and privileged `GuildMembers` intents and disables automatic mention parsing. At `ClientReady`, it sets its activity, starts role scheduling and history collection, then writes an optional readiness marker. The marker proves this process reached ready; it is not continuous API or queue health monitoring.
+
+```mermaid
+flowchart TD
+    A[Load configuration and modules] --> B[Open SQLite and initialize schema]
+    B --> C[Validate configuration and login]
+    C --> D[Discord ClientReady]
+    D --> E[Start role scheduler and cleanup worker]
+    D --> F[Start history worker]
+    D --> G[Write optional readiness marker]
+    H[InteractionCreate] --> I[Configuration components]
+    I -->|unhandled| J[Statistics buttons]
+    J -->|unhandled slash command| K[commandsByName handler]
+    I --> L[Shared error boundary]
+    J --> L
+    K --> L
+```
+
+The interaction boundary first offers events to configuration, then statistics, then slash-command handlers. Unknown slash commands receive an actionable error. Expected `CommandError`/`OpenFrontApiError` failures receive controlled wording; unexpected failures are logged and receive a generic fallback. An acknowledged slash command edits its own reply and clears embeds/components. An acknowledged component sends a private follow-up so the original message remains intact. Reply failures, including expired interactions, stay within the event boundary.
+
+Member join triggers synchronization only when an effective link exists. Member removal purges that guild's associated player history; it does not delete the identity link. Member role updates can trigger approval-role handling. `SIGINT` and `SIGTERM` clear the process-owned marker, stop role timers, await the history worker, destroy the Discord client and close SQLite. Login failure performs comparable cleanup and sets a failing exit code. Role scheduler stop sets a flag and clears timers; unlike history stop, it does not expose a promise that drains every outstanding role operation.
+
+## Identity and access boundaries
+
+A verified bot-wide link in `linked_users` takes precedence over server-local `guild_links`. Global links accept only `identity_token` or `profile_discord` methods. `/link` verifies a fresh profile, and a public-ID link must match the caller's Discord connection. Token verification is a fresh POST, followed by profile retrieval. Server managers can approve a local manual link; this is not a global ownership assertion.
+
+Global OpenFront IDs are unique. Local IDs are unique within a guild. A local link cannot overwrite a globally linked Discord user or OpenFront ID. Creating a global verified link removes conflicting local claims (same Discord user or OpenFront ID), audits them, purges affected player history and queues reconciliation. Effective-list queries explicitly suppress local claims shadowed by global identity. Self-unlink removes both the global identity and that user's local links across guilds, including when invoked from a DM. Link mutations use transactions and audit records; per-user identity locks serialize asynchronous command verification and unlinking.
+
+Access is intentionally separate from identity ownership:
+
+| Operation | Required authorization |
+| --- | --- |
+| Open configuration | Manage Server (`ManageGuild`) or configured manager role |
+| Use clan management | Configured manager role, including for server owners/administrators |
+| Change selected configuration/access settings | Refreshed permission/role checks at the relevant write boundary |
+| Use debug exports/toggles | Explicit configured debug role, including for owners/administrators |
+| Change a statistics page | Original invoking user, original guild/DM context and original message |
+
+`hasClanAccess`/`hasConfigAccess` force-fetch membership and reread the configured role after the fetch. A menu is not continuing authorization. Slow validation must be followed by a fresh authorization check before persistence or data release. Manager/debug/history settings use revisions; clan drafts compare `configSnapshot()`, which deliberately omits background `last_sync_at` changes.
+
+Configuration sessions live in memory for ten minutes and bind a random session ID to the owner and guild, with at most 200 retained sessions. Statistics sessions also last ten minutes, bind the original message, reject concurrent button loads and retain at most 500 sessions. Expired entries are removed as new sessions are opened; reaching a cap evicts the oldest map entry. History-dependent statistics pages recheck history settings revision, identity/link timestamp and deletion tombstones after asynchronous work; invalidation clears cached history, analytics and Elo graph state. Session maps, throttles and locks disappear on restart; database checkpoints and jobs survive.
+
+## Role reconciliation and queue invariants
+
+`desiredRoles()` computes the union across every configured clan membership. A shared officer role remains earned if at least one configured membership qualifies. Members receive member roles; officer/leader membership can earn officer roles; leader membership can additionally earn a leader role. Approval/join roles belong to server staff and are not ordinary bot-managed rank roles.
+
+Role scheduling checks due clan configurations every minute, using each mapping's interval and successful-sync timestamp. Cleanup checks every 250 ms and starts immediately. A separate lock serializes a guild/clan sync, and member locks serialize reconciliation for each guild/member. Both direct synchronization and persisted cleanup use the same `PacedQueue`: one role write lane with a one-second gap after completion, including failed writes. Discord's own HTTP rate-limit handling remains in addition to this pacing.
+
+Persisted `role_jobs` coalesce to one job per guild/member. Enqueue unions current managed roles, explicitly supplied obsolete roles and roles remaining in an older job; replaces its UUID version; resets retry state; preserves its original creation time; and never lowers existing priority. Unlink/ownership cleanup uses elevated priority 10. Each successful cleanup turn makes at most one actual role write, persists remaining roles, then lets other work compete. Obsolete ranks are revoked before grants. Missing members (`10007`) and absent guilds finish the cleanup job; transient failures retain it.
+
+Both persisted-job selection and the in-memory write lane rotate guilds within priority. Strict higher-priority selection means ordinary work can wait under sustained higher-priority load; fairness is not a universal maximum-latency guarantee. Persisted failures back off from one minute exponentially to a one-hour cap. Completion/progress/retry updates include the job UUID, so a stale pass cannot consume a newly enqueued replacement.
+
+Before committing a queued write, the worker rereads job version, effective link ID/link timestamp and configuration snapshot. A profile API failure does not justify stripping roles as if membership were empty. Removed mapping roles are carried into cleanup jobs so they can still be revoked after the mapping disappears. Preserve all of these checks when adding a new mutation path.
+
+```mermaid
+flowchart LR
+    A[Link or configuration transaction] --> B[Persist coalesced role job]
+    B --> C[Select eligible job by priority and guild rotation]
+    C --> D[Member lock and current identity/config snapshot]
+    D --> E[Fetch authoritative profile when needed]
+    E --> F[Compute union of desired roles]
+    F --> G[Shared paced write lane]
+    G --> H[Recheck snapshot before role write]
+    H --> I[Persist remaining roles or finish]
+    E -->|failure| J[Persist retry and backoff]
+    H -->|stale| C
+```
+
+## API adapter and cache boundaries
+
+`OpenFrontApi` wraps `fetch` with JSON acceptance, a 15-second abort timeout, typed network/timeout/HTTP/response errors and endpoint-specific runtime validation. Types alone do not validate external JSON. Missing players/clans and known empty pages are distinct from transport errors or malformed results. IDs are encoded as URL segments, filters are allowlisted and dates normalize to canonical UTC before caching/storage. Cursor values remain opaque.
+
+Public reads share in-flight work and successful short-lived results (default 15 seconds, maximum 500 entries). Results are cloned for each caller. Errors are not inserted as normal cached values. `fresh: true` bypasses both cached and pending reads; generation checks prevent an earlier slow request from replacing a newer fresh result. Cache entries are process memory, keyed by endpoint/query; verification and diagnosis must deliberately request freshness. Token verification is not a reusable cached public read. Public API caching does not establish that a player is online or that a tagged historical appearance proves identity ownership.
+
+Player lifetime profile statistics, cursor game history, player session history, paged clan sessions, ranked leaderboards and recently deleted players are separate adapter contracts. Do not substitute one response shape for another. Leaderboards use exact public IDs and independent `1v1`/`2v2`/`ffa` ladders; bounded scans qualify absence when exhaustion has not been established.
+
+### Implemented HTTP contracts
+
+These are the paths and validation rules in [the adapter](../src/api.ts), relative to `OPENFRONT_API_BASE`. They describe the bot's supported contract, not a claim that a live endpoint was checked during documentation work.
+
+| Method and path | Inputs and response contract | Absence and bounds |
+| --- | --- | --- |
+| `GET /public/player/{publicId}` | Profile metadata, optional Discord `user`, clan memberships, optional statistics tree | HTTP 404 returns `null`; supplied user/clan fields are validated rather than accepted as ownership by name |
+| `GET /public/clan/{tag}` | Tag normalized uppercase; validates clan name/tag/description and optional nonnegative member count | HTTP 404 returns `null`; no authenticated complete roster is fetched |
+| `GET /public/player/{publicId}/games` | Optional `filter`, `type`, opaque `cursor`; validates `{ results, nextCursor }` and each game's result, start, duration, map, mode/type, player count, name/tag | HTTP 404 returns `null`; at most 100 rows; next cursor must be null or nonempty |
+| `GET /public/player/{publicId}/sessions` | Same filters/cursor, optional ISO `start`/`end`; validates session game identity, start/end, type/mode, client identity, recorded name/tag and boolean result | HTTP 404 returns `null`; when both dates are supplied, start must precede end; at most 100 rows |
+| `GET /public/clan/{tag}/sessions` | Required ISO bounds no more than one day apart, numeric `page`/`limit`; validates results and exact echoed page/limit with total | HTTP 404 returns `null`; pages 1–200, limits 1–50; at most the requested limit of rows |
+| `GET /leaderboard/ranked?page=N` | Independent arrays for `1v1`, `2v2`, `ffa`; exact `public_id`, finite `elo`, positive safe-integer `rank` | Pages 1–200 at adapter level; required `1v1` array, missing newer ladders treated as empty; at most 100 rows per ladder |
+| `GET /public/players/recently-deleted` | Optional ISO `since`; validates an array of public IDs and deletion timestamps | Maximum 100,000 rows; used with a fresh read by deletion synchronization |
+| `POST /public/identity_token/validate` | JSON `{ token, audience }`; requires a valid public ID on successful validation | Tries the decoded audience (or fallback), `ofstats.io`, and `trackerfront.io` without duplicates; HTTP 400/401/403 advances to the next audience, then returns `null` if none validates |
+
+The token's decoded audience is a request hint, not local proof of a valid signature. The upstream validation response establishes the verified ID, then `/link` retrieves that account's fresh profile. The bot does not persist the token itself.
+
+Leaderboard `hasMore` follows whether any ladder returned at least 50 rows. A specific HTTP 400 page-bounds message is recognized as an exhausted page; unrelated 400 responses remain errors. Interactive rating search defaults to three pages and a between-page ten-second budget, with an internal maximum of five pages. The background collector separately bounds its rotating scan to 100 pages. Those three limits have different callers.
+
+Other non-success HTTP statuses become controlled API errors. Transport timeout/network errors and invalid JSON/schema are also distinct internally; user replies go through the centralized safe formatter. See [statistics coverage](statistics-and-history.md#filtered-match-statistics) for how later-page failures retain partial samples.
+
+## SQLite schema catalog
+
+`BotDatabase` uses Node's built-in synchronous `DatabaseSync`, creates the database directory, takes a backup before initialization, sets a 5,000 ms busy timeout and initializes schema inside `BEGIN IMMEDIATE`. There is no ORM or numbered migration directory. History page writes use a savepoint, including when nested in a caller transaction, so partial pages roll back atomically. The implementation does not declare SQL foreign keys; cleanup and cross-table consistency are application responsibilities. Do not assume a transaction remains isolated across asynchronous awaits.
+
+Types below are SQLite storage types; IDs are `TEXT`, timestamps are normally UTC ISO `TEXT`, JSON payloads/role lists are `TEXT`, toggles and counters are `INTEGER`, and ratings are `REAL`.
+
+| Table | Key/uniqueness | Stored fields and purpose |
+| --- | --- | --- |
+| `linked_users` | PK `discord_id`; unique `openfront_id` | `openfront_username`, `linked_at`, `verified_method`; verified bot-wide ownership |
+| `guild_clan_configs` | PK `(guild_id, clan_tag)` | Member/officer/leader/join role IDs, log channel, sync interval, last successful sync; multiple clans per guild |
+| `guild_links` | PK `(guild_id, discord_id)`; unique `(guild_id, openfront_id)` | Local account approval, username, link timestamp and verification method |
+| `link_audit` | Integer PK `id` | Nullable `guild_id`, actor, subject Discord ID, action, old/new OpenFront ID, creation timestamp; indexed by subject/id and guild/id |
+| `role_jobs` | PK `(guild_id, discord_id)` | JSON `role_ids`, UUID `version`, attempts, epoch-ms `available_at`, bounded last error, priority, epoch-ms creation time |
+| `guild_settings` | PK `guild_id` | Required manager role and optimistic revision |
+| `guild_debug_settings` | PK `guild_id` | Nullable debug role, revision, `verbose_errors` (default 0), `ephemeral_replies` (default 1) |
+| `legacy_manual_links` | PK `discord_id` | Quarantined old manual identity with OpenFront ID, username, original link time and migration time; not an effective live link |
+| `history_settings` | PK `guild_id` | Revision, clan/player history toggles, collection/weekly toggles, channel, poll interval, retention, weekly day/hour/timezone, internal `weekly_since` |
+| `history_clan_matches` | PK `(guild_id, clan_tag, game_id)` | Canonical game start and validated session JSON; time index `(guild_id, game_start)` |
+| `history_player_matches` | PK `(guild_id, public_id, game_id)` | Associated Discord ID, canonical game start and session JSON; time index and public-ID index |
+| `history_observed_elo` | PK `(guild_id, public_id, ladder, hour_bucket)` | Nullable associated Discord ID, observed UTC timestamp and rating; time/public-ID indexes |
+| `history_jobs` | PK `(guild_id, kind, subject)` | Optional Discord ID and link-time `identity_version`; start/end, page/cursor, next attempt, attempts/error, monotonic work order; subject and work-order indexes |
+| `history_coverage` | PK `(guild_id, kind, subject, start, end)` | Completed source window and collection timestamp; kind/subject index; independently proves collection completeness |
+| `history_weekly_deliveries` | PK `(guild_id, period_start, period_end)` | Destination channel, deterministic nonce, status, attempts/backoff, message ID and error |
+| `history_meta` | PK `key` | String metadata: migration marker, deletion checkpoint/error, Elo scan page/backoff/error, per-guild errors and weekly fairness timestamps |
+| `history_deleted_players` | PK `public_id` | Deletion timestamp; tombstones prevent recollection/observation of deleted identities |
+
+Schema defaults for an unsaved guild: clan/player history enabled, collection and weekly delivery disabled, 15-minute polling, 90-day retention, Monday 12:00 UTC. `getSettings()` synthesizes revision 0 without inserting a row. Saving validates toggles, polling 5–1440 minutes, retention 14–365 days, weekday 0–6, hour 0–23 and an IANA timezone. Weekly delivery requires collection plus a channel.
+
+### Migration and backup behavior
+
+Every database construction invokes the backup helper for an existing nonempty on-disk database, even if no schema change is ultimately necessary. It skips new/empty and `:memory:` databases. `VACUUM INTO` creates a consistent snapshot including committed WAL contents, checks `PRAGMA integrity_check`, then renames the partial file. Snapshot names include a hash of the database's resolved path, timestamp and UUID. Default retention keeps five snapshots for that database only. An unsuccessful snapshot aborts initialization/migration rather than proceeding unprotected; this is startup protection, not scheduled off-host backup.
+
+Initialization detects the former single-key clan table, copies it to the compound-key layout, preserves column meaning explicitly and adds missing join-role fields. It adds queue priority/creation and debug toggle columns to older layouts, initializes missing creation times, and normalizes legacy SQLite date strings for links/sync timestamps. Former global `admin_manual` links lack guild provenance: they are copied to `legacy_manual_links`, audited as revoked, removed from global ownership and queued for reconciliation. Operators must create a new appropriate link; migration does not guess a guild.
+
+A history metadata marker converts the old Monday 09:00 `America/Bahia` schedule to noon UTC once, increments affected revisions and resets `weekly_since` for enabled schedules. Later custom settings are preserved. See [operations](operations.md) for backup handling and restore procedures.
+
+## History worker, coverage and delivery
+
+The collector runs immediately and every minute, prevents overlapping ticks, defaults to eight API requests per tick (option clamped 1–50), and is independent of the role lane. It prunes retention before selecting work. Only explicitly saved collection-enabled guilds present in the client cache receive collection snapshots. Membership is refreshed, bots and absent users are excluded, and stale player associations are purged.
+
+New jobs begin seven days back at a UTC day boundary and advance through at most one-day windows. Clan jobs use pages of 50; player jobs use opaque cursors and public Team sessions whose recorded clan tag belongs to the configured set. Both reject out-of-window responses. The API's inclusive upper boundary is filtered locally into half-open `[start, end)` storage windows, preventing boundary double counting. Repeated cursors, empty nonterminal clan pages and a 200-page cap leave coverage incomplete and retry rather than falsely marking success.
+
+One page is the work unit. `last_work` is a monotonically increasing order value; least recently worked jobs rotate before another page is selected. A successful terminal page records coverage; a failed page keeps its exact checkpoint and backs off to a one-hour cap. When caught up (within one minute), jobs revisit the previous UTC day after the poll interval, allowing later corrections. This initial seven-day backfill does not automatically reconstruct the entire retention period.
+
+Player storage requires a current link ID and original link timestamp, unchanged settings revision, unchanged configured clan set, a live job checkpoint and a nondeleted player. Membership is force-checked after a player response. These are rechecked after awaits so stale API work cannot resurrect history after unlink, mapping changes, settings changes or shutdown.
+
+Deletion synchronization runs at most daily when player history settings/observations require it. The deletion feed retains seven days. A missing or older-than-seven-day checkpoint causes all stored player match/Elo history to clear before refreshing the feed. A failed feed blocks player collection and weekly delivery while clan work can continue. Deleted public IDs are tombstoned and removed across guilds. The code does not expire these tombstones automatically.
+
+One shared leaderboard page per eligible tick supplies Elo observations for all enabled guilds' linked humans; the scan page/backoff lives in metadata and is bounded to 100 pages. It reserves capacity for match work. Per guild/player/ladder/hour, the latest observed timestamp wins. These are snapshots of leaderboard observations, not recovered historical ratings or a per-game Elo reconstruction. Public profile observations can also exist without a membership association; they expire by retention.
+
+Weekly scheduling uses the selected timezone's civil calendar and DST-aware conversion, independently of the host timezone. The latest due schedule covers the preceding complete local Monday-to-Monday week. `weekly_since` avoids publishing a scheduled period from before weekly delivery was enabled. The worker attempts at most two guilds per tick and rotates guild delivery work separately from collection pages.
+
+Delivery persists `pending → sending → sent`, with retryable failures returning to pending and a terminal failed state after the bounded attempt budget. Each guild/period has a deterministic nonce. Before retrying a prior attempt, it searches the most recent 100 channel messages for its own report footer marker and records a match as sent; sending also uses Discord nonce enforcement. This reduces duplicate sends but is not an unlimited, transactional exactly-once guarantee across Discord and SQLite. A changed pending destination is failed rather than sent to an obsolete channel. Permission, membership, identity, settings and configured-tag checks happen before sending. Failed deliveries are not automatically retried forever.
+
+### Cleanup boundaries
+
+| Trigger | Effect |
+| --- | --- |
+| Global relink/unlink | Purges history associated with that Discord identity across guilds; conflicting local claims are also purged |
+| Local relink/unlink | Purges that member's associated history in the guild |
+| Member leaves | Purges associated player matches/jobs/coverage/Elo for that guild; link remains |
+| Add/remove configured clan | Rebuilds guild player matches/jobs/coverage because the eligible historical tag set changed; preserves Elo unless another purge applies |
+| Remove clan | Removes that clan's matches/jobs/coverage as well |
+| Disable player history | Clears that guild's player matches/jobs/coverage and observed Elo |
+| Deletion feed entry | Tombstones the public ID and purges player matches/jobs/coverage/Elo across guilds |
+| Retention pass | Removes old clan/player matches, Elo observations and expired coverage; removes old sent deliveries; clamps old job windows to the retention horizon |
+
+Retention is an application deletion policy, not a guarantee that backups no longer contain old rows. Audit, link, settings, quarantine, tombstone and failed-delivery tables are not generally swept by match retention. Guild removal has no dedicated all-data purge handler in `index.ts`; do not infer one from the member-removal handler.
+
+## Reporting, arithmetic and graphs
+
+Lifetime profile counters are decoded in `playerStats.ts` with `bigint` arithmetic to preserve large exact totals. Missing/null values remain unavailable; they do not become zero. Selected game types/modes remain separate, recent windows are not added to lifetime totals, and disjoint buckets must not double-count shared counters. Buildings are lifetime counters even when another statistics page is showing a period/map sample.
+
+`playerAnalytics.ts` performs bounded cursor scans for period/map statistics (default ten pages and ten seconds, configurable within bounded limits), deduplicates game IDs and excludes future games. Completed wins/losses define the win-rate denominator; incomplete results do not become losses. It records whether collection exhausted, crossed the requested boundary, hit page/time limits, looped a cursor or suffered a later API error. A later error can retain an explicitly partial sample; completeness describes the available API history for that selection, not the account's lifetime.
+
+`/stats` ordinary all-time lazy history keeps five games per displayed page, at most 100 retained matches per mode, and at most 20 fetched batches. Period/map history instead paginates the bounded analytics sample and does not apply that separate 100-match browsing cap. Per-session caches and graph buffers are invalidated on identity, history revision or deletion changes. Elo graph reuse keys include the actual selected ladder's observation data, so changed/removed points require a replacement image.
+
+Recent clan reports fetch on-demand API windows independently of persisted collector coverage, with a default 24-request/60-second budget and a 14-day maximum requested range; ordinary public-read caching still applies. Weekly reports instead read stored history and current links/members. They use historical recorded tags and completed public Team sessions, deduplicate games, show completeness explicitly and withhold player rankings until deletion checks are fresh. Top rates require at least three recorded games; only the first eight clan breakdowns display, while totals include all configured clans. These reports are observational summaries, not tournament eligibility or live presence verification.
+
+`alignedBarChart()` renders monospaced text bars while distinguishing zero, missing and partial values. `eloLineGraph()` renders a 900×380 RGB PNG directly using buffers, zlib and CRC chunks; it filters invalid points, sorts by observation time, labels UTC axes and returns `null` when no valid points exist. It needs no image service, canvas installation or browser. Coverage and doctor reporting in `reporting.ts` are distinct: coverage summarizes current human membership/link checks; doctor performs read-only refreshed Discord and fresh clan API diagnostics.
