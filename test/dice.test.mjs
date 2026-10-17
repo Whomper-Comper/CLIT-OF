@@ -47,20 +47,27 @@ test("dice defaults to one D6, defers publicly, animates five frames, then revea
     sleep: async (milliseconds) => { events.push(["sleep", milliseconds]); },
   });
   await command.execute(interaction);
-  assert.deepEqual(events, [
-    ["roll", 1, 7], ["defer"],
-    ["edit", "🎲 Rolling."], ["sleep", 600],
-    ["edit", "🎲 Rolling.."], ["sleep", 600],
-    ["edit", "🎲 Rolling..."], ["sleep", 600],
-    ["edit", "🎲 Rolling."], ["sleep", 600],
-    ["edit", "🎲 Rolling.."], ["sleep", 600],
-    ["edit", "🎲 **Rolled 1d6!**\n\nResult: **4**"],
-  ]);
+  assert.deepEqual(events.filter(([kind]) => kind === "roll"), [["roll", 1, 7]]);
+  assert.deepEqual(events.filter(([kind]) => kind === "defer"), [["defer"]], "the default acknowledgment is public");
+  assert.equal(events.some(([kind]) => kind === "reply"), false);
+  const acknowledgment = events.findIndex(([kind]) => kind === "defer");
+  const animation = events.slice(acknowledgment + 1, -1);
+  assert.equal(animation.length, 10);
+  for (let index = 0; index < animation.length; index += 2) {
+    assert.equal(animation[index][0], "edit");
+    assert.match(animation[index][1], /Rolling/);
+    assert.deepEqual(animation[index + 1], ["sleep", 600]);
+  }
+  const [kind, result] = events.at(-1);
+  assert.equal(kind, "edit");
+  assert.match(result, /1d6/);
+  assert.match(result, /Result: \*\*4\*\*/);
+  assert.doesNotMatch(result, /CRITICAL/);
 });
 
 test("dice permits both configured size boundaries and requests inclusive result boundaries", async () => {
   for (const sides of [1, 2, 3, 1000]) {
-    for (const result of [1, sides]) {
+    for (const result of new Set([1, sides])) {
       const { interaction, events } = fixture(sides);
       const command = createDiceCommand({
         roll: (min, max) => { assert.equal(min, 1); assert.equal(max, sides + 1); return result; },

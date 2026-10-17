@@ -126,16 +126,24 @@ export class HistoryCollector {
     try {
       const page = await this.api.getRankedLeaderboardPage(pageNumber);
       if (this.stopping) return;
+      const ratingsById = new Map<string,typeof page.ratings>();
+      for (const rating of page.ratings) {
+        const ratings = ratingsById.get(rating.publicId);
+        if (ratings) ratings.push(rating);
+        else ratingsById.set(rating.publicId,[rating]);
+      }
       for (const snapshot of snapshots.values()) {
         const settings = this.db.history.getSettings(snapshot.guild.id);
         if (!settings.player_history_enabled || !settings.collection_enabled || settings.revision !== snapshot.settings.revision) continue;
         for (const link of snapshot.links) {
+          const ratings = ratingsById.get(link.openfront_id);
+          if (!ratings) continue;
           // Member removal updates this cache before the removal handler purges history.
           const member = snapshot.guild.members.cache.get(link.discord_id);
           if (!member || member.user.bot) continue;
           const current = this.db.getEffectiveLink(snapshot.guild.id,link.discord_id);
           if (!current || current.openfront_id !== link.openfront_id || current.linked_at !== link.linked_at) continue;
-          for (const rating of page.ratings) if (rating.publicId === link.openfront_id) {
+          for (const rating of ratings) {
             this.db.history.recordElo(snapshot.guild.id,link.openfront_id,link.discord_id,rating.ladder,rating.rating,Date.parse(page.observedAt));
           }
         }

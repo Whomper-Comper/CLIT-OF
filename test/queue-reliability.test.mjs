@@ -149,8 +149,11 @@ test("cleanup revokes obsolete ranks before attempting a failing grant", async (
   db.linkGuildUser(f.guild.id, "staff", f.member.id, "revoke-player", "Player");
   t.mock.method(openfrontApi, "getPlayerProfile", async () => ({ clans: [{ tag: "TEST", role: "member" }] }));
   t.mock.method(console, "warn", () => {});
-  f.member.roles.add = async () => { throw new Error("Missing Permissions"); };
+  const writes = [];
+  f.member.roles.remove = async (role) => { writes.push(["remove", role]); f.member.roles.cache.delete(role); };
+  f.member.roles.add = async (role) => { writes.push(["add", role]); throw new Error("Missing Permissions"); };
   await serviceFor([f]).processRoleCleanupQueue();
+  assert.deepEqual(writes, [["remove", "officer"], ["add", "member"]]);
   assert.equal(f.member.roles.cache.has("officer"), false);
   assert.equal(db.getJob(f.guild.id, f.member.id).attempts, 1);
   assert.deepEqual(JSON.parse(db.getJob(f.guild.id, f.member.id).role_ids), ["member"]);

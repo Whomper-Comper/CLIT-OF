@@ -27,7 +27,7 @@ test("weekly schedule migrates the old default to noon UTC once and preserves cu
     const migrated = opened.history.getSettings("default"), custom = opened.history.getSettings("custom");
     assert.equal(migrated.weekly_hour, 12); assert.equal(migrated.timezone, "UTC");
     assert.equal(migrated.revision, 2);
-    assert.notEqual(opened.history.getWeeklyEnabledAt("default"), "2026-01-01T00:00:00.000Z");
+    assert.ok(Date.parse(opened.history.getWeeklyEnabledAt("default")) > Date.parse("2026-01-01T00:00:00.000Z"), "migration must restart delivery eligibility with a usable timestamp");
     assert.equal(custom.weekly_hour, 17); assert.equal(custom.timezone, "Europe/London"); assert.equal(custom.revision, 2);
     opened.history.saveSettings("default", { ...migrated, weekly_hour: 9, timezone: "America/Bahia" }, migrated.revision);
     opened.close(); opened = new BotDatabase(filename);

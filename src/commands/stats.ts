@@ -27,6 +27,9 @@ interface StatsTabs {
   history: Map<AnalyticsMode, HistoryPages>; analytics: Map<AnalyticsMode, Analytics>;
   elo?: { points: RatingGraphPoint[]; current?: number; message?: string; ladder: Ladder };
   eloAttemptedAt?: number; eloRefreshMessage?: string;
+  eloLookup?: { ladders: Set<Ladder>; complete: boolean };
+  eloGraphs: Map<Ladder, { key: string; image: Buffer | null }>;
+  historyRevision: number; historyInvalid?: string;
 }
 const tabs = new Map<string, StatsTabs>();
 const tabLifetime = 10 * 60_000, tabPrefix = "stats-pages:", historyPageSize = 5, historyMatchLimit = 100, historyBatchLimit = 20;
@@ -88,7 +91,8 @@ export const statsCommand = {
     const now = Date.now();
     const session: StatsTabs = { id: randomUUID(), userId: interaction.user.id, guildId: interaction.guildId, messageId: null,
       playerId: id, discordId: link?.discord_id ?? null, identityVersion: link?.linked_at ?? null, expiresAt: now + tabLifetime, now, busy: false, base, stats: profile?.stats, mode, scope, period, map, ladder,
-      view: interaction.options.getString("view") === "numbers" ? "numbers" : "graphs", page: "stats", history: new Map(), analytics: new Map() };
+      view: interaction.options.getString("view") === "numbers" ? "numbers" : "graphs", page: "stats", history: new Map(), analytics: new Map(),
+      eloGraphs: new Map(), historyRevision: db.history.getSettings(interaction.guildId ?? "dm").revision };
     for (const [key, value] of tabs) if (value.expiresAt <= now) tabs.delete(key);
     if (tabs.size >= 500) tabs.delete(tabs.keys().next().value!);
     tabs.set(session.id, session);
@@ -138,10 +142,15 @@ export async function handleStatsInteraction(interaction: Interaction): Promise<
     else if (action.startsWith("elo-")) { session.ladder = action.slice(4) as Ladder; session.page = "elo"; if (session.elo?.ladder !== session.ladder) session.elo = undefined; }
     let error: string | undefined;
     try {
+      if (needsHistory) assertHistoryCurrent(session);
       if (usesHistoryStats(session) && (session.page === "stats" || session.page === "history")) await ensureAnalytics(session);
       if (session.page === "history") await loadHistory(session, action === "next");
-      if (session.page === "elo" && (!session.elo || (action !== "graphs" && action !== "numbers"))) await loadElo(session);
+      if (session.page === "elo") await loadElo(session, action !== "graphs" && action !== "numbers");
     } catch (cause) { error = commandErrorMessage(cause, session.guildId); }
+    if (needsHistory) {
+      try { assertHistoryCurrent(session); }
+      catch (cause) { error = commandErrorMessage(cause, session.guildId); }
+    }
     if (!sessionLive(session) || (needsHistory && !historyEnabled(session.guildId))) {
       await interaction.followUp({ content: sessionLive(session) ? "Player game history was disabled while this page loaded."
         : "These statistics expired while loading. Run `/stats` again.", flags: MessageFlags.Ephemeral });
@@ -159,15 +168,35 @@ export async function handleStatsInteraction(interaction: Interaction): Promise<
 
 function sessionLive(session: StatsTabs) { return tabs.get(session.id) === session && session.expiresAt > Date.now(); }
 
+function assertHistoryCurrent(session: StatsTabs) {
+  let reason = session.historyInvalid;
+  if (!reason && db.history.isDeleted(session.playerId)) reason = "This player's stored history was deleted. Run `/stats` again to refresh the profile.";
+  if (!reason && db.history.getSettings(session.guildId ?? "dm").revision !== session.historyRevision)
+    reason = "History settings changed. Run `/stats` again to refresh these pages.";
+  if (!reason && session.discordId) {
+    const link = session.guildId ? db.getEffectiveLink(session.guildId, session.discordId) : db.getUserByDiscordId(session.discordId);
+    if (!link || link.openfront_id !== session.playerId || link.linked_at !== session.identityVersion)
+      reason = "The identity link changed. Run `/stats` again to refresh these pages.";
+  }
+  if (!reason) return;
+  session.historyInvalid = reason;
+  session.history.clear(); session.analytics.clear(); session.eloGraphs.clear();
+  session.elo = undefined; session.eloLookup = undefined; session.eloRefreshMessage = undefined;
+  throw new CommandError(reason);
+}
+
 async function ensureAnalytics(session: StatsTabs) {
+  assertHistoryCurrent(session);
   if (session.analytics.has(session.mode)) return;
   const result = await loadPlayerAnalytics(openfrontApi, session.playerId, { mode: session.mode, scope: session.scope,
     period: session.period, map: session.map, now: session.now });
   if (!result) throw new CommandError("OpenFront could not find this player's game history. Run `/stats` again to check the profile.");
+  assertHistoryCurrent(session);
   if (sessionLive(session) && historyEnabled(session.guildId)) session.analytics.set(session.mode, result);
 }
 
 async function loadHistory(session: StatsTabs, advance: boolean) {
+  assertHistoryCurrent(session);
   const existing = session.history.get(session.mode);
   if (usesHistoryStats(session)) {
     if (existing) return;
@@ -181,6 +210,7 @@ async function loadHistory(session: StatsTabs, advance: boolean) {
   const response = await openfrontApi.getPlayerGames(session.playerId, { ...(session.mode === "all" ? {} : { filter: session.mode }),
     ...(session.scope === "all" ? {} : { type: session.scope }), ...(cursor ? { cursor } : {}) });
   if (!sessionLive(session) || !historyEnabled(session.guildId)) return;
+  assertHistoryCurrent(session);
   if (response === null) throw new CommandError("OpenFront could not find this player's game history. The account may have been deleted or the public ID may no longer be available. Run `/stats` again to check the profile.");
   const state = existing ?? historyState([]);
   if (cursor) state.cursors.add(cursor);
@@ -205,26 +235,21 @@ function historyState(games: OpenFrontPlayerGame[]): HistoryPages {
   return { pages: pages.length ? pages : [[]], index: 0, nextCursor: null, cursors: new Set(), gameIds: new Set(games.map(game => game.gameId)), batches: 0, count: games.length };
 }
 
-async function loadElo(session: StatsTabs) {
+async function loadElo(session: StatsTabs, refreshCurrent: boolean) {
+  assertHistoryCurrent(session);
   let message = session.eloRefreshMessage;
-  if (!session.eloAttemptedAt || Date.now()-session.eloAttemptedAt >= 30_000) {
+  if (refreshCurrent && (session.eloAttemptedAt === undefined || Date.now()-session.eloAttemptedAt >= 30_000)) {
     session.eloAttemptedAt = Date.now();
     message = undefined;
+    session.eloLookup = undefined;
     try {
       const response = await openfrontApi.getPlayerRatings(session.playerId);
       if (!sessionLive(session) || !historyEnabled(session.guildId)) return;
-      if (session.discordId) {
-        const link = session.guildId ? db.getEffectiveLink(session.guildId,session.discordId) : db.getUserByDiscordId(session.discordId);
-        if (!link || link.openfront_id !== session.playerId || link.linked_at !== session.identityVersion) {
-          session.elo = { points: [], ladder: session.ladder, message: "The identity link changed while ratings loaded. Run `/stats` again to refresh it." };
-          return;
-        }
-      }
+      assertHistoryCurrent(session);
       for (const rating of response.ratings) db.history.recordElo(session.guildId ?? "dm", session.playerId, session.discordId, rating.ladder, rating.rating, Date.parse(rating.observedAt ?? response.observedAt));
-      if (!response.ratings.some(rating => rating.ladder === session.ladder)) message = response.complete
-        ? "This player was not found on the selected public ranked ladder. Existing observations are shown below."
-        : "This player was not found within the bounded leaderboard lookup. Existing observations are shown below; this does not prove they are unranked.";
+      session.eloLookup = { ladders: new Set(response.ratings.map(rating => rating.ladder)), complete: response.complete };
     } catch (error) {
+      if (session.historyInvalid) throw error;
       message = error instanceof OpenFrontApiError && error.status === 403
         ? "OpenFront blocked access to its public ranked leaderboard (HTTP 403). The bot cannot refresh Elo until that endpoint allows access. Existing observations remain available."
         : `Current rating could not be refreshed: ${commandErrorMessage(error, session.guildId)} Existing observations remain available.`;
@@ -232,9 +257,13 @@ async function loadElo(session: StatsTabs) {
     session.eloRefreshMessage = message;
   }
   if (!sessionLive(session) || !historyEnabled(session.guildId)) return;
+  assertHistoryCurrent(session);
+  if (session.eloLookup && !session.eloLookup.ladders.has(session.ladder)) message = session.eloLookup.complete
+    ? "This player was not found on the selected public ranked ladder. Existing observations are shown below."
+    : "This player was not found within the bounded leaderboard lookup. Existing observations are shown below; this does not prove they are unranked.";
   const end = Date.now(), days = session.period === "24h" ? 1 : session.period === "all" ? null : Number(session.period.slice(0, -1));
   const points = db.history.getEloHistory(session.guildId ?? "dm", session.playerId, session.ladder,
-    new Date(days === null ? 0 : session.now - days * 86_400_000).toISOString(), new Date(end + 1).toISOString());
+    new Date(days === null ? 0 : session.now - days * 86_400_000).toISOString(), new Date(end + 1).toISOString(), end);
   session.elo = { points, ladder: session.ladder, current: points.at(-1)?.rating,
     message: (message ? message + "\n" : "") + "Only real ratings observed by this bot are stored, within the configured history retention. Older Elo cannot be reconstructed from wins or losses." };
 }
@@ -261,7 +290,13 @@ function render(session: StatsTabs, error?: string) {
   else if (session.page === "history") embed = renderHistory(session, error);
   else if (session.page === "elo") {
     embed = renderElo(session, error);
-    const graph = session.view === "graphs" ? eloLineGraph(session.elo?.points ?? []) : null;
+    const points = session.elo?.points ?? [];
+    let graph: Buffer | null = null;
+    if (session.view === "graphs" && points.length) {
+      const key = JSON.stringify(points), cached = session.eloGraphs.get(session.ladder);
+      if (cached?.key === key) graph = cached.image;
+      else { graph = eloLineGraph(points); session.eloGraphs.set(session.ladder, { key, image: graph }); }
+    }
     if (graph) { files.push(new AttachmentBuilder(graph, { name: "elo-history.png" })); embed.setImage("attachment://elo-history.png"); }
   } else embed = renderStats(session, error);
   return { embeds: [embed], components: controls(session), files, attachments: [], allowedMentions: { parse: [] as never[] } };
@@ -299,7 +334,7 @@ function renderStats(session: StatsTabs, error?: string) {
     embed.addFields({ name: "Match selection", value: selectionLabel(session) });
     embed.addFields({ name: "Building stats", value: "Open **Buildings** for lifetime cities, ports, defense posts, factories and missile silos. Use **Graphs** or **Numbers** to change the display. Period and map filters apply to match results." });
     if (!result) { embed.addFields({ name: "Recorded statistics", value: "The selected history could not be loaded. Use Statistics to try again." }); return embed; }
-    embed.addFields({ name: `${modeLabel(session.mode)} · recorded results`, value: `**Games:** ${result.total.toLocaleString("en-US")} · **Wins:** ${result.wins.toLocaleString("en-US")} · **Losses:** ${result.losses.toLocaleString("en-US")} · **Incomplete:** ${result.incomplete.toLocaleString("en-US")}\n**Completed win rate:** ${result.winRate}` });
+    embed.addFields({ name: `${modeLabel(session.mode)} · recorded results`, value: `**Games:** ${result.total.toLocaleString("en-US")} · **Completed win rate:** ${result.winRate}\n**Wins:** ${result.wins.toLocaleString("en-US")} · **Losses:** ${result.losses.toLocaleString("en-US")} · **Incomplete:** ${result.incomplete.toLocaleString("en-US")}` });
     const rows = [{ name: "Wins", value: BigInt(result.wins) }, { name: "Losses", value: BigInt(result.losses) }, { name: "Incomplete", value: BigInt(result.incomplete) }];
     if (session.view === "graphs") embed.addFields({ name: "Results", value: alignedBarChart(rows) });
     if (result.averageDurationSeconds !== null) embed.addFields({ name: "Average match duration", value: duration(result.averageDurationSeconds), inline: true });
@@ -341,7 +376,7 @@ function renderBuildings(session: StatsTabs) {
 
 function addLifetime(embed: EmbedBuilder, stats: PlayerStatsSummary, title: string, view: "graphs" | "numbers") {
   const number = (value: bigint) => value.toLocaleString("en-US");
-  embed.addFields({ name: title, value: `**Games:** ${number(stats.games)} · **Wins:** ${number(stats.wins)} · **Losses:** ${number(stats.losses)} · **Win rate:** ${winRate(stats.wins, stats.games)}` });
+  embed.addFields({ name: title, value: `**Games:** ${number(stats.games)} · **Win rate:** ${winRate(stats.wins, stats.games)}\n**Wins:** ${number(stats.wins)} · **Losses:** ${number(stats.losses)}` });
   if (view === "graphs") embed.addFields({ name: "Wins / losses", value: alignedBarChart([{ name: "Wins", value: stats.wins }, { name: "Losses", value: stats.losses }]) });
   embed.addFields({ name: "Buildings built · lifetime totals", value: view === "graphs" ? alignedBarChart(stats.buildings) : numericRows(stats.buildings) });
   const details = view === "graphs" ? stats.details : stats.details.filter(item => !/^(Cities|Ports|Defense posts|Factories|Missile silos) built$/.test(item.name));
@@ -360,6 +395,7 @@ function renderElo(session: StatsTabs, error?: string) {
   if (!points.length && !error) embed.addFields({ name: "Recorded rating history", value: "No dated rating samples are available for this period." });
   else if (points.length && session.view === "numbers") embed.addFields({ name: "Recent observed rating samples", value: shortText(points.slice(-10).map(point => `${new Date(point.at).toISOString().replace("T", " ").slice(0, 16)} UTC: **${point.rating.toLocaleString("en-US")}**`).join("\n"), 1024) });
   if (points.length === 1) embed.addFields({ name: "Tracking has started", value: "One observation is a point. At least two dated observations are needed to show a change over time." });
+  if (points.length > 1) embed.addFields({ name: "Reading the chart", value: "Lines connect observed ratings. Ratings between samples are unknown; the line does not reconstruct them." });
   embed.setFooter({ text: `${periodLabel(session.period)} · observed ranked ratings · gaps have no reconstructed values` });
   return embed;
 }

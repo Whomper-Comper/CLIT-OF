@@ -12,6 +12,83 @@ const session = (overrides = {}) => ({ gameId: "game", gameStart: start, gameEnd
   gameRankedType: "unranked", clientId: "recorded-client", username: "Player", clanTag: "MARS", hasWon: true, ...overrides });
 const clanSession = (overrides = {}) => ({ gameId: "game", clanTag: "MARS", clanPlayerCount: 2, hasWon: false, numTeams: 2,
   playerTeams: "2", totalPlayerCount: 20, gameStart: start, score: -0.2, ...overrides });
+const rankedRow = (public_id, elo = 1000, rank = 1) => ({ public_id, elo, rank });
+
+test("ratings use exact public IDs and independent ladders while preserving cached observation times", async (t) => {
+  let now = Date.parse(start), calls = 0;
+  t.mock.method(globalThis, "fetch", async (url) => {
+    calls++;
+    const parsed = new URL(url);
+    assert.equal(parsed.pathname, "/leaderboard/ranked");
+    assert.equal(parsed.searchParams.get("page"), "1");
+    return response({
+      "1v1": [rankedRow("player-extra", 9999), rankedRow("player", 1350, 2)],
+      "2v2": [rankedRow("player", 1460, 20)],
+      ffa: [rankedRow("Player", 9998), rankedRow("player", 1120, 3)],
+      "clan-wars": [rankedRow("player", 9997)],
+    });
+  });
+  const api = new OpenFrontApi("https://example.invalid", { now: () => now, cacheTtlMs: 60_000 });
+  await api.getRankedLeaderboardPage();
+  now += 5000;
+  assert.deepEqual(await api.getPlayerRatings(" player "), {
+    ratings: [
+      { publicId: "player", ladder: "1v1", rating: 1350, rank: 2, observedAt: start },
+      { publicId: "player", ladder: "2v2", rating: 1460, rank: 20, observedAt: start },
+      { publicId: "player", ladder: "ffa", rating: 1120, rank: 3, observedAt: start },
+    ], complete: true, pages: 1, observedAt: start,
+  });
+  assert.equal(calls, 1);
+  const fresh = await api.getPlayerRatings("player", { fresh: true });
+  assert.equal(fresh.observedAt, "2026-10-15T00:00:05.000Z");
+  assert.ok(fresh.ratings.every(row => row.observedAt === "2026-10-15T00:00:05.000Z"));
+  assert.equal(calls, 2);
+});
+
+test("bounded leaderboard absence stays incomplete until exhaustion and later failures preserve partial ratings", async (t) => {
+  const full = Array.from({ length: 50 }, (_, index) => rankedRow(`other-${index}`, 1000, index + 1));
+  for (const scenario of [
+    { name: "bounded absence", maxPages: 1, replies: [{ value: { "1v1": full } }], complete: false, pages: 1, ratings: [] },
+    { name: "empty final page", maxPages: 2, replies: [{ value: { "1v1": full } }, { value: { "1v1": [] } }], complete: true, pages: 2, ratings: [] },
+    { name: "official page bound", maxPages: 2, replies: [{ value: { "1v1": full } }, { value: { message: "Page must be between 1 and 1" }, status: 400 }], complete: true, pages: 2, ratings: [] },
+    { name: "later unavailable page", maxPages: 2, replies: [{ value: { "1v1": [rankedRow("player", 1350), ...full.slice(1)] } }, { value: {}, status: 503 }], complete: false, pages: 1,
+      ratings: [{ publicId: "player", ladder: "1v1", rating: 1350, rank: 1, observedAt: start }] },
+  ]) {
+    const requested = [];
+    t.mock.method(globalThis, "fetch", async (url) => {
+      requested.push(Number(new URL(url).searchParams.get("page")));
+      const reply = scenario.replies[requested.length - 1];
+      assert.ok(reply, `${scenario.name}: exceeded request bound`);
+      return response(reply.value, reply.status ?? 200);
+    });
+    const api = new OpenFrontApi("https://example.invalid", { now: () => Date.parse(start) });
+    assert.deepEqual(await api.getPlayerRatings("player", { maxPages: scenario.maxPages }), {
+      ratings: scenario.ratings, complete: scenario.complete, pages: scenario.pages, observedAt: start,
+    }, scenario.name);
+    assert.deepEqual(requested, scenario.maxPages === 1 ? [1] : [1, 2], scenario.name);
+  }
+});
+
+test("malformed or forbidden leaderboards fail rather than becoming empty rankings and remain retryable", async (t) => {
+  const api = new OpenFrontApi("https://example.invalid");
+  for (const { value, status = 200, reason = "invalid_response" } of [
+    { value: {} }, { value: { "1v1": "not-an-array" } },
+    { value: { "1v1": [rankedRow("invalid id")] } },
+    { value: { "1v1": [rankedRow("player", "1350")] } },
+    { value: { "1v1": [rankedRow("player", 1350, 0)] } },
+    { value: { "1v1": Array.from({ length: 101 }, () => rankedRow("player")) } },
+    { value: {}, status: 403, reason: "http" },
+    { value: { message: "Invalid request" }, status: 400, reason: "http" },
+  ]) {
+    t.mock.method(globalThis, "fetch", async () => response(value, status));
+    await assert.rejects(api.getPlayerRatings("player"), error => error instanceof OpenFrontApiError && error.reason === reason && (reason !== "http" || error.status === status));
+  }
+  // Older public responses may omit newer ladders; absence is not malformed.
+  t.mock.method(globalThis, "fetch", async () => response({ "1v1": [] }));
+  const recovered = await api.getPlayerRatings("player");
+  assert.deepEqual(recovered.ratings, []);
+  assert.equal(recovered.complete, true);
+});
 
 test("player history preserves opaque cursors, separates filters, and coalesces cached pages", async (t) => {
   const urls = [];

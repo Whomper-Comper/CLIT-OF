@@ -54,7 +54,9 @@ test("debug export includes only effective links for current members and no cred
   assert.equal(data.linked_user_count, 2);
   assert.deepEqual(data.users.map((row) => row.discord_id), ["export-global", "export-local"]);
   assert.deepEqual(data.users.map((row) => row.scope), ["bot_wide", "server"]);
-  assert.deepEqual(Object.keys(data.users[0]).sort(), ["discord_id", "discord_username", "discord_display_name", "openfront_id", "openfront_username", "linked_at", "scope", "verification_method"].sort());
+  for (const user of data.users) {
+    assert.deepEqual(Object.keys(user).sort(), ["discord_id", "discord_username", "discord_display_name", "openfront_id", "openfront_username", "linked_at", "scope", "verification_method"].sort());
+  }
   assert.equal(typeof data.users[0].discord_id, "string");
 });
 test("revoking debug access during membership fetch blocks data release", async () => {
@@ -84,11 +86,26 @@ test("membership failures do not generate partial exports", async () => {
   assert.equal(f.i.output, undefined);
 });
 test("debug status stays scoped to this server and uses a private reply", async () => {
-  const f = fixture("status");
+  const f = fixture("status"), other = fixture();
+  const config = (guildId, tag) => ({ guild_id: guildId, clan_tag: tag, member_role_id: "member",
+    officer_role_id: null, leader_role_id: null, join_role_id: null, log_channel_id: null,
+    sync_interval_mins: 10, last_sync_at: null });
+  db.setGuildClanConfig(config(f.i.guildId, "HERE"));
+  db.linkGuildUser(f.i.guildId, "staff", "status-here", "here-player", null);
+  f.members.set("status-here", member("status-here"));
+  f.members.set("status-unlinked", member("status-unlinked"));
+  db.setGuildClanConfig(config(other.i.guildId, "OTHER"));
+  db.setGuildClanConfig(config(other.i.guildId, "ELSE"));
+  db.linkGuildUser(other.i.guildId, "staff", "status-elsewhere", "elsewhere-player", null);
+  db.linkGuildUser(other.i.guildId, "staff", "status-another", "another-player", null);
+  // An unrelated server link must not become effective just because its user is present here.
+  f.members.set("status-elsewhere", member("status-elsewhere"));
   await debugCommand.execute(f.i);
   assert.equal(f.i.deferredPayload.flags, MessageFlags.Ephemeral);
-  assert.match(f.i.output.content, /Linked members: \*\*0\*\*/);
-  assert.match(f.i.output.content, /Role queue: \*\*0\*\*/);
+  assert.match(f.i.output.content, /Current server members: \*\*3\*\*/);
+  assert.match(f.i.output.content, /Linked members: \*\*1\*\*/);
+  assert.match(f.i.output.content, /Configured clans: \*\*1\*\*/);
+  assert.match(f.i.output.content, /Role queue: \*\*1\*\*/);
   assert.equal(f.i.output.files, undefined);
 });
 

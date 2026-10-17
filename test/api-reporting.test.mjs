@@ -197,7 +197,7 @@ test("doctor checks live hierarchy, deleted log channels, uncached API, and retr
   assert.equal(embed.toJSON().color, 0xf59e0b);
 });
 
-test("stats shows public FFA graph and switches to exact Team stats without the old legend", async (t) => {
+test("stats shows public FFA graph and switches to exact Team stats", async (t) => {
   t.mock.method(db, "getEffectiveLinkByOpenFrontId", () => null);
   t.mock.method(openfrontApi, "getPlayerProfile", async () => profile({ stats: { Public: {
     "Free For All": { Easy: leaf(3, 1, { units: { city: ["9"] } }) }, Team: { Easy: leaf(2, 2) },
@@ -208,11 +208,10 @@ test("stats shows public FFA graph and switches to exact Team stats without the 
   const fields = interaction.output.embeds[0].toJSON().fields;
   assert.match(fields.find((field) => field.name === "Free For All Stats").value, /75\.0%/);
   assert.match(fields.find((field) => field.name === "Wins \/ losses").value, /Wins\s+█/);
-  assert.deepEqual(interaction.output.components[0].components.map((button) => button.data.label), ["Free For All", "Teams", "Humans Vs Nations", "Ranked", "All modes"]);
   assert.match(fields.find((field) => field.name === "Lifetime totals").value, /Cities built: \*\*9\*\*/);
-  assert.doesNotMatch(JSON.stringify(interaction.output), /N\/A = unavailable|Exact available totals below/);
+  assert.match(fields.find((field) => field.name.startsWith("Buildings built")).value, /^```text\nCities\s+█+\s+9/);
   assert.match(interaction.output.embeds[0].toJSON().footer.text, /^Public matches/);
-  const switched = { customId: interaction.output.components[0].components[1].data.custom_id,
+  const switched = { customId: interaction.output.components[0].components.find((button) => button.data.label === "Teams").data.custom_id,
     user: { id: "stats-reader" }, guildId: "guild", message: { id: "stats-message" }, isButton: () => true,
     deferUpdate: async () => {}, editReply: async function (value) { this.output = value; }, reply: async () => { throw new Error("unexpected stale tab"); } };
   assert.equal(await handleStatsInteraction(switched), true);

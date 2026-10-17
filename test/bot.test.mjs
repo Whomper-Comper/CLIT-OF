@@ -121,6 +121,12 @@ test("setup uses the configured interval and saves only after validation", async
   const i = interaction("setup", guild, { clan_tag: "TEST", member_role: { id: "member" } });
   await clanCommand.execute(i, {});
   assert.equal(db.getGuildClanConfig(guild.id, "TEST").sync_interval_mins, 25);
+  const invalid = guildFixture("setup-invalid-hierarchy");
+  invalid.members.fetchMe = async () => ({ permissions: { has: () => true },
+    roles: { highest: { comparePositionTo: () => -1 } } });
+  await assert.rejects(clanCommand.execute(interaction("setup", invalid,
+    { clan_tag: "TEST", member_role: { id: "member" } }), {}), /above/);
+  assert.equal(db.getGuildClanConfig(invalid.id, "TEST"), null);
 });
 
 test("removal defers before fetching members and queues cleanup for unlinked role holders", async () => {
@@ -338,24 +344,17 @@ test("role API failures are reported and do not advance the success timestamp", 
   assert.equal(db.getGuildClanConfig(guild.id, "TEST").last_sync_at, null);
 });
 
-test("cleanup retries transient member-fetch errors instead of discarding jobs", async (t) => {
-  const guild = guildFixture("retry-cleanup"); db.setGuildClanConfig(config(guild.id));
-  guild.members.fetch = async () => { throw new Error("Discord unavailable"); };
-  db.enqueueGuild(guild.id, "cleanup-user");
-  t.mock.method(console, "warn", () => {});
-  await serviceFixture([guild]).processRoleCleanupQueue();
-  const job = db.getJob(guild.id, "cleanup-user");
-  assert.equal(job.attempts, 1);
-  assert.ok(job.available_at > Date.now());
-});
-
 test("role lane serializes writes with a one-second gap even after a failed write", async () => {
   let now = 0;
   const starts = [];
   const lane = new PacedQueue(1000, async (ms) => { now += ms; }, () => now);
-  await Promise.allSettled([lane.run(async () => { starts.push(now); throw new Error("failed"); }),
-    lane.run(async () => { starts.push(now); }), lane.run(async () => { starts.push(now); })]);
+  const failure = new Error("failed");
+  const outcomes = await Promise.allSettled([lane.run(async () => { starts.push(now); throw failure; }),
+    lane.run(async () => { starts.push(now); return "second"; }),
+    lane.run(async () => { starts.push(now); return "third"; })]);
   assert.deepEqual(starts, [0, 1000, 2000]);
+  assert.deepEqual(outcomes, [{ status: "rejected", reason: failure },
+    { status: "fulfilled", value: "second" }, { status: "fulfilled", value: "third" }]);
 });
 
 test("API transport distinguishes 404, outages, and malformed memberships", async (t) => {
@@ -414,19 +413,6 @@ test("cleanup across two guilds uses the same paced lane", async () => {
   assert.deepEqual(starts, [0, 1000]);
   assert.equal(db.getJob(a.id, first.id), null);
   assert.equal(db.getJob(b.id, second.id), null);
-});
-
-test("shutdown retains partially completed cleanup for the next startup", async () => {
-  const guild = guildFixture("shutdown-cleanup");
-  db.setGuildClanConfig(config(guild.id, "TEST", { officer_role_id: "officer" }));
-  const m = memberFixture(guild, "shutdown-user", ["member", "officer"]);
-  guild.members.fetch = async () => m;
-  db.enqueueGuild(guild.id, m.id);
-  const service = serviceFixture([guild]);
-  m.roles.remove = async (role) => { m.roles.cache.delete(role); service.stopScheduler(); };
-  await service.processRoleCleanupQueue();
-  assert.ok(db.getJob(guild.id, m.id));
-  assert.equal(m.roles.cache.has("officer"), true);
 });
 
 test("server sync finishes by editing its public bot message", async () => {

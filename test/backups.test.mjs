@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -31,9 +31,14 @@ test("backup retention is per database and keeps unrelated files", t => {
   const otherBackup = backupDatabaseBeforeMigration(another, { retain: 2 });
   const backups = path.join(directory, "backups");
   writeFileSync(path.join(backups, "unrelated.db"), "do not remove");
-  let latest;
-  for (let i = 0; i < 4; i++) latest = backupDatabaseBeforeMigration(filename, { retain: 2 });
-  assert.ok(existsSync(latest));
+  const snapshots = [];
+  for (let i = 0; i < 4; i++) {
+    const snapshot = backupDatabaseBeforeMigration(filename, { retain: 2 });
+    snapshots.push(snapshot);
+    // Make creation order observable even on filesystems with coarse timestamp precision.
+    utimesSync(snapshot, new Date(`2020-01-0${i + 1}T00:00:00Z`), new Date(`2020-01-0${i + 1}T00:00:00Z`));
+  }
+  assert.deepEqual(snapshots.map(existsSync), [false, false, true, true]);
   assert.ok(existsSync(otherBackup));
   assert.equal(readdirSync(backups).length, 4);
   assert.equal(readFileSync(path.join(backups, "unrelated.db"), "utf8"), "do not remove");

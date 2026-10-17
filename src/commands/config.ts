@@ -47,18 +47,23 @@ export const configCommand = {
 };
 
 function render(s: Session, allowed: boolean, notice = "") {
-  const settings = db.getGuildSettings(s.guild);
-  const configs = db.getGuildConfigs(s.guild);
-  const jobs = db.getQueueSummary(s.guild);
   const embed = new EmbedBuilder().setTitle(allowed ? "OpenFront server configuration" : "Set or recover clan access")
     .setColor(0x3b82f6).setFooter({ text: "Private menu · expires after 10 minutes · every change rechecks access" });
-  const access = settings ? `<@&${settings.manager_role_id}>` : "Not selected";
-  const debug = db.getDebugSettings(s.guild);
-  const debugRole = debug?.debug_role_id;
-  const summary = `**Config role:** ${access}\n**Debug role:** ${debugRole ? `<@&${debugRole}>` : "Disabled"}\n**Verbose errors:** ${debug?.verbose_errors ? "On" : "Off"}\n**Ordinary private replies:** ${debug?.ephemeral_replies === 0 ? "Off (public)" : "On"}\n**Configured clans:** ${configs.length}\n**Role jobs:** ${jobs.pending} queued (${jobs.retrying} retrying)`;
   const components: ActionRowBuilder<any>[] = [];
   if (!allowed || s.screen === "home") {
-    embed.setDescription(`${summary}\n\n${allowed ? "Choose a clan to edit, or create one. Changing the config role below saves immediately. Manage Server permission also grants configuration access; other /clan actions require the selected role." : "Open this menu with Manage Server permission or the config role."}${notice ? `\n\n${notice}` : ""}`);
+    const settings = db.getGuildSettings(s.guild);
+    const configs = db.getGuildConfigs(s.guild);
+    const jobs = db.getQueueSummary(s.guild);
+    const access = settings ? `<@&${settings.manager_role_id}>` : "Not selected";
+    const debug = db.getDebugSettings(s.guild);
+    const debugRole = debug?.debug_role_id;
+    embed.setDescription(`${allowed ? "Choose a clan to edit, or create one." : "Open this menu with Manage Server permission or the config role."}${notice ? `\n\n${notice}` : ""}`)
+      .addFields(
+        { name: "Access roles", value: `**Config role:** ${access}\n**Debug role:** ${debugRole ? `<@&${debugRole}>` : "Disabled"}`, inline: true },
+        { name: "Replies and errors", value: `**Verbose errors:** ${debug?.verbose_errors ? "On" : "Off"}\n**Ordinary private replies:** ${debug?.ephemeral_replies === 0 ? "Off (public)" : "On"}`, inline: true },
+        { name: "Server activity", value: `**Configured clans:** ${configs.length}\n**Role jobs:** ${jobs.pending} queued (${jobs.retrying} retrying)`, inline: true },
+        { name: "Access and saving", value: "Changing the config role below saves immediately. The debug role selector also saves immediately; clear it to disable /debug. Manage Server permission also grants configuration access; other /clan actions require the selected role." },
+      );
     components.push(new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(new RoleSelectMenuBuilder()
       .setCustomId(`${prefix}${s.id}:access`).setPlaceholder("Set config role (saves immediately)").setMinValues(1).setMaxValues(1)));
     if (allowed) {
@@ -78,9 +83,17 @@ function render(s: Session, allowed: boolean, notice = "") {
     components.push(row(button(s, "history", "Match history / weekly recap"), button(s, "close", "Close")));
   } else if (s.screen === "history") {
     const h = s.historyDraft, on = (value: number) => value ? "On" : "Off";
-    embed.setTitle("Match history and weekly recap settings").setDescription(`**Clan match commands:** ${on(h.clan_history_enabled)}\n**Player history / Elo:** ${on(h.player_history_enabled)}\n**Automatic collection:** ${on(h.collection_enabled)} · every ${h.poll_minutes} minutes\n**Retention:** ${h.retention_days} days\n**Weekly recap:** ${on(h.weekly_enabled)}\n**Destination:** ${h.channel_id ? `<#${h.channel_id}>` : "Not selected"}\n**Schedule:** ${["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][h.weekly_day]} at ${String(h.weekly_hour).padStart(2, "0")}:00 (${h.timezone})\n\nChanges are drafts until you choose Save. Recaps describe the previous completed week. Match collection initially backfills seven days; partial coverage is labelled. Elo observations start when collected, use the saved retention, and require an accessible public leaderboard.${notice ? `\n\n${notice}` : ""}`);
-    components.push(row(button(s, "history_clans", `Clan history: ${on(h.clan_history_enabled)}`), button(s, "history_players", `Player history / Elo: ${on(h.player_history_enabled)}`),
-      button(s, "history_collect", `Collect: ${on(h.collection_enabled)}`), button(s, "history_weekly", `Weekly: ${on(h.weekly_enabled)}`), button(s, "history_timing", "Timing / retention")));
+    embed.setTitle("Match history and weekly recap settings")
+      .setDescription(`Changes are drafts until you choose Save.${notice ? `\n\n${notice}` : ""}`)
+      .addFields(
+        { name: "Available history", value: `**Clan match commands:** ${on(h.clan_history_enabled)}\n**Player history / Elo:** ${on(h.player_history_enabled)}`, inline: true },
+        { name: "Collection and retention", value: `**Automatic collection:** ${on(h.collection_enabled)} · every ${h.poll_minutes} minutes\n**Retention:** ${h.retention_days} days`, inline: true },
+        { name: "Weekly recap", value: `**Weekly recap:** ${on(h.weekly_enabled)}\n**Destination:** ${h.channel_id ? `<#${h.channel_id}>` : "Not selected"}\n**Schedule:** ${["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][h.weekly_day]} at ${String(h.weekly_hour).padStart(2, "0")}:00 (${h.timezone})` },
+        { name: "What the reports cover", value: "Recaps describe the previous completed week. Match collection initially backfills seven days; partial coverage is labelled. Elo observations start when collected, use the saved retention, and require an accessible public leaderboard." },
+      );
+    const toggle = (action: string, title: string, enabled: number) => button(s, action, `${title}: ${on(enabled)}`, enabled ? ButtonStyle.Success : ButtonStyle.Secondary);
+    components.push(row(toggle("history_clans", "Clan history", h.clan_history_enabled), toggle("history_players", "Player history / Elo", h.player_history_enabled),
+      toggle("history_collect", "Collect", h.collection_enabled), toggle("history_weekly", "Weekly", h.weekly_enabled), button(s, "history_timing", "Timing / retention")));
     const channel = new ChannelSelectMenuBuilder().setCustomId(`${prefix}${s.id}:history_channel`).setPlaceholder("Weekly recap channel (clear to disable recap)")
       .setChannelTypes(ChannelType.GuildText).setMinValues(0).setMaxValues(1);
     if (h.channel_id) channel.setDefaultChannels(h.channel_id);
@@ -89,7 +102,12 @@ function render(s: Session, allowed: boolean, notice = "") {
   } else if (s.draft) {
     const d = s.draft;
     const role = (id: string | null) => id ? `<@&${id}>` : "Not selected";
-    embed.setDescription(`**Draft clan:** ${label(d.clan_tag) || "New clan"}\n**Member:** ${role(d.member_role_id)}\n**Officer:** ${role(d.officer_role_id)}\n**Leader:** ${role(d.leader_role_id)}\n**Approval:** ${role(d.join_role_id)}\n**Logs:** ${d.log_channel_id ? `<#${d.log_channel_id}>` : "Off"}\n**Sync interval:** ${d.sync_interval_mins} minutes\n\n${notice || "Changes are saved only when you choose Save."}`);
+    embed.setDescription(`**Draft clan:** ${label(d.clan_tag) || "New clan"}\n\n${notice || "Changes are saved only when you choose Save."}`)
+      .addFields(
+        { name: "Clan roles", value: `**Member:** ${role(d.member_role_id)}\n**Officer:** ${role(d.officer_role_id)}\n**Leader:** ${role(d.leader_role_id)}`, inline: true },
+        { name: "Approval and logging", value: `**Approval:** ${role(d.join_role_id)}\n**Logs:** ${d.log_channel_id ? `<#${d.log_channel_id}>` : "Off"}`, inline: true },
+        { name: "Role synchronization", value: `**Sync interval:** ${d.sync_interval_mins} minutes`, inline: true },
+      );
     if (s.screen === "roles") {
       for (const [field, title, required] of [["member_role_id", "Member role", true], ["officer_role_id", "Officer role", false], ["leader_role_id", "Leader role", false], ["join_role_id", "Approval role", false]] as const) {
         const select = new RoleSelectMenuBuilder().setCustomId(`${prefix}${s.id}:${field}`).setPlaceholder(title)
@@ -105,7 +123,7 @@ function render(s: Session, allowed: boolean, notice = "") {
       components.push(new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(select));
       components.push(row(button(s, "draft", "Back"), button(s, "save", "Save", ButtonStyle.Success), button(s, "home", "Cancel")));
     } else if (s.screen === "confirm") {
-      embed.setDescription(`Remove **[${label(d.clan_tag)}]** from this server? Obsolete roles will be queued for cleanup.`);
+      embed.setColor(0xef4444).setFields([]).setDescription(`Remove **[${label(d.clan_tag)}]** from this server? Obsolete roles will be queued for cleanup.`);
       components.push(row(button(s, "remove", "Confirm removal", ButtonStyle.Danger), button(s, "draft", "Keep clan")));
     } else {
       components.push(row(button(s, "basics", "Tag / sync interval", ButtonStyle.Primary), button(s, "roles", "Clan roles"),

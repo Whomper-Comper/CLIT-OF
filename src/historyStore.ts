@@ -44,6 +44,7 @@ export class HistoryStore {
         game_id TEXT NOT NULL, game_start TEXT NOT NULL, payload TEXT NOT NULL,
         PRIMARY KEY(guild_id,public_id,game_id));
       CREATE INDEX IF NOT EXISTS history_player_time ON history_player_matches(guild_id,game_start);
+      CREATE INDEX IF NOT EXISTS history_player_public_id ON history_player_matches(public_id);
       CREATE TABLE IF NOT EXISTS history_observed_elo (
         guild_id TEXT NOT NULL, public_id TEXT NOT NULL, discord_id TEXT, ladder TEXT NOT NULL,
         hour_bucket INTEGER NOT NULL, observed_at TEXT NOT NULL, rating REAL NOT NULL,
@@ -55,9 +56,12 @@ export class HistoryStore {
         window_start TEXT NOT NULL, window_end TEXT NOT NULL, page INTEGER NOT NULL DEFAULT 1, cursor TEXT,
         next_attempt INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
         last_work INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(guild_id,kind,subject));
+      CREATE INDEX IF NOT EXISTS history_job_subject ON history_jobs(kind,subject);
+      CREATE INDEX IF NOT EXISTS history_job_last_work ON history_jobs(last_work);
       CREATE TABLE IF NOT EXISTS history_coverage (
         guild_id TEXT NOT NULL, kind TEXT NOT NULL, subject TEXT NOT NULL, start TEXT NOT NULL, end TEXT NOT NULL,
         collected_at TEXT NOT NULL, PRIMARY KEY(guild_id,kind,subject,start,end));
+      CREATE INDEX IF NOT EXISTS history_coverage_subject ON history_coverage(kind,subject);
       CREATE TABLE IF NOT EXISTS history_weekly_deliveries (
         guild_id TEXT NOT NULL, period_start TEXT NOT NULL, period_end TEXT NOT NULL, channel_id TEXT NOT NULL,
         nonce TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
@@ -121,8 +125,10 @@ export class HistoryStore {
     const normalized = tag.trim().toUpperCase();
     const statement = this.db.prepare(`INSERT INTO history_clan_matches(guild_id,clan_tag,game_id,game_start,payload) VALUES(?,?,?,?,?)
       ON CONFLICT(guild_id,clan_tag,game_id) DO UPDATE SET game_start=excluded.game_start,payload=excluded.payload`);
-    for (const match of matches) if (match.clanTag.trim().toUpperCase() === normalized)
-      statement.run(guild,normalized,match.gameId,iso(Date.parse(match.gameStart)),JSON.stringify(match));
+    this.savePage(() => {
+      for (const match of matches) if (match.clanTag.trim().toUpperCase() === normalized)
+        statement.run(guild,normalized,match.gameId,iso(Date.parse(match.gameStart)),JSON.stringify(match));
+    });
   }
   getPlayerMatches(guild: string, start: string, end: string): StoredPlayerSession[] {
     return this.db.prepare(`SELECT public_id,discord_id,payload FROM history_player_matches WHERE guild_id=? AND game_start>=? AND game_start<? ORDER BY game_start DESC,game_id`)
@@ -133,7 +139,20 @@ export class HistoryStore {
     if (this.isDeleted(publicId)) return;
     const statement = this.db.prepare(`INSERT INTO history_player_matches(guild_id,public_id,discord_id,game_id,game_start,payload) VALUES(?,?,?,?,?,?)
       ON CONFLICT(guild_id,public_id,game_id) DO UPDATE SET discord_id=excluded.discord_id,game_start=excluded.game_start,payload=excluded.payload`);
-    for (const match of matches) statement.run(guild,publicId,discordId,match.gameId,iso(Date.parse(match.gameStart)),JSON.stringify(match));
+    this.savePage(() => {
+      for (const match of matches) statement.run(guild,publicId,discordId,match.gameId,iso(Date.parse(match.gameStart)),JSON.stringify(match));
+    });
+  }
+  private savePage(save: () => void) {
+    // Savepoints batch disk commits and preserve any transaction owned by the caller.
+    this.db.exec("SAVEPOINT history_page");
+    try {
+      save();
+      this.db.exec("RELEASE history_page");
+    } catch (error) {
+      this.db.exec("ROLLBACK TO history_page; RELEASE history_page");
+      throw error;
+    }
   }
   recordElo(guild: string, publicId: string, discordId: string | null, ladder: string, rating: number, now = Date.now()): void {
     const settings = this.getSettings(guild);
@@ -150,13 +169,13 @@ export class HistoryStore {
     const days = Number.isFinite(settings.retention_days) ? Math.max(1,Math.min(365,settings.retention_days)) : 90;
     this.db.prepare("DELETE FROM history_observed_elo WHERE guild_id=? AND observed_at<?").run(guild,iso(now-days*DAY));
   }
-  getEloHistory(guild: string, publicId: string, ladder: string, startISO: string, endISO: string): {at:string;rating:number}[] {
+  getEloHistory(guild: string, publicId: string, ladder: string, startISO: string, endISO: string, now = Date.now()): {at:string;rating:number}[] {
     const start = Date.parse(startISO), end = Date.parse(endISO);
     const settings = this.getSettings(guild);
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || this.isDeleted(publicId)
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !Number.isFinite(now) || !Number.isFinite(new Date(now).getTime()) || this.isDeleted(publicId)
       || (guild !== "dm" && !settings.player_history_enabled) || !["1v1","2v2","ffa"].includes(ladder)) return [];
     const days = Number.isFinite(settings.retention_days) ? Math.max(1,Math.min(365,settings.retention_days)) : 90;
-    const retainedStart = Math.max(start,Date.now()-days*DAY);
+    const retainedStart = Math.max(start,now-days*DAY);
     if (end <= retainedStart) return [];
     return this.db.prepare(`SELECT observed_at,rating FROM history_observed_elo
       WHERE guild_id=? AND public_id=? AND ladder=? AND observed_at>=? AND observed_at<? ORDER BY observed_at`)
@@ -245,7 +264,7 @@ export class HistoryStore {
     this.db.prepare("DELETE FROM history_jobs WHERE guild_id=? AND kind='clan' AND subject=?").run(guild,normalized);
     this.db.prepare("DELETE FROM history_coverage WHERE guild_id=? AND kind='clan' AND subject=?").run(guild,normalized);
     // Player windows were filtered against the old configured tag set. Rebuild their coverage with the new set.
-    this.clearGuildPlayerHistory(guild);
+    this.clearGuildPlayerMatches(guild);
   }
   prunePlayerMembers(guild: string, valid: {discord_id:string;openfront_id:string}[]) {
     const validMap = new Map(valid.map(link=>[link.discord_id,link.openfront_id]));
@@ -289,11 +308,14 @@ export class HistoryStore {
     this.db.prepare("DELETE FROM history_coverage WHERE kind='player' AND subject=?").run(publicId);
   }
   isDeleted(publicId: string): boolean { return !!this.db.prepare("SELECT 1 FROM history_deleted_players WHERE public_id=?").get(publicId); }
-  clearGuildPlayerHistory(guild: string) {
+  clearGuildPlayerMatches(guild: string) {
     this.db.prepare("DELETE FROM history_player_matches WHERE guild_id=?").run(guild);
-    this.db.prepare("DELETE FROM history_observed_elo WHERE guild_id=?").run(guild);
     this.db.prepare("DELETE FROM history_jobs WHERE guild_id=? AND kind='player'").run(guild);
     this.db.prepare("DELETE FROM history_coverage WHERE guild_id=? AND kind='player'").run(guild);
+  }
+  clearGuildPlayerHistory(guild: string) {
+    this.clearGuildPlayerMatches(guild);
+    this.db.prepare("DELETE FROM history_observed_elo WHERE guild_id=?").run(guild);
   }
   clearAllPlayerHistory() {
     this.db.exec("DELETE FROM history_player_matches; DELETE FROM history_observed_elo; DELETE FROM history_jobs WHERE kind='player'; DELETE FROM history_coverage WHERE kind='player';");

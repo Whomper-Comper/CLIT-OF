@@ -288,7 +288,7 @@ export class BotDatabase {
   setGuildClanConfig(c: GuildClanConfig, guildMemberIds: string[] = []) {
     this.transaction(() => {
       const old = this.getGuildClanConfig(c.guild_id, c.clan_tag);
-      if (!old) this.history.clearGuildPlayerHistory(c.guild_id);
+      if (!old) this.history.clearGuildPlayerMatches(c.guild_id);
       for (const id of guildMemberIds) this.enqueueGuild(c.guild_id, id, [...managedRoles(old ? [old] : []), ...managedRoles([c])]);
       this.db.prepare(`INSERT INTO guild_clan_configs(guild_id,clan_tag,member_role_id,officer_role_id,leader_role_id,
         join_role_id,log_channel_id,sync_interval_mins,last_sync_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(guild_id,clan_tag) DO UPDATE SET

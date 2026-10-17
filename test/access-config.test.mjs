@@ -64,6 +64,19 @@ const error = (i) => i.followups.at(-1)?.content ?? i.output?.content ?? "";
 const savedConfig = (f, overrides = {}) => ({ guild_id: f.guild.id, clan_tag: "TEST", member_role_id: ids.member, officer_role_id: null,
   leader_role_id: null, join_role_id: null, log_channel_id: null, sync_interval_mins: 10, last_sync_at: null, ...overrides });
 function assertComponentLimits(payload) {
+  let embedCharacters = 0;
+  for (const builder of payload.embeds ?? []) {
+    const embed = builder.toJSON();
+    assert.ok((embed.title?.length ?? 0) <= 256);
+    assert.ok((embed.description?.length ?? 0) <= 4096);
+    assert.ok((embed.fields?.length ?? 0) <= 25);
+    embedCharacters += (embed.title?.length ?? 0) + (embed.description?.length ?? 0) + (embed.footer?.text.length ?? 0);
+    for (const field of embed.fields ?? []) {
+      assert.ok(field.name.length <= 256 && field.value.length <= 1024);
+      embedCharacters += field.name.length + field.value.length;
+    }
+  }
+  assert.ok(embedCharacters <= 6000, "configuration must fit Discord's combined embed limit");
   const json = rows(payload);
   assert.ok(json.length <= 5, "Discord permits at most five action rows");
   for (const row of json) {
@@ -126,6 +139,19 @@ test("history config integrates toggles, channel, validation and stale draft rej
   await action(f, first.id, "history_details", "modal", [], { fields: { getTextInputValue: (key) => ({poll:"1",retention:"90",day:"1",hour:"9",timezone:"America/Bahia"})[key] } });
   assert.match(error(await action(f, first.id, "history_save")), /Poll interval/);
   assert.equal(db.history.getSettings(f.guild.id).poll_minutes, 15);
+});
+
+test("history and draft screens do not load unrelated clan lists or role queues", async (t) => {
+  const f = fixture();
+  const { id } = await open(f);
+  t.mock.method(db, "getGuildConfigs", () => { throw new Error("unnecessary clan list read"); });
+  t.mock.method(db, "getQueueSummary", () => { throw new Error("unnecessary queue read"); });
+  const history = await action(f, id, "history");
+  assert.ok(history.output?.embeds?.length, "history settings must render without loading clan summaries");
+  assertComponentLimits(history.output);
+  const draft = await action(f, id, "new");
+  assert.ok(draft.output?.embeds?.length, "clan draft must render without loading queue summaries");
+  assertComponentLimits(draft.output);
 });
 
 test("history config rechecks permission after channel validation before saving", async (t) => {

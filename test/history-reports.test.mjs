@@ -13,12 +13,15 @@ test("recent clan loader uses at most one-day windows, deduplicates and labels r
   const queries = [];
   t.mock.method(openfrontApi,"getClanSessions", async (_tag,q) => {
     queries.push(q);
-    return { results:[row("same")],total:1,page:q.page,limit:q.limit };
+    return { results:[row("same"),row("wrong-clan",{clanTag:"VENUS"}),row("at-end",{gameStart:"2026-10-16T12:00:00Z"}),row("before-start",{gameStart:"2026-10-14T11:59:59Z"})],total:4,page:q.page,limit:q.limit };
   });
   const sample = await loadRecentClanMatches("MARS",2,now,2);
-  assert.equal(sample.rows.length,1);
+  assert.deepEqual(sample.rows.map(row=>row.gameId),["same"]);
   assert.equal(sample.complete,true);
-  assert.ok(queries.every(q => Date.parse(q.end)-Date.parse(q.start)<=86400000));
+  assert.deepEqual(queries,[
+    {start:"2026-10-15T12:00:00.000Z",end:"2026-10-16T12:00:00.000Z",page:1,limit:50},
+    {start:"2026-10-14T12:00:00.000Z",end:"2026-10-15T12:00:00.000Z",page:1,limit:50},
+  ]);
   const partial = await loadRecentClanMatches("MARS",2,now,1);
   assert.equal(partial.complete,false);
   assert.match(renderClanRecent("MARS",partial).toJSON().description,/Partial sample/);
@@ -29,10 +32,15 @@ test("clan analysis and display keep numeric and graph views consistent", () => 
   assert.deepEqual(stats,{games:2,wins:1,losses:1,averageTurnout:5.5,peakTurnout:8,score:-0.2});
   const sample = {rows,complete:true,start:"2026-10-15T12:00:00Z",end:"2026-10-16T12:00:00Z",requests:1};
   const numbers = renderClanRecent("MARS",sample,1,"numbers").toJSON();
-  assert.ok(numbers.fields.some(field=>field.name==="Recorded results"));
+  assert.match(numbers.fields.find(field=>field.name==="Recorded results").value,/\*\*2\*\* games · \*\*1\*\* wins · \*\*1\*\* losses · \*\*50\.0%\*\*/);
+  assert.match(numbers.fields.find(field=>field.name==="Recorded results").value,/Average tagged turnout: \*\*5\.5\*\* · Peak: \*\*8\*\*/);
   assert.ok(!numbers.fields.some(field=>field.name==="Tagged clan turnout"));
   const graph = renderClanRecent("MARS",sample,1,"graphs").toJSON();
-  assert.ok(graph.fields.some(field=>field.name==="Tagged clan turnout"));
+  const turnout=graph.fields.find(field=>field.name==="Tagged clan turnout").value;
+  assert.match(turnout,/1 player\s+░+\s+0/);
+  assert.match(turnout,/2–3 players\s+█+\s+1/);
+  assert.match(turnout,/4–7 players\s+░+\s+0/);
+  assert.match(turnout,/8\+ players\s+█+\s+1/);
   assert.ok(!graph.fields.some(field=>field.name==="Recorded results"));
   assert.throws(()=>renderClanRecent("MARS",sample,2),/Choose a page/);
 });

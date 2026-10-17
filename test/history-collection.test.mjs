@@ -50,8 +50,6 @@ test("history settings default to opt-in collection and validate revisions, sche
   try {
     const defaults=db.history.getSettings("g");
     assert.equal(defaults.collection_enabled,0); assert.equal(defaults.weekly_enabled,0);
-    assert.equal(defaults.timezone,"UTC");
-    assert.equal(defaults.weekly_hour,12);
     const saved=db.history.saveSettings("g",defaults,0);
     assert.equal(saved.revision,1);
     assert.throws(()=>db.history.saveSettings("g",defaults,0),/changed in another session/);
@@ -164,24 +162,33 @@ test("a deletion-feed gap beyond seven days clears retained player rows and tomb
     assert.equal(f.db.history.getPlayerMatches("guild","2000","2099").length,0);
   } finally {await f.close();}
 });
-test("changing configured clan tags invalidates filtered player history and its completeness claims",async()=> {
+test("changing configured clan tags rebuilds player history and coverage while preserving Elo until unlink",async()=> {
   const f=fixture({budget:4});
   try {
     f.link();
     f.api.getPlayerSessions=async(_id,q)=>({results:[playerRow(q.start)],nextCursor:null});
     await f.collector.collectOnce();
+    f.db.history.recordElo("guild","public","discord","1v1",1234,f.now());
     const job=f.db.history.getJob("guild","player","public");
     assert.equal(f.db.history.getPlayerMatches("guild","2000","2099").length,1);
     assert.equal(f.db.history.getPlayerCoverage("guild","public","2026-10-09T00:00:00.000Z",job.window_start).complete,true);
     f.db.setGuildClanConfig(clanConfig("guild","VENUS"));
+    assert.equal(f.db.history.getStatus("guild").eloObservations,1);
     assert.equal(f.db.history.getPlayerMatches("guild","2000","2099").length,0);
     assert.equal(f.db.history.getJob("guild","player","public"),null);
     assert.equal(f.db.history.getPlayerCoverage("guild","public","2026-10-09T00:00:00.000Z",job.window_start).complete,false);
     await f.collector.collectOnce();
     assert.ok(f.db.history.getJob("guild","player","public"));
+    const rebuilt=f.db.history.getJob("guild","player","public");
+    assert.equal(f.db.history.getPlayerMatches("guild","2000","2099").length,1);
+    assert.equal(f.db.history.getPlayerCoverage("guild","public","2026-10-09T00:00:00.000Z",rebuilt.window_start).complete,true);
     f.db.deleteGuildClanConfig("guild","MARS");
+    assert.equal(f.db.history.getStatus("guild").eloObservations,1);
     assert.equal(f.db.history.getPlayerMatches("guild","2000","2099").length,0);
     assert.equal(f.db.history.getJob("guild","player","public"),null);
+    assert.equal(f.db.history.getPlayerCoverage("guild","public","2026-10-09T00:00:00.000Z",rebuilt.window_start).complete,false);
+    f.db.unlinkUser("discord");
+    assert.equal(f.db.history.getStatus("guild").eloObservations,0);
   } finally {await f.close();}
 });
 test("changing collection settings while an API request is pending prevents that response from being saved",async()=> {

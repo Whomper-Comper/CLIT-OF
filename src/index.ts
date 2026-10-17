@@ -76,28 +76,37 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
   }
 });
 
-// Slash Command Router
+// Keep command and component failures inside the Discord event boundary.
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (await handleConfigInteraction(interaction)) return;
-  if (await handleStatsInteraction(interaction)) return;
-  if (!interaction.isChatInputCommand()) return;
-
-  const { commandName } = interaction;
-
   try {
-    const command = commandsByName.get(commandName);
+    if (await handleConfigInteraction(interaction)) return;
+    if (await handleStatsInteraction(interaction)) return;
+    if (!interaction.isChatInputCommand()) return;
+
+    const command = commandsByName.get(interaction.commandName);
     if (!command) throw new CommandError("This command is no longer available. Refresh Discord and try again.");
     await command.execute(interaction, clanSyncService);
   } catch (error) {
     const expected = error instanceof CommandError || error instanceof OpenFrontApiError;
-    if (!expected) console.error(`[Bot] Error executing command /${commandName}:`, error);
+    const source = interaction.isChatInputCommand() ? `command /${interaction.commandName}` : "component";
+    if (!expected) console.error(`[Bot] Error handling ${source}:`, error);
+    if (!interaction.isRepliable()) return;
 
-    const errorMessage = commandErrorMessage(error, interaction.guildId);
-    if (interaction.deferred || interaction.replied) {
-      await interaction.editReply({ content: errorMessage, embeds: [], components: [], allowedMentions: { parse: [] } }).catch(() => null);
-    } else {
-      await interaction.reply({ content: errorMessage, ...privateReply, allowedMentions: { parse: [] } }).catch(() => null);
-    }
+    // Formatting may also fail during a storage outage. Never expose raw errors.
+    let content = "An unexpected error occurred. Please try again later.";
+    try { content = commandErrorMessage(error, interaction.guildId); } catch { /* use the safe fallback */ }
+    try {
+      if (interaction.deferred || interaction.replied) {
+        if (interaction.isChatInputCommand()) {
+          await interaction.editReply({ content, embeds: [], components: [], allowedMentions: { parse: [] } });
+        } else {
+          // An acknowledged button belongs to an existing message; keep its information intact.
+          await interaction.followUp({ content, ...privateReply, allowedMentions: { parse: [] } });
+        }
+      } else {
+        await interaction.reply({ content, ...privateReply, allowedMentions: { parse: [] } });
+      }
+    } catch { /* expired interactions and unavailable Discord cannot be replied to */ }
   }
 });
 
