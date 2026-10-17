@@ -5,6 +5,11 @@ node_modules/
 dist/
 .deploy/
 
+# Local handoff, review report, and comparison benchmark
+/HANDOFF.md
+/docs/improvement-review.md
+/tools/benchmark-history.mjs
+
 # Local databases & persistent runtime data
 data/
 *.db
