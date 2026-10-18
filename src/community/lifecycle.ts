@@ -6,10 +6,12 @@ export function purgeIdentity(_sql: DatabaseSync, _discordId: string, _guildId?:
 export function purgeAccount(_sql: DatabaseSync, _publicId: string): void {}
 export function clearGameEvidence(_sql: DatabaseSync, _guildId?: string): void {}
 export function purgeMember(sql: DatabaseSync, guildId: string, discordId: string): void {
+  sql.prepare("DELETE FROM community_availability WHERE guild_id=? AND discord_id=?").run(guildId,discordId);
+  sql.prepare("DELETE FROM community_availability_changes WHERE guild_id=? AND discord_id=?").run(guildId,discordId);
   purgeIdentity(sql,discordId,guildId); communitySessions.purgeMember(guildId,discordId);
 }
 export function purgeGuild(sql: DatabaseSync, guildId: string): void {
-  for (const table of ["community_settings","community_deliveries","community_guild_work"]) sql.prepare(`DELETE FROM ${table} WHERE guild_id=?`).run(guildId);
+  for (const table of ["community_settings","community_deliveries","community_guild_work","community_availability","community_availability_changes"]) sql.prepare(`DELETE FROM ${table} WHERE guild_id=?`).run(guildId);
   communitySessions.purgeGuild(guildId);
 }
 export function prune(sql: DatabaseSync, now: number): void {

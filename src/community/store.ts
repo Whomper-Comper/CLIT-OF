@@ -3,15 +3,24 @@ import { DeliveryStore } from "./deliveries.js";
 import { CommunitySettingsStore } from "./settings.js";
 import { withCommunityTransaction } from "./transactions.js";
 import * as lifecycle from "./lifecycle.js";
+import { AvailabilityStore } from "./availability.js";
 
 export class CommunityStore {
   readonly deliveries: DeliveryStore;
   readonly settings: CommunitySettingsStore;
+  readonly availability: AvailabilityStore;
   constructor(private readonly sql: DatabaseSync) {
     this.deliveries = new DeliveryStore(sql); this.settings = new CommunitySettingsStore(sql);
+    this.availability = new AvailabilityStore(sql);
   }
   static initialize(sql: DatabaseSync): void {
-    sql.exec(`CREATE TABLE IF NOT EXISTS community_settings (
+    sql.exec(`CREATE TABLE IF NOT EXISTS community_availability (
+      guild_id TEXT NOT NULL,discord_id TEXT NOT NULL,timezone TEXT NOT NULL,windows TEXT,
+      revision INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(guild_id,discord_id));
+      CREATE TABLE IF NOT EXISTS community_availability_changes (
+      guild_id TEXT NOT NULL,discord_id TEXT NOT NULL,changed_at INTEGER NOT NULL,revision INTEGER NOT NULL,PRIMARY KEY(guild_id,discord_id));
+      CREATE INDEX IF NOT EXISTS community_availability_change_time ON community_availability_changes(guild_id,changed_at,discord_id);
+      CREATE TABLE IF NOT EXISTS community_settings (
       guild_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,milestones_enabled INTEGER NOT NULL DEFAULT 0,
       milestone_channel_id TEXT,game_thresholds TEXT NOT NULL,win_thresholds TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS community_deliveries (

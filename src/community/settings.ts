@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { CommandError } from "../commands/support.js";
+import { CommandError } from "../commandError.js";
 import { withCommunityTransaction } from "./transactions.js";
 
 export interface CommunitySettings {

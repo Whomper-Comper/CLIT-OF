@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
-import { CommandError } from "../commands/support.js";
+import { CommandError } from "../commandError.js";
 import { withCommunityTransaction } from "./transactions.js";
 import type { DeliveryInput, DeliveryJob } from "./types.js";
 export type { DeliveryInput, DeliveryJob } from "./types.js";

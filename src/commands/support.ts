@@ -3,7 +3,8 @@ import { CommandLimits, MemberLocks } from "../queues.js";
 import { resolveOpenFrontId, extractDiscordId } from "../utils.js";
 import { db } from "../db.js";
 
-export class CommandError extends Error {}
+import { CommandError } from "../commandError.js";
+export { CommandError } from "../commandError.js";
 export const privateReply = { flags: MessageFlags.Ephemeral } as const;
 /** Sensitive verification, configuration, and debug tools explicitly keep privateReply. */
 export function commandReplyOptions(i: { guildId: string | null }) {

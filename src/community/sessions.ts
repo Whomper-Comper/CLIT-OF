@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { CommandError } from "../commands/support.js";
+import { CommandError } from "../commandError.js";
 import type { EntityBinding } from "./types.js";
 export interface PrivateCommunitySession extends EntityBinding {
   id: string; kind: string; ownerId: string; expiresAt: number; data: unknown;

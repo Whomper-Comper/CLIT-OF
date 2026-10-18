@@ -11,6 +11,7 @@ This reference describes the commands registered by `src/commands/index.ts` and 
 - [/whois](#whois)
 - [/stats](#stats)
 - [/dice](#dice)
+- [/availability](#availability)
 - [/config](#config)
 - [/clan](#clan)
 - [/debug](#debug)
@@ -22,7 +23,7 @@ Type `/` in Discord, choose the bot's command, then fill in Discord's named inpu
 
 `/clan` has one required **action option**, not slash subcommands: use `/clan action:sync`, not `/clan sync`. Likewise use `/debug action:status`. Discord can show a friendly label for a choice while its underlying value is the value documented here.
 
-There are eight registered commands: `/link`, `/unlink`, `/whois`, `/stats`, `/clan`, `/config`, `/debug`, and `/dice`. `/config`, `/clan` and `/debug` are explicitly server-only. The other builders do not declare a server-only context; availability outside servers also depends on the application's installation and Discord command contexts. In a DM, identity lookups use verified bot-wide links, not server approvals.
+There are nine registered commands: `/link`, `/unlink`, `/whois`, `/stats`, `/clan`, `/config`, `/debug`, `/dice`, and `/availability`. `/config`, `/clan`, `/debug`, and `/availability` are explicitly server-only. The other builders do not declare a server-only context; availability outside servers also depends on the application's installation and Discord command contexts. In a DM, identity lookups use verified bot-wide links, not server approvals.
 
 ### Accepted identity inputs
 
@@ -122,6 +123,23 @@ The initial page is **Statistics**, even when a ladder is supplied; choose **Elo
 Unfiltered all-time Statistics uses lifetime account counters. A period or map uses bounded exact-account game history, labels partial coverage, excludes incomplete games from completed-game win rate, and can show map results and average duration. Map normalization ignores case, whitespace, hyphens and underscores. Buildings always shows **lifetime** counters for the selected scope/mode; period/map filters do not apply to those counters.
 
 Elo stores actual observed public ratings, not estimates from wins/losses. One sample is a point, and missing history cannot be reconstructed. A blocked leaderboard (including HTTP 403), incomplete lookup, absent ladder entry, or expired retention can explain missing data. Opening/refreshing Elo attempts a current lookup no more often than every 30 seconds within that session; switching Graphs/Numbers does not initiate that lookup. See [statistics and history](statistics-and-history.md) for data definitions and collection limits.
+
+## `/availability`
+
+```text
+/availability set day:Friday start:23:00 end:01:00 timezone:America/Bahia
+/availability view
+/availability view user:@Alice page:2
+/availability clear window:ID_FROM_VIEW
+/availability clear
+/availability suggest duration:120
+```
+
+Save up to 14 weekly windows of 30 minutes to 12 hours, including overnight windows. Times use local `HH:mm` and weekdays; a timezone is required on the first save and reused afterward. Changing timezone changes how all your local windows project. A matching weekday/start/end replaces the same window; supply its `window` ID to replace it with different times. Zero-length windows are invalid. `/availability clear` without a window removes all your recurring availability.
+
+Set, view, clear, and editing controls are private. View pages show seven windows, with owner-bound edit/delete controls that expire after ten minutes. Editing opens local day/time/timezone fields; the modal labels Monday as 0 through Sunday as 6. Reopen view after a change from another session. Only configured community managers, mapped clan officers, and mapped clan leaders can view another member's raw schedule. This access does not alter existing clan/config/debug permissions.
+
+Suggestions are public counts and Discord timestamps, never member IDs or raw schedules. They refresh server membership once, exclude departed members and bots, and evaluate the next 14 days at 30-minute starts. The default duration is 120 minutes; choose 30–240. A member must cover the full session; overlapping or adjacent windows count only once. Results rank by member count, then start time, and suppress overlapping sessions with the same attendees. If everyone cannot attend, the result explains the best partial overlap. Weekly local rules follow timezone changes; skipped and repeated clock hours are projected as real availability. Suggestions do not publish events or sign anyone up. Per-member suggestion cooldown: ten seconds.
 
 ## `/dice`
 

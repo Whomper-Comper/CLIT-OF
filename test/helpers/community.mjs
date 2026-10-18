@@ -22,7 +22,7 @@ export function communityFixture() {
   const guild = { id: 'g', channels: { fetch: async () => channel }, members: {
     fetch: async (options) => {
       calls.memberFetches.push(options);
-      if (!options) return members;
+      if (!options || (typeof options === 'object' && !('user' in options))) return members;
       const id = typeof options === 'string' ? options : options.user;
       if (!members.has(id)) throw Object.assign(new Error('Unknown Member'), { code: 10007 });
       return members.get(id);

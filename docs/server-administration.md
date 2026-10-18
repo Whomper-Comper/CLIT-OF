@@ -241,6 +241,14 @@ Changes to mappings can leave obsolete Discord roles temporarily present while r
 
 For removal, open the saved clan in `/config` → **Delete** → **Confirm removal**. This removes the configuration and queues obsolete-role cleanup. **Keep clan** cancels deletion. Alternatively, `/clan action:remove clan_tag:MARS` applies removal without a second confirmation. Removing a configuration does not unlink member identities or disband the OpenFront clan. Staff approval-role cleanup remains staff-owned.
 
+## Weekly availability
+
+Members manage their own schedules with `/availability set`, `/availability view`, and `/availability clear`. Personal schedules and edit menus stay private. Community officers (the configured manager role or an officer/leader role mapped to a configured clan) can use `/availability view user:@Member`; the bot fetches current roles for each privileged command or control. Existing configuration, clan and debug access rules remain unchanged.
+
+`/availability suggest` publishes counts and viewer-local Discord timestamps, with a fresh membership refresh and no private schedule details. The bot stores IANA timezones and local weekly windows so seasonal offset changes follow the member's timezone. Members who leave the server lose that server's availability; unlinking an OpenFront account preserves recurring availability. Removing the bot from a server clears its availability records. Private menus are bound to their owner, server, channel and original message and expire in ten minutes.
+
+Suggestions are planning aids and do not create events or enroll participants. If no session fits all saved schedules, reduce duration or ask members to broaden their windows. The Members intent must permit the current roster refresh.
+
 ## Permission and role troubleshooting
 
 | Symptom | Checks and recovery |
