@@ -291,3 +291,11 @@ The checklist derives progress from the current link, fresh clan profile, availa
 ## Source map
 
 The access rules above come from `src/access.ts`; configuration validation from `src/setupConfig.ts`; slash actions and menu behavior from `src/commands/clan.ts`, `clanHandlers.ts`, `config.ts` and `debug.ts`; effective-link protection and reconciliation enqueueing from `src/db.ts`; role calculation and scheduling from `src/roles.ts` and `src/clanSync.ts`; coverage/doctor limits from `src/reporting.ts`. Consult those sources when changing behavior and update both this guide and the [command reference](commands.md).
+
+## Wheel preset administration
+
+Wheel management uses the community manager/officer/leader role rules. `/wheel presets`, `/wheel add`, `/wheel edit` and `/wheel remove` always open private controls. Each privileged action refreshes membership, rereads mapped roles and rejects stale revisions. The ordinary-reply privacy setting does not make these forms public. Preset removal requires an explicit confirmation; edits and enable/disable choices require **Save preset**.
+
+A preset is a complete compatible hosting package. Free For All must leave teams as `none`; Team requires a numeric team count or Duos, Trios, Quads, or Humans Vs Nations. Bots allow 0–400; nations allow `default`, `disabled`, or 1–400. Humans Vs Nations requires nations enabled even with zero bots. Normal/Compact map sizes, the four explicit supported maps and supported unit names are validated before preview/save. Extend these catalogs through a reviewed source change.
+
+Each guild starts with six editable presets once. Removing all of them intentionally leaves an empty wheel; disabled/empty wheels give actionable officer guidance. Server removal clears presets and their initialization marker. Existing public spins have their own message lifetime. An officer's private draft button snapshots the chosen map/settings/instructions and cannot publish or enroll members automatically.

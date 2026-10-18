@@ -76,12 +76,13 @@ export function createEventCommand(dependencies: Dependencies = {}) {
     const message = await i.editReply(menu(session, e));
     sessions.bind(session.id, message.id);
   }
-  async function createDraft(i: Interaction, seed: Partial<EventDraftInput>): Promise<void> {
+  async function createDraft(i: Interaction, seed: Partial<EventDraftInput>, assertSourceCurrent?: () => void): Promise<void> {
     if (!i.guild || !i.guildId || !i.channelId || !('deferReply' in i)) {
       throw new CommandError('Use event in a server.');
     }
     await i.deferReply(privateReply);
     await requireCommunityOfficer(i.guild, i.user.id, database);
+    assertSourceCurrent?.();
     const e = store.createDraft({
       guildId: i.guildId,
       channelId: i.channelId,
@@ -447,4 +448,5 @@ export function createEventCommand(dependencies: Dependencies = {}) {
   };
 }
 export const eventCommand = createEventCommand();
-export const createEventDraft = (i: Interaction, seed: Partial<EventDraftInput>): Promise<void> => eventCommand.createDraft(i, seed);
+export const createEventDraft = (i: Interaction, seed: Partial<EventDraftInput>, assertSourceCurrent?: () => void): Promise<void> =>
+  eventCommand.createDraft(i, seed, assertSourceCurrent);

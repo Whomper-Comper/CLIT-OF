@@ -345,3 +345,13 @@ Community officers can use `/onboarding status user:@Member clan:MARS` for priva
 | History or Elo missing | Check feature toggles, collection/retention, partial coverage and upstream availability in [statistics and history](statistics-and-history.md) |
 
 For bot installation, command registration and service failures, continue with [operations](operations.md).
+
+## Curated challenge wheel
+
+`/wheel spin` publicly draws one enabled complete hosting package and then one map from that package. Settings are never randomized separately. The card includes the selected map, mode/teams, difficulty, bots/nations, map size, disabled units, gold/troop donations, spawn, infinite resources, instant build and hosting instructions. These are compatible suggested settings for a human OpenFront host; competitive balance is not guaranteed. Each member may spin once per five seconds.
+
+Officers use `/wheel presets` to choose a package, `/wheel add` to create one, `/wheel edit [id]` to edit and `/wheel remove [id]` to confirm removal. Omitting the ID opens a private chooser. **Edit basics**, **Edit hosting**, and **Edit options** open ordinary five-field forms; use comma-separated maps/disabled units and yes/no options. Review the complete private preview and press **Save preset** explicitly. **Enable/Disable preset** changes the preview until saved. Allowed maps are World, Europe, Black Sea and Caribbean; the chooser lists supported units. Names allow 80 characters and instructions 1000. Each guild permits 50 presets and each package up to ten distinct supported maps.
+
+Six editable starters appear once per guild: Classic clan teams, Squad skirmish, Naval night, Conventional warfare, Friendly free-for-all, and Humans versus nations. Removing every preset does not restore them; `/wheel add` creates a replacement. Disabling every preset makes spins ask an officer to enable or add a package.
+
+Officer spinners receive a separate private **Create event draft** button. It copies the exact selected settings and instructions into an unpublished event draft; later preset edits/removals do not change that copy. Review the proposed date in event management before publishing. No members are automatically signed up. Private wheel controls belong to their opener, server, channel and original private message, expire after ten minutes, and recheck current officer access. Reopen `/wheel presets` after a stale revision.

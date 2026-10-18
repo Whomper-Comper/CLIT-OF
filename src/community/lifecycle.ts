@@ -21,7 +21,7 @@ export function purgeMember(sql: DatabaseSync, guildId: string, discordId: strin
   purgeIdentity(sql,discordId,guildId); communitySessions.purgeMember(guildId,discordId);
 }
 export function purgeGuild(sql: DatabaseSync, guildId: string): void {
-  for (const table of ["community_onboarding","community_event_reminder_parts","community_event_signups","community_events","community_settings","community_deliveries","community_guild_work","community_availability","community_availability_changes"]) sql.prepare(`DELETE FROM ${table} WHERE guild_id=?`).run(guildId);
+  for (const table of ["community_wheel_presets","community_wheel_initialized","community_onboarding","community_event_reminder_parts","community_event_signups","community_events","community_settings","community_deliveries","community_guild_work","community_availability","community_availability_changes"]) sql.prepare(`DELETE FROM ${table} WHERE guild_id=?`).run(guildId);
   communitySessions.purgeGuild(guildId);
 }
 export function prune(sql: DatabaseSync, now: number): void {

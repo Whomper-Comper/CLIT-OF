@@ -6,8 +6,10 @@ import * as lifecycle from "./lifecycle.js";
 import { AvailabilityStore } from "./availability.js";
 import { EventStore, initializeEvents } from "./events.js";
 import { OnboardingStore } from "./onboarding.js";
+import { WheelStore } from "./wheel.js";
 
 export class CommunityStore {
+  readonly wheel: WheelStore;
   readonly deliveries: DeliveryStore;
   readonly settings: CommunitySettingsStore;
   readonly availability: AvailabilityStore;
@@ -18,9 +20,11 @@ export class CommunityStore {
     this.availability = new AvailabilityStore(sql);
     this.events = new EventStore(sql);
     this.onboarding = new OnboardingStore(sql);
+    this.wheel = new WheelStore(sql);
   }
   static initialize(sql: DatabaseSync): void {
     initializeEvents(sql);
+    WheelStore.initialize(sql);
     sql.exec(`CREATE TABLE IF NOT EXISTS community_onboarding (
       guild_id TEXT NOT NULL,discord_id TEXT NOT NULL,clan_tag TEXT NOT NULL,enrolled_at INTEGER NOT NULL,
       completed_at INTEGER,public_id TEXT,token TEXT NOT NULL,PRIMARY KEY(guild_id,discord_id));
