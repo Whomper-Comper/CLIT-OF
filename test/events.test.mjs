@@ -57,3 +57,10 @@ test('event management diagnostics select only that event and return at most fiv
  const s=f.db.community.events,e=published(f);for(let n=0;n<12;n++)for(const subjectId of [e.id,'other'])f.db.community.deliveries.enqueue({key:`job:${subjectId}:${n}`,guildId:'g',channelId:'c',kind:'event_update',subjectId,revision:1,dueAt:f.now()+n,part:0});
  const jobs=s.deliveryJobs('g',e.id);assert.equal(jobs.length,5);assert.ok(jobs.every(j=>j.subjectId===e.id));assert.equal(s.deliveryJobs('other',e.id).length,0);
  }finally{await f.close();}});
+test('a single squad-capacity edit changes total capacity with the matching squad limits and preserves occupancy',async()=>{
+ const f=communityFixture();try{const s=f.db.community.events,e=published(f,{squads:[{id:'red',name:'Red',capacity:1},{id:'blue',name:'Blue',capacity:1}]});s.join('g',e.id,'a','red',f.now());s.join('g',e.id,'b','blue',f.now());const before=s.signups('g',e.id);
+  const grown=s.edit('g',e.id,1,{capacity:3,squads:[{id:'red',name:'Red',capacity:2},{id:'blue',name:'Blue',capacity:1}]},f.now());assert.equal(grown.capacity,3);assert.equal(grown.squads[0].capacity,2);assert.deepEqual(s.signups('g',e.id),before);
+  const shrunk=s.edit('g',e.id,grown.revision,{capacity:2,squads:[{id:'red',name:'Red',capacity:1},{id:'blue',name:'Blue',capacity:1}]},f.now());assert.equal(shrunk.capacity,2);assert.deepEqual(s.signups('g',e.id),before);
+  assert.throws(()=>s.edit('g',e.id,shrunk.revision,{capacity:1,squads:[{id:'red',name:'Red',capacity:1}]},f.now()),/capacity|occupancy|occupied/i);assert.deepEqual(s.get('g',e.id),shrunk);assert.deepEqual(s.signups('g',e.id),before);
+ }finally{await f.close();}
+});

@@ -57,10 +57,26 @@ test('officer modal edits save checked fields and squads, and another owner cann
  const details=control(f,button(i.output,'Edit details'));await c.handleInteraction(details);const values={title:'Updated',description:'New description',schedule:'2026-10-19 14:00 | America/Bahia | -03:00',limits:'2, 60, 30',settings:'Team settings'};
  const save=control(f,details.modal.data.custom_id,{isButton:()=>false,isModalSubmit:()=>true,fields:{getTextInputValue:k=>values[k]}});
  await assert.rejects(c.handleInteraction({...save,user:{id:'other'}}),/reopen/i);await c.handleInteraction(save);e=f.db.community.events.get('g',e.id);assert.equal(e.title,'Updated');assert.equal(e.startAt,Date.UTC(2026,9,19,17));assert.equal(e.reminderMinutes,30);
- const edit=interaction(f,'edit',{id:e.id});await c.execute(edit);const squads=control(f,button(edit.output,'Edit squads'));await c.handleInteraction(squads);await c.handleInteraction(control(f,squads.modal.data.custom_id,{isButton:()=>false,isModalSubmit:()=>true,fields:{getTextInputValue:()=> 'red | Red team | 1\nblue | Blue team | 1'}}));assert.equal(f.db.community.events.get('g',e.id).squads.length,2);
+ const edit=interaction(f,'edit',{id:e.id});await c.execute(edit);const squads=control(f,button(edit.output,'Edit squads'));await c.handleInteraction(squads);await c.handleInteraction(control(f,squads.modal.data.custom_id,{isButton:()=>false,isModalSubmit:()=>true,fields:{getTextInputValue:id=>({capacity:'2',squads:'red | Red team | 1\nblue | Blue team | 1'})[id]}}));assert.equal(f.db.community.events.get('g',e.id).squads.length,2);
  }finally{await f.close();}});
 test('create rejects ambiguous or nonexistent local dates before persisting a draft',async()=>{const f=communityFixture();try{const c=setup(f);for(const start of ['2026-11-01 01:30','2027-03-14 02:30'])await assert.rejects(c.execute(interaction(f,'create',{title:'Team',start,timezone:'America/New_York'})),/repeats|offset|gap/i);assert.deepEqual(f.db.community.events.list('g'),[]);
  }finally{await f.close();}});
 test('forged squad action rejects an event without squads and rapid changes coalesce to one current card update',async()=>{const f=communityFixture();try{const c=setup(f),s=f.db.community.events,e=s.createDraft(input(f),f.now());s.publish('g',e.id,1,'public');await assert.rejects(c.handleInteraction(control(f,`event:${e.id}:squad:1`,{message:{id:'public'}})),/no squads/i);
  for(let n=0;n<10;n++)s.join('g',e.id,`member-${n}`,null,f.now());const pending=f.db.community.deliveries.list('g').filter(j=>j.status==='pending');assert.equal(pending.length,1);assert.equal(pending[0].kind,'event_update');
  }finally{await f.close();}});
+test('squad management atomically grows and shrinks total capacity while preserving occupied seats',async()=>{
+ const f=communityFixture();try{
+  const c=setup(f),s=f.db.community.events,e=s.createDraft(input(f,{squads:[{id:'red',name:'Red',capacity:1},{id:'blue',name:'Blue',capacity:1}]}),f.now());
+  s.publish('g',e.id,1,'public');s.join('g',e.id,'red-member','red',f.now());s.join('g',e.id,'blue-member','blue',f.now());const original=s.signups('g',e.id);
+  async function resize(capacity,text){
+   const view=interaction(f,'edit',{id:e.id});await c.execute(view);const editor=control(f,button(view.output,'Edit squads'));await c.handleInteraction(editor);
+   await c.handleInteraction(control(f,editor.modal.data.custom_id,{isButton:()=>false,isModalSubmit:()=>true,fields:{getTextInputValue:id=>({capacity:String(capacity),squads:text})[id]}}));
+   assert.ok(editor.modal.components.some(row=>row.components.some(field=>field.data.custom_id==='capacity')),'The officer must be able to enter the matching total capacity');
+  }
+  await resize(3,'red | Red | 2\nblue | Blue | 1');assert.equal(s.get('g',e.id).capacity,3);assert.deepEqual(s.signups('g',e.id),original);
+  s.join('g',e.id,'another-red','red',f.now());const occupied=s.get('g',e.id),three=s.signups('g',e.id);
+  await assert.rejects(resize(3,'red | Red | 1\nblue | Blue | 2'),/capacity|occupancy/i);assert.deepEqual(s.get('g',e.id),occupied);assert.deepEqual(s.signups('g',e.id),three);
+  await assert.rejects(resize(2,'red | Red | 1\nblue | Blue | 1'),/capacity|occupancy/i);assert.deepEqual(s.get('g',e.id),occupied);assert.deepEqual(s.signups('g',e.id),three);
+  s.withdraw('g',e.id,'another-red',new Set(['red-member','blue-member']),f.now());await resize(2,'red | Red | 1\nblue | Blue | 1');assert.equal(s.get('g',e.id).capacity,2);assert.deepEqual(s.signups('g',e.id),original);
+ }finally{await f.close();}
+});

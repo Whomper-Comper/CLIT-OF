@@ -109,7 +109,7 @@ export function createEventCommand(dependencies:Dependencies={}) {
             e=store.edit(i.guildId,e.id,data.revision,{title:i.fields.getTextInputValue('title'),description:i.fields.getTextInputValue('description')==='-'?'':i.fields.getTextInputValue('description'),startAt:resolveEventStart(schedule[0],schedule[1],schedule[2]||undefined),capacity:values[0],durationMinutes:values[1],reminderMinutes:values[2] as EventDraftInput['reminderMinutes']},now());
           }else if(session.kind==='event-squads') {
             const text=i.fields.getTextInputValue('squads').trim();const squads=text==='-'?[]:text.split('\n').map(line=>{const parts=line.split('|').map(s=>s.trim());if(parts.length!==3)throw new CommandError('Each squad line must be id | name | capacity.');return {id:parts[0],name:parts[1],capacity:Number(parts[2])};});
-            e=store.edit(i.guildId,e.id,data.revision,{squads},now());
+            e=store.edit(i.guildId,e.id,data.revision,{capacity:Number(i.fields.getTextInputValue('capacity').trim()),squads},now());
           }else if(session.kind==='event-move') {
             const target=i.fields.getTextInputValue('member').trim(),squad=i.fields.getTextInputValue('squad').trim(),members=await eligible(i);assertFresh(e);store.move(i.guildId,e.id,target,squad,members,now());
           }else throw new CommandError('Reopen event management.');
@@ -123,7 +123,9 @@ export function createEventCommand(dependencies:Dependencies={}) {
         }
         if(!['details','squads','move'].includes(action))throw new CommandError('Reopen event management.');
         const child=sessions.create({kind:`event-${action}`,ownerId:i.user.id,guildId:i.guildId,channelId:i.channelId,messageId:session.messageId,data:{...data}},now());
-        if(action==='squads')await i.showModal(modal(child,'Edit squads',[['squads','id | name | capacity; - clears all squads',e.squads.map(s=>`${s.id} | ${s.name} | ${s.capacity}`).join('\n')||'-',2000]]));
+        if(action==='squads')await i.showModal(modal(child,'Edit squads',[
+          ['capacity','Total event capacity (1–100)',String(e.capacity),3],
+          ['squads','id | name | capacity; - clears all squads',e.squads.map(s=>`${s.id} | ${s.name} | ${s.capacity}`).join('\n')||'-',2000]]));
         else if(action==='move')await i.showModal(modal(child,'Move member',[['member','Discord member ID','',20],['squad','Destination squad ID','',32]]));
         else await i.showModal(modal(child,'Edit event',[
           ['title','Title',e.title,100],['description','Description (- for empty)',e.description||'-',1000],['schedule','Local YYYY-MM-DD HH:mm | IANA zone | offset',`${new Date(e.startAt).toISOString().slice(0,16).replace('T',' ')} | UTC | +00:00`,150],
