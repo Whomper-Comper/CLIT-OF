@@ -18,6 +18,8 @@ import { handleConfigInteraction } from "./commands/config.js";
 import { handleStatsInteraction } from "./commands/stats.js";
 import { commandErrorMessage } from "./commands/errorMessages.js";
 import { clearDeploymentHealth, writeDeploymentHealth } from "./deploymentHealth.js";
+import { createCommunityService } from "./community/runtime.js";
+import { handleCommunityInteraction } from "./community/interactions.js";
 
 validateConfig();
 
@@ -30,6 +32,7 @@ const client = new Client({
 });
 
 const clanSyncService = new ClanSyncService(client);
+const communityService = createCommunityService(client, db, openfrontApi);
 const historyCollector = new HistoryCollector(client, db, openfrontApi, {
   buildWeeklyReport: async (guildId, start, end) => {
     const guild = client.guilds.cache.get(guildId);
@@ -46,6 +49,7 @@ client.once(Events.ClientReady, (c) => {
   // Start periodic background clan role sync
   clanSyncService.startScheduler();
   historyCollector.start();
+  communityService.start();
   writeDeploymentHealth();
 });
 
@@ -62,7 +66,11 @@ client.on(Events.GuildMemberAdd, async (member) => {
   }
 });
 
-client.on(Events.GuildMemberRemove, (member) => { db.history.purgeMember(member.guild.id, member.id); });
+client.on(Events.GuildMemberRemove, (member) => {
+  db.history.purgeMember(member.guild.id, member.id);
+  db.community.purgeMember(member.guild.id, member.id);
+});
+client.on(Events.GuildDelete, (guild) => { db.community.purgeGuild(guild.id); });
 
 // Detect when a member is assigned roles (e.g. given the join_role like "@Mars")
 client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
@@ -79,6 +87,7 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
 // Keep command and component failures inside the Discord event boundary.
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    if (await handleCommunityInteraction(interaction)) return;
     if (await handleConfigInteraction(interaction)) return;
     if (await handleStatsInteraction(interaction)) return;
     if (!interaction.isChatInputCommand()) return;
@@ -116,6 +125,7 @@ async function shutdown() {
   clearDeploymentHealth();
   clanSyncService.stopScheduler();
   await historyCollector.stop();
+  await communityService.stop();
   await client.destroy();
   db.close();
   process.exit(0);
@@ -129,6 +139,7 @@ client.login(CONFIG.DISCORD_TOKEN).catch(async (err) => {
   clearDeploymentHealth();
   clanSyncService.stopScheduler();
   await historyCollector.stop();
+  await communityService.stop();
   await client.destroy();
   db.close();
   process.exitCode = 1;

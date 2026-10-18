@@ -25,7 +25,10 @@ const iso = (ms: number) => new Date(ms).toISOString();
 const dayFloor = (ms: number) => Math.floor(ms / DAY) * DAY;
 
 export class HistoryStore {
-  constructor(private readonly db: DatabaseSync) {}
+  constructor(private readonly db: DatabaseSync, private readonly cleanup?: {
+    purgeAccount(publicId: string): void;
+    clearGameEvidence(guildId?: string): void;
+  }) {}
   /** Called inside BotDatabase's backed-up migration transaction. */
   static initialize(db: DatabaseSync) {
     db.exec(`
@@ -301,6 +304,7 @@ export class HistoryStore {
     for (const row of guilds) this.purgeMember(String(row.guild_id),discordId);
   }
   purgePlayer(publicId: string, deletedAt = iso(Date.now())) {
+    this.cleanup?.purgeAccount(publicId);
     this.db.prepare("INSERT INTO history_deleted_players(public_id,deleted_at) VALUES(?,?) ON CONFLICT(public_id) DO UPDATE SET deleted_at=excluded.deleted_at").run(publicId,deletedAt);
     this.db.prepare("DELETE FROM history_player_matches WHERE public_id=?").run(publicId);
     this.db.prepare("DELETE FROM history_observed_elo WHERE public_id=?").run(publicId);
@@ -309,6 +313,7 @@ export class HistoryStore {
   }
   isDeleted(publicId: string): boolean { return !!this.db.prepare("SELECT 1 FROM history_deleted_players WHERE public_id=?").get(publicId); }
   clearGuildPlayerMatches(guild: string) {
+    this.cleanup?.clearGameEvidence(guild);
     this.db.prepare("DELETE FROM history_player_matches WHERE guild_id=?").run(guild);
     this.db.prepare("DELETE FROM history_jobs WHERE guild_id=? AND kind='player'").run(guild);
     this.db.prepare("DELETE FROM history_coverage WHERE guild_id=? AND kind='player'").run(guild);
@@ -318,6 +323,7 @@ export class HistoryStore {
     this.db.prepare("DELETE FROM history_observed_elo WHERE guild_id=?").run(guild);
   }
   clearAllPlayerHistory() {
+    this.cleanup?.clearGameEvidence();
     this.db.exec("DELETE FROM history_player_matches; DELETE FROM history_observed_elo; DELETE FROM history_jobs WHERE kind='player'; DELETE FROM history_coverage WHERE kind='player';");
   }
   retain(guild: string, days: number, now: number) {
