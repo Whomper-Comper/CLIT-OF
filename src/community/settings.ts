@@ -1,17 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { CommandError } from "../commandError.js";
 import { withCommunityTransaction } from "./transactions.js";
+import { validateMilestoneThresholds } from "./milestoneCounters.js";
 
 export interface CommunitySettings {
   guildId: string; revision: number; milestonesEnabled: boolean; milestoneChannelId: string | null;
   gameThresholds: string[]; winThresholds: string[];
-}
-function thresholds(values: string[]): void {
-  if (!Array.isArray(values) || values.length < 1 || values.length > 10 ||
-      values.some((value, index) => typeof value !== "string" || !/^[1-9]\d*$/.test(value) ||
-        (index > 0 && BigInt(values[index - 1]) >= BigInt(value)))) {
-    throw new CommandError("Choose one to ten ascending, unique positive integer thresholds for each metric.");
-  }
 }
 export class CommunitySettingsStore {
   constructor(private readonly sql: DatabaseSync) {}
@@ -27,7 +21,7 @@ export class CommunitySettingsStore {
     return this.sql.prepare("SELECT guild_id FROM community_settings ORDER BY guild_id").all().map(row => this.get(String(row.guild_id)));
   }
   save(guildId: string, draft: Omit<CommunitySettings, "guildId" | "revision">, expectedRevision: number): CommunitySettings {
-    thresholds(draft.gameThresholds); thresholds(draft.winThresholds);
+    validateMilestoneThresholds({ games: draft.gameThresholds, wins: draft.winThresholds });
     if (typeof draft.milestonesEnabled !== "boolean" || (draft.milestoneChannelId !== null && (typeof draft.milestoneChannelId !== "string" || !draft.milestoneChannelId))) throw new CommandError("Choose a valid milestone channel and announcement setting.");
     if (draft.milestonesEnabled && !draft.milestoneChannelId) throw new CommandError("Milestone announcements require a channel.");
     return withCommunityTransaction(this.sql, () => {

@@ -1,12 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
 import { communitySessions } from "./sessions.js";
+import { purgeMilestones } from "./milestones.js";
 
 /** Feature-owned personal tables extend these hooks as their stores are introduced. */
 export function purgeIdentity(sql: DatabaseSync, discordId: string, guildId?: string): void {
+  purgeMilestones(sql, 'identity', discordId, guildId);
   sql.prepare(`UPDATE community_onboarding SET completed_at=NULL,public_id=NULL,token=hex(randomblob(16)) WHERE discord_id=?${guildId===undefined?'':' AND guild_id=?'}`)
     .run(...(guildId===undefined?[discordId]:[discordId,guildId]));
 }
 export function purgeAccount(sql: DatabaseSync, publicId: string): void {
+  purgeMilestones(sql, 'account', publicId);
   sql.prepare(`UPDATE community_onboarding SET completed_at=NULL,public_id=NULL,token=hex(randomblob(16)) WHERE public_id=?`).run(publicId);
 }
 export function clearGameEvidence(_sql: DatabaseSync, _guildId?: string): void {}
@@ -21,6 +24,7 @@ export function purgeMember(sql: DatabaseSync, guildId: string, discordId: strin
   purgeIdentity(sql,discordId,guildId); communitySessions.purgeMember(guildId,discordId);
 }
 export function purgeGuild(sql: DatabaseSync, guildId: string): void {
+  purgeMilestones(sql, 'guild', guildId);
   for (const table of ["community_wheel_presets","community_wheel_initialized","community_onboarding","community_event_reminder_parts","community_event_signups","community_events","community_settings","community_deliveries","community_guild_work","community_availability","community_availability_changes"]) sql.prepare(`DELETE FROM ${table} WHERE guild_id=?`).run(guildId);
   communitySessions.purgeGuild(guildId);
 }
@@ -47,4 +51,9 @@ export function prune(sql: DatabaseSync, now: number): void {
   sql.prepare(`DELETE FROM community_deliveries WHERE id IN (SELECT id FROM community_deliveries
     WHERE status IN ('sent','cancelled','failed') AND updated_at<? ORDER BY updated_at LIMIT 200)`)
     .run(now - 30 * 86_400_000);
+  sql.prepare(`DELETE FROM community_milestone_intents WHERE id IN (
+    SELECT i.id FROM community_milestone_intents i WHERE i.observed_at<?
+    AND NOT EXISTS (SELECT 1 FROM community_deliveries d
+      WHERE d.guild_id=i.guild_id AND d.kind='milestone' AND d.subject_id=i.id)
+    ORDER BY i.observed_at LIMIT 200)`).run(now - 30 * 86_400_000);
 }

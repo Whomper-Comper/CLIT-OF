@@ -104,7 +104,11 @@ export class BotDatabase {
       HistoryStore.initialize(this.db);
       CommunityStore.initialize(this.db);
     });
-    this.community = new CommunityStore(this.db);
+    this.community = new CommunityStore(this.db, binding => {
+      const current = this.getEffectiveLink(binding.guildId, binding.discordId);
+      return current?.openfront_id === binding.publicId && current.linked_at === binding.linkedAt &&
+        !this.history.isDeleted(binding.publicId);
+    });
     this.history = new HistoryStore(this.db, {
       purgeAccount: publicId => this.community.purgeAccount(publicId),
       clearGameEvidence: guildId => this.community.clearGameEvidence(guildId),

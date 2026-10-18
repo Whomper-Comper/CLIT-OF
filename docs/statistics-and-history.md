@@ -8,6 +8,7 @@ This guide explains what the bot's numbers measure, where they come from, and ho
 - [Open and navigate player statistics](#open-and-navigate-player-statistics)
 - [Scopes, modes, periods, and maps](#scopes-modes-periods-and-maps)
 - [Lifetime statistics and buildings](#lifetime-statistics-and-buildings)
+- [Milestone counters and baselines](#milestone-counters-and-baselines)
 - [Filtered match statistics](#filtered-match-statistics)
 - [Game history browsing](#game-history-browsing)
 - [Observed ranked Elo](#observed-ranked-elo)
@@ -143,6 +144,18 @@ Other OpenFront displays may show a per-game building average. A lifetime total 
 | No recorded statistics | No usable profile bucket was available for the selection |
 
 Bars are scaled relative to the largest displayed value in that chart. Bar length is a visual comparison within the chart; read the numbers for the actual counts. Exact available building totals accompany the dedicated building graph.
+
+## Milestone counters and baselines
+
+Milestone cards use exact public **Team** lifetime games and wins, independently of player match-history collection. They exclude private games, singleplayer, Humans Vs Nations, ranked games, and recent overlapping aggregates. Every selected difficulty bucket must provide nonnegative integer wins, losses, and total, with wins plus losses equal to total. Missing, partial, unsafe numeric, or contradictory counters are unavailable and cannot earn milestones; this stricter award rule does not change the existing statistics display.
+
+Thresholds are ascending, unique positive decimal integers, with one to ten per metric. Defaults are games at 10, 50, 100, 250, and 500 and wins at 1, 10, 25, 50, and 100. Counters and thresholds remain exact even above the ordinary JavaScript safe integer range.
+
+The first complete observation records already reached thresholds silently. Adding a threshold also creates a quiet baseline for that threshold. Later upward crossings earn each threshold once per server and account; lower or repeated counters never award it again. Several crossings from one check share one durable announcement intent. An award records the observed total and observation time, not an invented historical achievement date.
+
+Same-account verification preserves earned cards. Account replacement, unlink, account deletion, member departure, and server removal clear the corresponding personal milestone records and pending notification payloads. A later link starts with a quiet baseline. Candidate generations and current identity checks reject results captured before cleanup, including results arriving after a member rejoins. Earned records remain until personal cleanup; completed notification diagnostics expire after 30 days.
+
+Eligible background attempts are spaced at least 15 minutes apart. Failed or incomplete checks retain a durable exponential backoff, capped at six hours, while other due members can progress. A successful complete observation resets the interval. Announcement settings and eligibility are checked again around asynchronous profile work by the milestone worker.
 
 ## Filtered match statistics
 

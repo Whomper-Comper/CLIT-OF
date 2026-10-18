@@ -7,15 +7,19 @@ import { AvailabilityStore } from "./availability.js";
 import { EventStore, initializeEvents } from "./events.js";
 import { OnboardingStore } from "./onboarding.js";
 import { WheelStore } from "./wheel.js";
+import { MilestoneStore } from "./milestones.js";
+import type { IdentityBinding } from "./types.js";
 
 export class CommunityStore {
+  readonly milestones: MilestoneStore;
   readonly wheel: WheelStore;
   readonly deliveries: DeliveryStore;
   readonly settings: CommunitySettingsStore;
   readonly availability: AvailabilityStore;
   readonly events: EventStore;
   readonly onboarding: OnboardingStore;
-  constructor(private readonly sql: DatabaseSync) {
+  constructor(private readonly sql: DatabaseSync, identityCurrent?: (binding: IdentityBinding) => boolean) {
+    this.milestones = new MilestoneStore(sql, identityCurrent);
     this.deliveries = new DeliveryStore(sql); this.settings = new CommunitySettingsStore(sql);
     this.availability = new AvailabilityStore(sql);
     this.events = new EventStore(sql);
@@ -23,6 +27,7 @@ export class CommunityStore {
     this.wheel = new WheelStore(sql);
   }
   static initialize(sql: DatabaseSync): void {
+    MilestoneStore.initialize(sql);
     initializeEvents(sql);
     WheelStore.initialize(sql);
     sql.exec(`CREATE TABLE IF NOT EXISTS community_onboarding (
