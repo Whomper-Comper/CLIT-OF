@@ -280,6 +280,14 @@ Use `/event edit` to inspect paused or uncertain publication jobs. Correct missi
 
 Member departure removes active signups and marks reserve promotion due; unlinking an OpenFront account preserves unrelated event signups. Server removal clears that server's events/signups. Automatic promotion housekeeping, reminder sends, expiry, retention and richer operational recovery belong to the following scheduling implementation task.
 
+## Newcomer follow-up
+
+Members enroll themselves through `/onboarding status`, choosing a configured clan explicitly when more than one exists. Officers inspect a member with `/onboarding status user:@Member` or review `/onboarding queue`; both views remain private and use the community manager/officer/leader access rules. Roles and mappings are refreshed on each privileged command or button, including before releasing results from remote profile lookups.
+
+The queue contains only enrolled current human members and paginates ten at a time. One fresh roster establishes accurate current-member page counts; a final request checks only the displayed members and officer. Each page looks up at most ten linked profiles and never requests profiles for unlinked members. Navigation and Refresh have a ten-second cooldown. A membership, identity, enrollment or access change during lookup rejects stale results and asks the officer to reopen.
+
+The checklist derives progress from the current link, fresh clan profile, availability and retained confirmed signups. Server approval alone never establishes OpenFront clan membership; an API outage shows Unknown. Completing the event step proves signup, not attendance. Unlink/account replacement resets the account-derived completion observation while preserving availability and unrelated signups; account deletion also invalidates observations. Member departure removes enrollment and server removal clears all that server's onboarding records. Same-account re-verification retains an existing completion observation but invalidates any lookup still using the old identity binding. Local facts are reevaluated on status/Refresh; completion dates record the last observed checklist completion, not a perpetual membership guarantee.
+
 ## Source map
 
 The access rules above come from `src/access.ts`; configuration validation from `src/setupConfig.ts`; slash actions and menu behavior from `src/commands/clan.ts`, `clanHandlers.ts`, `config.ts` and `debug.ts`; effective-link protection and reconciliation enqueueing from `src/db.ts`; role calculation and scheduling from `src/roles.ts` and `src/clanSync.ts`; coverage/doctor limits from `src/reporting.ts`. Consult those sources when changing behavior and update both this guide and the [command reference](commands.md).

@@ -5,19 +5,28 @@ import { withCommunityTransaction } from "./transactions.js";
 import * as lifecycle from "./lifecycle.js";
 import { AvailabilityStore } from "./availability.js";
 import { EventStore, initializeEvents } from "./events.js";
+import { OnboardingStore } from "./onboarding.js";
 
 export class CommunityStore {
   readonly deliveries: DeliveryStore;
   readonly settings: CommunitySettingsStore;
   readonly availability: AvailabilityStore;
   readonly events: EventStore;
+  readonly onboarding: OnboardingStore;
   constructor(private readonly sql: DatabaseSync) {
     this.deliveries = new DeliveryStore(sql); this.settings = new CommunitySettingsStore(sql);
     this.availability = new AvailabilityStore(sql);
     this.events = new EventStore(sql);
+    this.onboarding = new OnboardingStore(sql);
   }
   static initialize(sql: DatabaseSync): void {
     initializeEvents(sql);
+    sql.exec(`CREATE TABLE IF NOT EXISTS community_onboarding (
+      guild_id TEXT NOT NULL,discord_id TEXT NOT NULL,clan_tag TEXT NOT NULL,enrolled_at INTEGER NOT NULL,
+      completed_at INTEGER,public_id TEXT,token TEXT NOT NULL,PRIMARY KEY(guild_id,discord_id));
+      CREATE INDEX IF NOT EXISTS community_onboarding_page ON community_onboarding(guild_id,enrolled_at,discord_id);
+      CREATE INDEX IF NOT EXISTS community_onboarding_identity ON community_onboarding(discord_id,guild_id);
+      CREATE INDEX IF NOT EXISTS community_onboarding_account ON community_onboarding(public_id);`);
     sql.exec(`CREATE TABLE IF NOT EXISTS community_availability (
       guild_id TEXT NOT NULL,discord_id TEXT NOT NULL,timezone TEXT NOT NULL,windows TEXT,
       revision INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(guild_id,discord_id));

@@ -10,10 +10,11 @@ import { debugCommand } from "./debug.js";
 import { diceCommand } from "./dice.js";
 import { availabilityCommand } from "./availability.js";
 import { eventCommand } from "./event.js";
+import { onboardingCommand } from "./onboarding.js";
 
 interface BotCommand {
   data: Pick<SlashCommandBuilder, "name" | "toJSON">;
   execute(interaction: ChatInputCommandInteraction, sync: ClanSyncService): Promise<void>;
 }
-export const commands: BotCommand[] = [linkCommand, unlinkCommand, whoisCommand, statsCommand, clanCommand, configCommand, debugCommand, diceCommand, availabilityCommand, eventCommand];
+export const commands: BotCommand[] = [linkCommand, unlinkCommand, whoisCommand, statsCommand, clanCommand, configCommand, debugCommand, diceCommand, availabilityCommand, eventCommand, onboardingCommand];
 export const commandsByName = new Map(commands.map((command) => [command.data.name, command]));

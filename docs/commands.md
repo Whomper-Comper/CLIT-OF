@@ -319,6 +319,14 @@ An officer running `/availability suggest` receives private **Draft session** bu
 
 Reminder preferences are opt-in and default off. This implementation stores the chosen 15/30/60-minute lead and each member's preference; automatic reminder delivery and event housekeeping are implemented in the following scheduling work.
 
+## Newcomer onboarding
+
+`/onboarding status` opens your private four-step checklist and enrolls you for the selected clan. Use `clan:MARS` to select a configured clan; selection is required when several clans are configured. The checklist shows your effective account link, fresh OpenFront clan membership, saved availability, and confirmed event signup. A server-approved link is labeled **server-only**, and an approval role means **Waiting** for an invitation rather than membership. Unavailable membership data shows **Unknown** with retry guidance.
+
+Save availability with `/availability set` and find an event with `/event list`. A reserve place, withdrawn signup or cancelled event does not complete the event step. A confirmed future signup or retained past signup does; this records signup, not attendance. Past signup evidence expires with the event's 90-day retention eligibility even while cleanup is draining older rows.
+
+Community officers can use `/onboarding status user:@Member clan:MARS` for private inspection without enrolling that member. `/onboarding queue page:1` privately shows enrolled current members ten at a time, their next step and waiting/unknown guidance. Only linked members on the displayed page require profile lookups. **Previous**, **Next**, and **Refresh** reread current state, recheck officer access and allow one action per ten seconds. Private menus belong to their opener, server, channel and original message and expire after ten minutes. Onboarding remains private regardless of ordinary-reply debug settings.
+
 ## Common command problems
 
 | Message/symptom | Next step |

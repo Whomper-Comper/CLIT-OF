@@ -152,6 +152,13 @@ export class EventStore {
   constructor(private readonly sql: DatabaseSync) {
     this.deliveries = new DeliveryStore(sql);
   }
+  /** Signup evidence is independent of the capped UI list and excludes rows awaiting retention cleanup. */
+  hasConfirmedSignup(guildId:string,discordId:string,now:number):boolean {
+    return !!this.sql.prepare(`SELECT 1 FROM community_event_signups s INDEXED BY community_signup_member
+      JOIN community_events e ON e.id=s.event_id AND e.guild_id=s.guild_id
+      WHERE s.guild_id=? AND s.discord_id=? AND s.state='confirmed'
+      AND e.status IN ('scheduled','finished') AND e.retire_at>=? LIMIT 1`).get(guildId,discordId,now-90*86400000);
+  }
   createDraft(input: EventDraftInput, now: number): EventRecord {
     const data = validate(input, now);
     const id = randomUUID();
