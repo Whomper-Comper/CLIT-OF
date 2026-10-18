@@ -134,7 +134,7 @@ export class CommunityService {
     let accepted = false;
     try {
       if (!handler) { fail("paused",new Error("No delivery handler is available for this kind of community work.")); return; }
-      let prepared = await handler.prepare(job);
+      let prepared = await handler.prepare(job,this.now());
       if (!store.owns(job)) return;
       if (!prepared) { store.cancel(job.id,job.leaseId!,this.now()); return; }
       const fetched = await this.client.channels.fetch(job.channelId);
@@ -143,7 +143,7 @@ export class CommunityService {
       }
       channel = fetched as DeliveryChannel;
       // A role/settings/revision change can happen during any awaited Discord lookup.
-      prepared = await handler.prepare(job);
+      prepared = await handler.prepare(job,this.now());
       if (!store.owns(job)) return;
       if (!prepared) { store.cancel(job.id,job.leaseId!,this.now()); return; }
       if (this.stopped) { fail("transient",new Error("Community service stopped before delivery.")); return; }
@@ -152,7 +152,7 @@ export class CommunityService {
         const recovered = await this.reconcile(channel,job);
         if (!store.owns(job)) return;
         if (!recovered) { fail("needs_review",new Error("The prior send is uncertain. Recent messages could not prove its outcome; review before retrying.")); return; }
-        if (!await handler.prepare(job)) { store.cancel(job.id,job.leaseId!,this.now()); return; }
+        if (!await handler.prepare(job,this.now())) { store.cancel(job.id,job.leaseId!,this.now()); return; }
         accepted = true; this.complete(job,recovered,handler); return;
       }
       const payload = payloadFor(job,prepared.payload);
@@ -160,7 +160,7 @@ export class CommunityService {
       if (prepared.messageId) {
         const messageId = prepared.messageId;
         const existing = await channel.messages.fetch(messageId);
-        prepared = await handler.prepare(job);
+        prepared = await handler.prepare(job,this.now());
         if (!store.owns(job)) return;
         if (!prepared) { store.cancel(job.id,job.leaseId!,this.now()); return; }
         if (this.stopped) { fail("transient",new Error("Community service stopped before delivery.")); return; }
@@ -182,7 +182,7 @@ export class CommunityService {
       // A network failure after send may mean Discord accepted it. Never blindly repost.
       try {
         const recovered = channel ? await this.reconcile(channel,job) : null;
-        if (recovered && handler && await handler.prepare(job)) {
+        if (recovered && handler && await handler.prepare(job,this.now())) {
           accepted = true; this.complete(job,recovered,handler); return;
         }
       } catch { /* unresolved reconciliation remains explicitly reviewable */ }

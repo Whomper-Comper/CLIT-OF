@@ -4,16 +4,20 @@ import { CommunitySettingsStore } from "./settings.js";
 import { withCommunityTransaction } from "./transactions.js";
 import * as lifecycle from "./lifecycle.js";
 import { AvailabilityStore } from "./availability.js";
+import { EventStore, initializeEvents } from "./events.js";
 
 export class CommunityStore {
   readonly deliveries: DeliveryStore;
   readonly settings: CommunitySettingsStore;
   readonly availability: AvailabilityStore;
+  readonly events: EventStore;
   constructor(private readonly sql: DatabaseSync) {
     this.deliveries = new DeliveryStore(sql); this.settings = new CommunitySettingsStore(sql);
     this.availability = new AvailabilityStore(sql);
+    this.events = new EventStore(sql);
   }
   static initialize(sql: DatabaseSync): void {
+    initializeEvents(sql);
     sql.exec(`CREATE TABLE IF NOT EXISTS community_availability (
       guild_id TEXT NOT NULL,discord_id TEXT NOT NULL,timezone TEXT NOT NULL,windows TEXT,
       revision INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(guild_id,discord_id));

@@ -4,10 +4,12 @@ import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, Interaction
   type ChatInputCommandInteraction, type Interaction } from "discord.js";
 import { db as defaultDatabase, type BotDatabase } from "../db.js";
 import { CommandError, label, privateReply, throttle } from "./support.js";
-import { requireCommunityOfficer } from "../community/access.js";
+import { requireCommunityOfficer,hasCommunityOfficerRole } from "../community/access.js";
 import { communitySessions, type CommunitySessions, type PrivateCommunitySession } from "../community/sessions.js";
 import type { LocalWindow, MemberAvailability } from "../community/availability.js";
 import { suggestAvailability } from "../community/time.js";
+import { createEventDraft } from "./event.js";
+import type { EventDraftInput } from "../community/events.js";
 
 const DAYS=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const clock=(minute:number)=>`${String(Math.floor(minute/60)).padStart(2,"0")}:${String(minute%60).padStart(2,"0")}`;
@@ -16,7 +18,7 @@ function minute(value:string):number {
   const [hour,min]=value.split(":").map(Number);return hour*60+min;
 }
 interface ViewData { targetId:string; revision:number; page:number; selected:string|null }
-interface Dependencies { db?:BotDatabase; now?:()=>number; sessions?:CommunitySessions }
+interface Dependencies { db?:BotDatabase; now?:()=>number; sessions?:CommunitySessions; createDraft?:(i:Interaction,seed:Partial<EventDraftInput>)=>Promise<void> }
 
 export function createAvailabilityCommand(dependencies:Dependencies={}) {
   const database=dependencies.db??defaultDatabase, now=dependencies.now??Date.now,sessions=dependencies.sessions??communitySessions;
@@ -112,6 +114,12 @@ export function createAvailabilityCommand(dependencies:Dependencies={}) {
           value:`<t:${Math.floor(suggestion.start/1000)}:F> – <t:${Math.floor(suggestion.end/1000)}:t>`})))
         .setFooter({text:`${duration} minutes · Next 14 days · Suggestions do not create events or sign anyone up`});
       await i.editReply({embeds:[embed],allowedMentions:{parse:[]}});
+      const author=roster.get(i.user.id);
+      const session=suggestions.length&&author&&hasCommunityOfficerRole(i.guildId,author,database)?sessions.create({kind:'availability-suggest',ownerId:i.user.id,guildId:i.guildId,channelId:i.channelId,messageId:null,
+        data:suggestions.map(s=>({startAt:s.start,durationMinutes:duration}))},now()):null;
+      const components=session?[new ActionRowBuilder<ButtonBuilder>().addComponents(...suggestions.map((_,n)=>new ButtonBuilder()
+        .setCustomId(`availability:${session.id}:draft${n}`).setLabel(`Draft session ${n+1}`).setStyle(ButtonStyle.Secondary)))]:[];
+      if(session){const message=await i.followUp({content:'Create a private event draft from a suggested session. No members are signed up automatically.',components,...privateReply,allowedMentions:{parse:[]}});sessions.bind(session.id,message.id);}
     },
     async handleInteraction(i:Interaction):Promise<boolean> {
       if (!("customId" in i) || !i.customId.startsWith("availability:")) return false;
@@ -119,6 +127,12 @@ export function createAvailabilityCommand(dependencies:Dependencies={}) {
       if (!i.guild || !i.guildId || !i.channelId) throw new CommandError("Use availability in a server.");
       const [,id,action]=i.customId.split(":");
       const session=sessions.get(id,i.user.id,{guildId:i.guildId,channelId:i.channelId,messageId:i.message?.id??null},now());
+      if(session.kind==='availability-suggest') {
+        if(!/^draft[0-2]$/.test(action)||!i.isButton())throw new CommandError('Reopen availability suggestions.');
+        const seed=(session.data as Partial<EventDraftInput>[])[Number(action.slice(-1))];if(!seed)throw new CommandError('Reopen availability suggestions.');
+        // Draft creation performs fresh officer authorization and always opens privately.
+        await (dependencies.createDraft??createEventDraft)(i,seed);return true;
+      }
       if (session.kind!==(action==="save"?"availability-edit":"availability")) throw new CommandError("Reopen your availability menu.");
       const data=session.data as ViewData;
       if (data.targetId!==i.user.id) await requireCommunityOfficer(i.guild,i.user.id,database);

@@ -16,7 +16,7 @@ export interface DeliveryJob extends DeliveryInput {
 export interface PreparedDelivery { payload: MessageCreateOptions; messageId?: string }
 export interface CommunityTick { now: number; takeRequest(): boolean; stopping(): boolean }
 export interface CommunityDeliveryHandler {
-  prepare(job: DeliveryJob): Promise<PreparedDelivery | null>;
+  prepare(job: DeliveryJob, now?: number): Promise<PreparedDelivery | null>;
   /** Synchronous binding only: runs in the same savepoint as delivery completion. */
   delivered?(job: DeliveryJob, messageId: string): void;
 }

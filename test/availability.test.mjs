@@ -6,11 +6,12 @@ import { communityFixture } from './helpers/community.mjs';
 const { createAvailabilityCommand } = await import('../dist/commands/availability.js');
 const { CommunitySessions } = await import('../dist/community/sessions.js');
 const { CommunityStore } = await import('../dist/community/store.js');
+const { createEventCommand } = await import('../dist/commands/event.js');
 const draft = (extra={}) => ({ guildId:'g', discordId:'u', timezone:'UTC', windows:[{id:'w',weekday:0,startMinute:600,endMinute:720}], ...extra });
 function interaction(f, sub, values={}, user='u') {
   return { guild:f.guild,guildId:'g',channelId:'c',user:{id:user},
     options:{getSubcommand:()=>sub,getString:key=>values[key]??null,getInteger:key=>values[key]??null,getUser:key=>values[key]??null},
-    async deferReply(p){this.deferred=p;}, async reply(p){this.output=p;return {id:'m'};},async editReply(p){this.output=p;return {id:'m'};} };
+    async deferReply(p){this.deferred=p;}, async reply(p){this.output=p;return {id:'m'};},async editReply(p){this.output=p;return {id:'m'};},async followUp(p){this.privateOutput=p;return{id:'suggestion-private'};} };
 }
 
 test('availability validates local rules, revisions and limits before persisting',async()=>{
@@ -67,6 +68,16 @@ function control(f, customId, user='u', extra={}) {
     async update(payload){this.output=payload;},async showModal(modal){this.modal=modal;},async reply(payload){this.output=payload;},...extra};
 }
 const buttonId=(output,text)=>output.components.flatMap(row=>row.components).find(button=>button.data.label===text).data.custom_id;
+
+test('suggestion draft buttons recheck officer access and create private empty unpublished events without member IDs',async()=>{
+ const f=communityFixture();try{f.addMember('draft-officer',['manager']);f.db.setManagerRole('g','manager');f.db.community.availability.save(draft({discordId:'draft-officer'}),0,f.now());
+ const sessions=new CommunitySessions(),event=createEventCommand({db:f.db,now:f.now,sessions});const command=createAvailabilityCommand({db:f.db,now:f.now,sessions,createDraft:event.createDraft});
+ const i=interaction(f,'suggest',{},'draft-officer');await command.execute(i);assert.equal(i.output.components,undefined);assert.equal(i.privateOutput.flags,MessageFlags.Ephemeral);const id=buttonId(i.privateOutput,'Draft session 1');assert.doesNotMatch(JSON.stringify(i.output),/memberIds|discordId/);
+ const click=control(f,id,'draft-officer',{message:{id:'suggestion-private'},async deferReply(p){this.deferred=p;},async editReply(p){this.output=p;return{id:'draft-menu'};}});await command.handleInteraction(click);
+ assert.equal(click.deferred.flags,MessageFlags.Ephemeral);const e=f.db.community.events.list('g')[0];assert.equal(e.status,'draft');assert.deepEqual(f.db.community.events.signups('g',e.id),[]);assert.equal(f.calls.sends.length,0);
+ f.setRoles('draft-officer',[]);await assert.rejects(command.handleInteraction(control(f,id,'draft-officer',{message:{id:'suggestion-private'},async deferReply(){}})),/manager|officer/i);
+ }finally{await f.close();}
+});
 
 test('private controls reject wrong owner, channel, message, expiry and changed revisions',async()=>{
   const f=communityFixture();try{

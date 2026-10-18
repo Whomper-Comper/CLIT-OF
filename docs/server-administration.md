@@ -270,6 +270,16 @@ Suggestions are planning aids and do not create events or enroll participants. I
 
 If commands are missing, registration or application availability needs attention rather than clan settings. If jobs remain overdue after permissions and API access recover, give the maintainer the action, approximate time and doctor/status findings; use [operations](operations.md) for service/log checks. Never include Identity Tokens or bot credentials in that report.
 
+## Community event administration
+
+Event creation, editing, cancellation, squad management and private suggestion drafts require the configured manager role or a configured clan's officer/leader role. Privileged controls refresh membership and reread role mappings on every use. These community permissions do not change the existing clan, config or debug access rules.
+
+Events publish through the shared delivery worker. The saved draft exists before the bot posts; a successful post is bound to that exact revision and message. Public signup controls work only on that canonical message. Other views link back to it. Card updates coalesce pending changes and edit the saved message rather than posting another event.
+
+Use `/event edit` to inspect paused or uncertain publication jobs. Correct missing channel permissions before retrying a paused delivery. A post with an uncertain outcome is marked **Needs review**, and the shared worker checks recent bot messages for its recovery marker before any retry. A successful Discord post whose database binding fails also requires review; automatic ticks do not blindly post duplicates. Draft changes remain locked while publication is unresolved. Do not remove the marker manually during reconciliation.
+
+Member departure removes active signups and marks reserve promotion due; unlinking an OpenFront account preserves unrelated event signups. Server removal clears that server's events/signups. Automatic promotion housekeeping, reminder sends, expiry, retention and richer operational recovery belong to the following scheduling implementation task.
+
 ## Source map
 
 The access rules above come from `src/access.ts`; configuration validation from `src/setupConfig.ts`; slash actions and menu behavior from `src/commands/clan.ts`, `clanHandlers.ts`, `config.ts` and `debug.ts`; effective-link protection and reconciliation enqueueing from `src/db.ts`; role calculation and scheduling from `src/roles.ts` and `src/clanSync.ts`; coverage/doctor limits from `src/reporting.ts`. Consult those sources when changing behavior and update both this guide and the [command reference](commands.md).

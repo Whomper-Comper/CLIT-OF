@@ -307,6 +307,18 @@ IDs are strings. A stored OpenFront username can be `null`. Server approvals use
 
 `verbose` changes safe explanatory error output (default off). `ephemeral` changes ordinary clan and unlink response visibility (default private/on). Both settings persist per server; the debug command's own responses stay private. Errors do not intentionally expose raw API response bodies, stack traces, SQL or tokens.
 
+## Team events
+
+`/event create` opens an officer's private draft. Supply a title, `start` as `YYYY-MM-DD HH:mm`, and an IANA `timezone` such as `America/Bahia`. Repeated daylight-saving times require an explicit `offset` such as `-04:00`; nonexistent local times are rejected. Check the interpreted date, UTC offset and Discord timestamp before selecting **Publish**. Defaults are 20 seats and 120 minutes; supported limits are 1–100 seats, 15–720 minutes, and a start within the next 365 days.
+
+`/event list` displays up to 100 recent/upcoming records in pages of ten. `/event view id:…` provides the link to the canonical public signup card. Use that card's **Join**, **Withdraw**, **Choose squad**, **Reminder**, pagination and **Refresh** controls. Full events or squads place members on a stable first-in reserve list; repeated Join keeps the original queue position. Signups close at the start instant.
+
+Officers use `/event edit id:…` for private detail editing, squad configuration, member moves and delivery status. Squad lines use `id | name | capacity`, one per line (up to 20); capacities must sum to total event capacity. A single `-` clears unoccupied squads. Occupied squads cannot be removed, and capacity cannot fall below confirmed occupancy. `/event cancel id:…` closes the event and queues an update of its public card.
+
+An officer running `/availability suggest` receives private **Draft session** buttons alongside the public count/timestamp suggestions. These create unpublished, empty event drafts; they never sign up members or expose their private schedules. Private menus belong to their opener and expire after ten minutes.
+
+Reminder preferences are opt-in and default off. This implementation stores the chosen 15/30/60-minute lead and each member's preference; automatic reminder delivery and event housekeeping are implemented in the following scheduling work.
+
 ## Common command problems
 
 | Message/symptom | Next step |
