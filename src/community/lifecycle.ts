@@ -15,10 +15,28 @@ export function purgeMember(sql: DatabaseSync, guildId: string, discordId: strin
   purgeIdentity(sql,discordId,guildId); communitySessions.purgeMember(guildId,discordId);
 }
 export function purgeGuild(sql: DatabaseSync, guildId: string): void {
-  for (const table of ["community_event_signups","community_events","community_settings","community_deliveries","community_guild_work","community_availability","community_availability_changes"]) sql.prepare(`DELETE FROM ${table} WHERE guild_id=?`).run(guildId);
+  for (const table of ["community_event_reminder_parts","community_event_signups","community_events","community_settings","community_deliveries","community_guild_work","community_availability","community_availability_changes"]) sql.prepare(`DELETE FROM ${table} WHERE guild_id=?`).run(guildId);
   communitySessions.purgeGuild(guildId);
 }
 export function prune(sql: DatabaseSync, now: number): void {
+  const retired = sql.prepare(`SELECT id,guild_id FROM community_events INDEXED BY community_event_retention
+    WHERE status IN ('scheduled','finished','cancelled') AND retire_at<? ORDER BY retire_at,id LIMIT 20`).all(now-90*86_400_000);
+  for (const row of retired) {
+    // A single event may have arbitrarily many reserves or historical revisions.
+    // Drain bounded child batches before removing the canonical parent.
+    sql.prepare(`DELETE FROM community_event_signups WHERE rowid IN
+      (SELECT rowid FROM community_event_signups WHERE event_id=? LIMIT 200)`).run(row.id!);
+    sql.prepare(`DELETE FROM community_event_reminder_parts WHERE rowid IN
+      (SELECT rowid FROM community_event_reminder_parts WHERE event_id=? LIMIT 200)`).run(row.id!);
+    sql.prepare(`DELETE FROM community_deliveries WHERE id IN
+      (SELECT id FROM community_deliveries WHERE guild_id=? AND kind IN ('event_publish','event_update','event_reminder')
+      AND subject_id=? LIMIT 200)`).run(row.guild_id!,row.id!);
+    if (sql.prepare(`SELECT 1 FROM community_event_signups WHERE event_id=? LIMIT 1`).get(row.id!) ||
+        sql.prepare(`SELECT 1 FROM community_event_reminder_parts WHERE event_id=? LIMIT 1`).get(row.id!) ||
+        sql.prepare(`SELECT 1 FROM community_deliveries WHERE guild_id=? AND kind IN ('event_publish','event_update','event_reminder')
+          AND subject_id=? LIMIT 1`).get(row.guild_id!,row.id!)) continue;
+    sql.prepare('DELETE FROM community_events WHERE id=?').run(row.id!);
+  }
   // Bound each tick's deletion work, retaining active work and diagnostics requiring review.
   sql.prepare(`DELETE FROM community_deliveries WHERE id IN (SELECT id FROM community_deliveries
     WHERE status IN ('sent','cancelled','failed') AND updated_at<? ORDER BY updated_at LIMIT 200)`)

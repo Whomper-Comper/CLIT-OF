@@ -16,6 +16,7 @@ For Discord usage, see [commands](commands.md), [server administration](server-a
 - [8. Database, migration snapshots, and recovery](#8-database-migration-snapshots-and-recovery)
 - [9. Troubleshooting](#9-troubleshooting)
 - [10. Routine maintenance](#10-routine-maintenance)
+- [11. Team events and reminders](#11-team-events-and-reminders)
 
 ## 1. Runtime requirements and deployment boundaries
 
@@ -435,3 +436,15 @@ Start with the failed operation, timestamp, affected server, expected behavior, 
 7. After upgrades, exercise a representative member command, configuration access, one clan sync, and enabled history/recap diagnostics. Local tests cover backup WAL consistency, retention isolation, backup failure, readiness marker ownership, migration behavior, and queue reliability; they do not replace live infrastructure checks.
 
 Implementation references: [configuration](../src/config.ts), [startup/shutdown](../src/index.ts), [registration](../src/deploy-commands.ts), [deployment script](../deploy.sh), [PM2 configuration](../ecosystem.config.cjs), [workflow](../.github/workflows/deploy.yml), [readiness writer](../src/deploymentHealth.ts), [readiness checker](../tools/check-deployment-health.mjs), [backups](../src/backups.ts), [database initialization](../src/db.ts), and [backup/readiness regression tests](../test/backups.test.mjs).
+
+## 11. Team events and reminders
+
+Community officers create and manage events through `/event create` and `/event edit id:…`. Check the interpreted local date, UTC offset and Discord timestamp in the private preview before selecting Publish. A draft is saved before delivery; reopening management shows up to five unresolved publication, card-update or reminder jobs. `/event view` links to the canonical signup card. Its participant pages show twenty people at a time with full confirmed/reserve counts.
+
+Reminders are off by default. An officer may choose a lead of 15, 30 or 60 minutes; each member must separately opt in using Reminder on that event's card. Only currently confirmed, opted-in, present human members can be mentioned. Reserves, withdrawals, departures and disabled choices are filtered again before sending. Reminders stay in the event channel; none are sent by DM. Long recipient lists use stable parts of at most forty people. A later promotion does not move recipients between already queued parts.
+
+Signups close exactly at the saved start instant, even if a public card has not refreshed yet. The minute worker queues disabled controls at start and marks an event finished at its end. Editing an event invalidates its old reminder revision; cancellation closes signups, cancels reminders and queues a card update. A reminder discovered at or after start is skipped. Large queues may take multiple bounded ticks to drain, and request-budget deferral does not consume a delivery attempt.
+
+For a paused job, repair channel access, View Channel, Send Messages, Embed Links and Read Message History as appropriate, then use **Retry / reconcile** in event management. An uncertain send or interrupted send lease requires reconciliation against recent bot messages. The worker binds a proved original post, or edits a known canonical card. If it cannot establish the prior outcome, the job remains Needs review and no second event is automatically posted. Preserve the existing message while investigating; repeated retries are not a way to force a duplicate. An accepted post whose database binding failed also requires review. Recovery is bounded to the most recent 100 channel messages and cannot promise exactly-once delivery.
+
+Departure removes active signups and schedules fresh-membership reserve promotion. The worker shares a roster read across that server's promotion batch and uses targeted fresh member reads for reminder recipients. Ended events and signups remain for ninety days after the event's actual end; cancelled events use their cancellation time. Cleanup starts only after that exact boundary and drains bounded child batches, so very large reserve lists may remain slightly longer. Older cancellation records upgraded from the earlier schema conservatively use the saved event end because their original cancellation time was not recorded. Removing the server clears its community event records. Published Discord messages have a separate lifetime and are not deleted by database retention.

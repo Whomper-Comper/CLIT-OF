@@ -80,3 +80,34 @@ test('squad management atomically grows and shrinks total capacity while preserv
   s.withdraw('g',e.id,'another-red',new Set(['red-member','blue-member']),f.now());await resize(2,'red | Red | 1\nblue | Blue | 1');assert.equal(s.get('g',e.id).capacity,2);assert.deepEqual(s.signups('g',e.id),original);
  }finally{await f.close();}
 });
+
+test('officer management exposes reminder failures and fresh authorization guards deliberate retry', async () => {
+ const f=communityFixture();try {
+  const c=setup(f),s=f.db.community.events,e=s.createDraft(input(f,{reminderMinutes:30}),f.now());
+  const service=new CommunityService(f.client,f.db,f.api,{now:f.now});f.services.push(service);delivery.registerEventWork(service,f.client,f.db);
+  s.requestPublish('g',e.id,1,f.now());await service.runOnce();
+  const user='100000000000000001';f.addMember(user);s.join('g',e.id,user,null,f.now());s.setReminder('g',e.id,user,true,f.now());
+  const send=f.channel.send;f.channel.send=async()=>{throw Object.assign(Error('Missing Permissions'),{code:50013});};
+  f.advance(1800000);await service.runOnce();
+  const job=f.db.community.deliveries.list('g').find(j=>j.kind==='event_reminder');assert.equal(job.status,'paused');
+  const i=interaction(f,'edit',{id:e.id});await c.execute(i);assert.match(JSON.stringify(i.output),/event_reminder: paused/);
+  const retry=control(f,button(i.output,'Retry / reconcile'));f.setRoles('u',[]);
+  await assert.rejects(c.handleInteraction(retry),/officer|manager/i);assert.equal(f.db.community.deliveries.get(job.id).status,'paused');
+  f.setRoles('u',['manager']);await c.handleInteraction(retry);assert.equal(f.db.community.deliveries.get(job.id).status,'pending');
+  f.channel.send=send;await service.runOnce();assert.equal(f.db.community.deliveries.get(job.id).status,'sent');
+  assert.equal(f.calls.sends.length,2);assert.deepEqual(f.calls.sends[1].allowedMentions.users,[user]);
+ }finally{await f.close();}
+});
+
+test('command and delivery rendering never request an unbounded signup list', async () => {
+ const f=communityFixture();try {
+  const c=setup(f),s=f.db.community.events,e=s.createDraft(input(f),f.now());
+  s.signups=()=>{throw Error('Unbounded public read');};
+  const service=new CommunityService(f.client,f.db,f.api,{now:f.now});f.services.push(service);delivery.registerEventWork(service,f.client,f.db);
+  s.requestPublish('g',e.id,1,f.now());await service.runOnce();assert.equal(f.calls.sends.length,1);
+  const view=interaction(f,'view',{id:e.id});await c.execute(view);assert.match(JSON.stringify(view.output),/0\/2 confirmed/);
+  const e2=s.get('g',e.id);const refresh=control(f,`event:${e.id}:refresh:${e2.revision}:1`,{message:{id:e2.messageId}});
+  await c.handleInteraction(refresh);assert.match(JSON.stringify(refresh.output),/Participants|0\/2 confirmed/);
+  s.join('g',e.id,'u',null,f.now());await service.runOnce();assert.equal(f.calls.edits.length,1);
+ }finally{await f.close();}
+});

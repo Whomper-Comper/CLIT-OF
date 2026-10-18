@@ -37,6 +37,8 @@ export class CommunityStore {
       CREATE INDEX IF NOT EXISTS community_delivery_lease ON community_deliveries(status,lease_until);
       CREATE INDEX IF NOT EXISTS community_delivery_subject ON community_deliveries(guild_id,kind,subject_id);
       CREATE INDEX IF NOT EXISTS community_delivery_retention ON community_deliveries(status,updated_at);
+      CREATE INDEX IF NOT EXISTS community_delivery_kind_due ON community_deliveries(kind,status,next_attempt,due_at);
+      CREATE INDEX IF NOT EXISTS community_delivery_kind_lease ON community_deliveries(kind,status,lease_until);
       CREATE TABLE IF NOT EXISTS community_guild_work (guild_id TEXT PRIMARY KEY,last_work INTEGER NOT NULL DEFAULT 0);
       CREATE INDEX IF NOT EXISTS community_guild_order ON community_guild_work(last_work);`);
   }

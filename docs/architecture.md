@@ -11,6 +11,7 @@ This describes the checked-in implementation, not the state of a deployed bot or
 - [API adapter and cache boundaries](#api-adapter-and-cache-boundaries)
 - [SQLite schema catalog](#sqlite-schema-catalog)
 - [History worker, coverage and delivery](#history-worker-coverage-and-delivery)
+- [Event scheduling and delivery](#event-scheduling-and-delivery)
 - [Reporting, arithmetic and graphs](#reporting-arithmetic-and-graphs)
 
 ## Runtime and source map
@@ -223,6 +224,20 @@ Delivery keys deduplicate each part globally and cannot be reused with another g
 An interrupted `sending` lease or uncertain send requires reconciliation against the most recent 100 channel messages, matching the bot's author ID and exact footer marker or separate content marker line. A recovered message is bound without another post. An unresolved result remains `needs_review`; deliberate retry preserves that reconciliation requirement. This is a bounded recovery mechanism, not an exactly-once guarantee across SQLite and Discord. Definite transient rejections back off for 1, 2, 4, 8, 16, then 30 minutes and pause after ten failures. Missing channels/messages/permissions pause immediately. Missing handlers pause; obsolete revisions cancel. Officer retry operations require the saved guild and revision and cannot revive sent or cancelled work.
 
 Lifecycle hooks are wired through effective-account replacement, unlink, member/guild departure, deleted-account ingestion, and guild/global player-history clearing. Same-account re-verification preserves community deduplication while monotonic link timestamps invalidate stale async observations, including unlink/relink within one clock millisecond. Feature plans extend the identity/account/game-evidence hooks when their personal tables exist. Guild departure already removes the shared settings, deliveries, work order and private sessions. Background pruning removes at most 200 completed/cancelled/failed delivery diagnostics per tick after 30 days; paused/review work remains available for intervention.
+
+## Event scheduling and delivery
+
+`community/events.ts` owns saved event revisions, canonical message binding and transactional confirmed/reserve state. Indexed worker fields track reminder due time, end time, retention time and whether the start-time card closure was queued. Initialization upgrades earlier event rows without resetting existing work on restart. Cancellation records its actual instant for retention; earlier rows without that timestamp use the saved end conservatively. Domain and command checks close signups at `now >= startAt`, independently of worker timing.
+
+`registerEventWork()` extends the existing runtime registration with reminder handlers and rotating event housekeeping for at most eight guilds per tick. Each guild selects at most twenty due reminders, closures, ends and promotions through dedicated range indexes. A fresh roster is shared across that guild's promotion batch, followed by event revision/start rechecks. Promotion inspects at most one hundred confirmed members and two hundred FIFO reserve candidates per pass, retaining the due flag when another pass is needed. A failed roster read leaves promotion due and does not block reminder discovery or another guild.
+
+Due reminders persist deterministic forty-member recipient parts, keyed by event/revision/kind/part, in `community_event_reminder_parts`. Snapshots include only confirmed opt-ins at queue time. Preparation filters each part against current signup state, requests just those member IDs freshly from Discord, then rechecks the revision, current clock and signup eligibility after the await. The shared service prepares again after channel/recovery lookups. Parts are never reshuffled after a send, and obsolete or overdue work cancels. The send/edit sanitizers retain only explicit valid user allowlists with empty parsing, empty role lists and disabled reply mentions; ordinary payloads retain the default empty mention policy.
+
+The shared eight-request tick budget now covers task work and delivery membership preparation. A handler may declare `requestBudget`; when that kind has due work, housekeeping leaves enough requests for one job. Event reminders reserve three slots, covering two normal fresh lookups and one additional recovery check. Budget exhaustion defers the lease until the next tick without incrementing attempts or discarding reconciliation state. This avoids indefinite starvation from busy feature tasks while preserving the four-delivery-attempt limit and existing history/role budgets. `CommunityTick.currentTime()` supplies a fresh injected clock after awaits; the original `now` remains the tick snapshot.
+
+All command/publication/update cards use `EventStore.participants()` for a twenty-row page and grouped exact occupancy counts, avoiding materializing arbitrary reserve lists or scanning them once per squad. Full `signups()` remains available to callers that need every entry, and `renderEvent()` retains array compatibility. Event management includes reminder diagnostics in its bounded subject lookup and uses the foundation's deliberate retry/reconcile flow with fresh officer authorization.
+
+Retention selects at most twenty expired event parents using the retention range index. Each selected event drains at most two hundred signups, reminder parts and delivery jobs per table before removing the parent. The ninety-day threshold is strictly after the actual end/cancellation instant; active drafts are retained. The shared thirty-day completed-delivery diagnostic sweep remains independently bounded. Guild removal clears reminder parts along with the other event records; account unlink does not remove unrelated event signups.
 
 ## Reporting, arithmetic and graphs
 

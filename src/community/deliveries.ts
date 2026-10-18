@@ -52,6 +52,16 @@ export class DeliveryStore {
   get(id: string): DeliveryJob | null {
     const row = this.sql.prepare("SELECT * FROM community_deliveries WHERE id=?").get(id); return row ? decode(row) : null;
   }
+  hasDue(kind: string, now: number): boolean {
+    return !!this.sql.prepare(`SELECT 1 FROM community_deliveries WHERE kind=? AND status='pending'
+      AND due_at<=? AND next_attempt<=? LIMIT 1`).get(kind,now,now) ||
+      !!this.sql.prepare(`SELECT 1 FROM community_deliveries WHERE kind=? AND status='sending'
+      AND lease_until<=? LIMIT 1`).get(kind,now);
+  }
+  defer(id: string, leaseId: string, nextAttempt: number, now: number): void {
+    this.sql.prepare(`UPDATE community_deliveries SET status='pending',lease_id=NULL,lease_until=NULL,
+      next_attempt=?,updated_at=? WHERE id=? AND status='sending' AND lease_id=?`).run(nextAttempt,now,id,leaseId);
+  }
   owns(job: DeliveryJob): boolean {
     const current = this.get(job.id);
     return !!current && current.status === "sending" && current.leaseId === job.leaseId;

@@ -14,9 +14,12 @@ export interface DeliveryJob extends DeliveryInput {
   reconcileRequired: boolean;
 }
 export interface PreparedDelivery { payload: MessageCreateOptions; messageId?: string }
-export interface CommunityTick { now: number; takeRequest(): boolean; stopping(): boolean }
+export interface CommunityTick { now: number; currentTime?(): number; takeRequest(): boolean; stopping(): boolean }
 export interface CommunityDeliveryHandler {
-  prepare(job: DeliveryJob, now?: number): Promise<PreparedDelivery | null>;
+  /** Reserve enough tick requests for one due job, including recovery revalidation. */
+  requestBudget?: number;
+  prepare(job: DeliveryJob, now?: number, tick?: CommunityTick): Promise<PreparedDelivery | null>;
   /** Synchronous binding only: runs in the same savepoint as delivery completion. */
   delivered?(job: DeliveryJob, messageId: string): void;
 }
+export class CommunityBudgetExhaustedError extends Error {}
