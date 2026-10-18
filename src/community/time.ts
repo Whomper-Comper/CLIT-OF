@@ -80,8 +80,11 @@ function merge(intervals: Interval[]): Interval[] {
 }
 export function projectAvailability(member: MemberAvailability, start: number, end: number): Interval[] {
   if (!Number.isFinite(start) || !Number.isFinite(end) || end<=start) throw new CommandError("Choose a valid availability projection range.");
+  return projectWithOffsets(member,start,end,offsetIntervals(member.timezone,start,end));
+}
+function projectWithOffsets(member: MemberAvailability, start: number, end: number, offsets: OffsetInterval[]): Interval[] {
   const result: Interval[]=[];
-  for (const segment of offsetIntervals(member.timezone,start,end)) {
+  for (const segment of offsets) {
     const lower=Math.max(start,segment.start), upper=Math.min(end,segment.end);
     if (lower>=upper) continue;
     for (let day=Math.floor((lower+segment.offset)/DAY)*DAY-DAY; day<upper+segment.offset; day+=DAY) {
@@ -103,7 +106,13 @@ export function suggestAvailability(members: MemberAvailability[], now: number, 
   if (!Number.isFinite(now)) throw new CommandError("Choose a valid current time.");
   const end=now+14*DAY,duration=durationMinutes*MINUTE;
   const byMember=new Map<string,Interval[]>();
-  for (const member of members) byMember.set(member.discordId,merge([...(byMember.get(member.discordId)??[]),...projectAvailability(member,now,end)]));
+  // Retain this invocation's distinct zones even when they exceed the persistent cache's bound.
+  const byZone=new Map<string,OffsetInterval[]>();
+  for (const member of members) {
+    let offsets=byZone.get(member.timezone);
+    if (!offsets) { offsets=offsetIntervals(member.timezone,now,end); byZone.set(member.timezone,offsets); }
+    byMember.set(member.discordId,merge([...(byMember.get(member.discordId)??[]),...projectWithOffsets(member,now,end,offsets)]));
+  }
   const candidates: AvailabilitySuggestion[]=[];
   const pointers=new Map<string,number>();
   for (let start=Math.ceil(now/HALF_HOUR)*HALF_HOUR;start+duration<=end;start+=HALF_HOUR) {

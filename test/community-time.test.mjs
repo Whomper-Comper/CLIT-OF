@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { performance } from 'node:perf_hooks';
 import './helpers/community.mjs';
 const { possibleInstants, resolveEventStart, projectAvailability, suggestAvailability } = await import('../dist/community/time.js');
 const window = (weekday, startMinute, endMinute, id = 'w') => ({ id, weekday, startMinute, endMinute });
@@ -79,4 +80,28 @@ test('projection honors the requested date range beyond the suggestion horizon',
   const projected=projectAvailability(member('UTC',[window(0,600,720)]),instant('2026-10-19T00:00Z'),instant('2026-12-01T00:00Z'));
   assert.equal(projected.length,7);
   assert.deepEqual(projected[6],{start:instant('2026-11-30T10:00Z'),end:instant('2026-11-30T12:00Z')});
+});
+
+test('one suggestion call discovers transitions once per zone despite interleaved members exceeding the persistent cache',async(t)=>{
+  const zones=Intl.supportedValuesOf('timeZone').slice(0,129);
+  const schedules=zones.map((zone,index)=>member(zone,[window(0,600,720)],`first-${index}`));
+  // A fresh module instance makes each workload equally cold without changing real Intl behavior.
+  const single=await import('../dist/community/time.js?zone-regression-single');
+  const repeated=await import('../dist/community/time.js?zone-regression-repeated');
+  const now=instant('2026-10-24T12:00Z');
+  const original=Intl.DateTimeFormat.prototype.formatToParts;
+  let calls=0;
+  const observer=t.mock.method(Intl.DateTimeFormat.prototype,'formatToParts',function(...args){calls++;return original.apply(this,args);});
+  try{
+    let started=performance.now();const baseline=single.suggestAvailability(schedules,now,120);
+    const singleCalls=calls,singleMs=performance.now()-started;
+    const interleaved=[...schedules,...schedules.map((schedule,index)=>({...schedule,discordId:`second-${index}`}))];
+    calls=0;started=performance.now();const results=repeated.suggestAvailability(interleaved,now,120);
+    const repeatedCalls=calls,repeatedMs=performance.now()-started;
+    t.diagnostic(JSON.stringify({zones:zones.length,members:interleaved.length,singleCalls,repeatedCalls,singleMs,repeatedMs}));
+    assert.ok(singleCalls>0,'the baseline must exercise real timezone transition discovery');
+    assert.equal(repeatedCalls,singleCalls,'repeating members must reuse transition work within this suggestion invocation');
+    assert.deepEqual(results.map(result=>({start:result.start,end:result.end,count:result.memberIds.length})),
+      baseline.map(result=>({start:result.start,end:result.end,count:result.memberIds.length*2})));
+  }finally{observer.mock.restore();}
 });
