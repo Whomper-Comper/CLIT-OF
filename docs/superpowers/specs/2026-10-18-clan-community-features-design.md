@@ -2,13 +2,13 @@
 
 Date: 2026-10-18
 
-Status: Written design for user review; implementation has not started.
+Status: Written design approved by the user on 2026-10-18; implementation has not started.
 
 ## Intent and approved scope
 
 The user wants all of the following implemented in the existing OpenFront Discord bot: team game scheduling; a challenge wheel with curated map/settings combinations; statistic milestone cards; a server-wide bingo board; recurring member availability with overlap suggestions; a newcomer checklist with officer visibility; event/squad signups with limits, reserves, and optional reminders; and two-player dice duels.
 
-The user approved the conversational design on 2026-10-18. Team scheduling and event/squad signups are one feature. The seven resulting feature areas below form one release with separately testable modules. The detailed defaults in this written document remain subject to review.
+The user approved the conversational design and then this written spec on 2026-10-18. Team scheduling and event/squad signups are one feature. The seven resulting feature areas below form one release with separately testable modules.
 
 Success means members can use all seven features through Discord, officers can manage them without editing files, and saved schedules, signups, awards, boards, and challenges survive a bot restart. Existing identity, statistics, role synchronization, and configuration behavior must continue to work.
 
