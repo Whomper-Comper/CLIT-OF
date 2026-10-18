@@ -182,3 +182,63 @@ test('starting registers one minute timer and immediate work, while stopping cle
     await s.stop();assert.equal(cleared,1);await s.runOnce();assert.equal(runs,2);
   } finally {await f.close();}
 });
+
+const fullEmbed = () => ({title:'T'.repeat(256),description:'D'.repeat(4096),footer:{text:'F'.repeat(1648)}});
+test('delivery marker uses content headroom when an embed already has 6000 characters',async()=>{
+  const f=communityFixture(),embed=fullEmbed();
+  try {
+    const s=service(f,{prepare:async()=>({payload:{content:'Announcement',embeds:[embed]}})});
+    const job=f.db.community.deliveries.enqueue(jobInput(f));await s.runOnce();
+    assert.deepEqual(f.calls.sends[0].embeds,[embed]);
+    assert.equal(f.calls.sends[0].content,`Announcement\n${deliveryMarker(job)}`);
+    assert.equal(f.db.community.deliveries.list('g')[0].status,'sent');
+  } finally {await f.close();}
+});
+test('delivery marker budgets aggregate text across multiple embeds and preserves a full footer',async()=>{
+  const f=communityFixture();
+  try {
+    const cases=[{embeds:[{description:'D'.repeat(3000)},{description:'E'.repeat(3000)}]},
+      {embeds:[{footer:{text:'F'.repeat(2048)}}]}];
+    const s=service(f);
+    for(let index=0;index<cases.length;index++) {
+      const payload=cases[index];s.registerDelivery('test',{prepare:async()=>({payload})});
+      const job=f.db.community.deliveries.enqueue(jobInput(f,{key:`bounds-${index}`}));await s.runOnce();
+      const sent=f.calls.sends[index];assert.deepEqual(sent.embeds,payload.embeds);assert.equal(sent.content,deliveryMarker(job));
+    }
+  } finally {await f.close();}
+});
+test('full embed and content budgets pause with an actionable diagnostic without losing visible information',async()=>{
+  const f=communityFixture(),payload={content:'C'.repeat(2000),embeds:[fullEmbed()]};
+  try {
+    const s=service(f,{prepare:async()=>({payload})});f.db.community.deliveries.enqueue(jobInput(f));await s.runOnce();
+    assert.equal(f.calls.sends.length,0);const job=f.db.community.deliveries.list('g')[0];
+    assert.equal(job.status,'paused');assert.match(job.lastError,/shorten|reduce/i);assert.match(job.lastError,/marker|limit|space/i);
+    assert.equal(payload.content.length,2000);assert.equal(payload.embeds[0].footer.text.length,1648);
+  } finally {await f.close();}
+});
+test('content delivery markers recover an accepted send without a second post',async()=>{
+  const f=communityFixture(),bound=[];
+  try {
+    const s=service(f,{prepare:async()=>({payload:{content:'Announcement',embeds:[fullEmbed()]}}),delivered:(_job,id)=>bound.push(id)});
+    const send=f.channel.send;f.channel.send=async payload=>{await send(payload);throw new Error('timeout after accept');};
+    f.db.community.deliveries.enqueue(jobInput(f));await s.runOnce();
+    assert.equal(f.db.community.deliveries.list('g')[0].status,'sent');assert.deepEqual(bound,['message-1']);assert.equal(f.calls.sends.length,1);
+    assert.ok(f.calls.sends[0].content.startsWith('Announcement\ncommunity:'));
+  } finally {await f.close();}
+});
+test('invalid content or embed field lengths pause before Discord is called',async()=>{
+  const f=communityFixture();
+  try {
+    const cases=[{content:'C'.repeat(2001)},{embeds:[{title:'T'.repeat(257)}]},
+      {embeds:[{description:'D'.repeat(4097)}]},{embeds:[{footer:{text:'F'.repeat(2049)}}]},
+      {embeds:[{author:{name:'A'.repeat(257)}}]},
+      {embeds:[{fields:[{name:'N'.repeat(257),value:'value'}]}]},
+      {embeds:[{fields:[{name:'name',value:'V'.repeat(1025)}]}]}];
+    const s=service(f);
+    for(let index=0;index<cases.length;index++) {
+      s.registerDelivery('test',{prepare:async()=>({payload:cases[index]})});
+      f.db.community.deliveries.enqueue(jobInput(f,{key:`invalid-${index}`}));await s.runOnce();
+    }
+    assert.equal(f.calls.sends.length,0);assert.ok(f.db.community.deliveries.list('g').every(job=>job.status==='paused'));
+  } finally {await f.close();}
+});

@@ -9,13 +9,38 @@ interface Options { now?: () => number; tickMs?: number; maxRequestsPerTick?: nu
 type DeliveryChannel = TextBasedChannel & { send(payload: MessageCreateOptions): Promise<Message> };
 const bounded = (value: number | undefined, fallback: number, maximum: number) =>
   value === undefined || !Number.isFinite(value) ? fallback : Math.max(1,Math.min(maximum,Math.floor(value)));
+class DeliveryPayloadError extends Error {}
 function payloadFor(job: DeliveryJob, payload: MessageCreateOptions): MessageCreateOptions {
   const marker = deliveryMarker(job);
   const embeds = (payload.embeds ?? []).map(embed => "toJSON" in embed ? embed.toJSON() : { ...embed });
+  let characters = 0;
+  const check = (text: string | undefined | null, limit: number): number => {
+    if ((text?.length ?? 0) > limit) throw new DeliveryPayloadError("Community message exceeds Discord text limits. Shorten the content or embed fields, then retry.");
+    return text?.length ?? 0;
+  };
+  check(payload.content,2000);
+  if (embeds.length > 10) throw new DeliveryPayloadError("Community message has too many embeds. Reduce it to ten embeds, then retry.");
+  for (const embed of embeds) {
+    characters += check(embed.title,256) + check(embed.description,4096) + check(embed.footer?.text,2048) + check(embed.author?.name,256);
+    if ((embed.fields?.length ?? 0) > 25) throw new DeliveryPayloadError("Community embed has too many fields. Reduce it to twenty-five fields, then retry.");
+    for (const field of embed.fields ?? []) characters += check(field.name,256) + check(field.value,1024);
+  }
+  if (characters > 6000) throw new DeliveryPayloadError("Community embeds exceed Discord's combined text limit. Shorten their text, then retry.");
   if (!embeds.length) embeds.push({});
-  const first = embeds[0], suffix = ` | ${marker}`;
-  embeds[0] = { ...first, footer: { ...first.footer, text: (first.footer?.text ?? "").slice(0,2048-suffix.length) + suffix } };
-  return { ...payload, embeds, allowedMentions: { parse: [] }, nonce: deliveryNonce(job), enforceNonce: true };
+  let content = payload.content;
+  const index = embeds.findIndex(embed => {
+    const footer = embed.footer?.text ?? "", addition = (footer ? " | " : "") + marker;
+    return footer.length + addition.length <= 2048 && characters + addition.length <= 6000;
+  });
+  if (index >= 0) {
+    const embed = embeds[index], footer = embed.footer?.text ?? "";
+    embeds[index] = { ...embed, footer: { ...embed.footer, text: footer + (footer ? " | " : "") + marker } };
+  } else {
+    const addition = (content ? "\n" : "") + marker;
+    if ((content?.length ?? 0) + addition.length > 2000) throw new DeliveryPayloadError("No space remains for the recovery marker. Shorten the message content or embed text, then retry.");
+    content = (content ?? "") + addition;
+  }
+  return { ...payload, content, embeds, allowedMentions: { parse: [] }, nonce: deliveryNonce(job), enforceNonce: true };
 }
 /** Only fields valid for editing: never forward a create nonce, tts, reference, poll, etc. */
 function editPayload(payload: MessageCreateOptions): MessageEditOptions {
@@ -92,7 +117,8 @@ export class CommunityService {
     const messages = await channel.messages.fetch({ limit: 100 });
     const marker = deliveryMarker(job);
     return messages.find(message => message.author.id === this.client.user?.id &&
-      message.embeds.some(embed => embed.footer?.text?.split(" | ").includes(marker)))?.id ?? null;
+      (message.content?.split("\n").includes(marker) ||
+        message.embeds.some(embed => embed.footer?.text?.split(" | ").includes(marker))))?.id ?? null;
   }
   private complete(job: DeliveryJob, messageId: string, handler: CommunityDeliveryHandler): void {
     this.db.community.transaction(() => {
@@ -150,6 +176,7 @@ export class CommunityService {
       this.complete(job,message.id,handler);
     } catch (error) {
       if (accepted) { fail("needs_review",new Error(`Discord accepted the message but saving its binding failed: ${errorText(error)}`)); return; }
+      if (error instanceof DeliveryPayloadError) { fail("paused",error); return; }
       if (permissionFailure(error)) { fail("paused",error); return; }
       if (!attempted || definiteFailure(error)) { fail("transient",error); return; }
       // A network failure after send may mean Discord accepted it. Never blindly repost.

@@ -14,7 +14,7 @@ export function communityFixture() {
     messages: { fetch: async (input) => typeof input === 'string' ? messages.get(input) : messages },
     send: async (payload) => {
       calls.sends.push(payload);
-      const message = { id: `message-${calls.sends.length}`, author: { id: 'bot' }, embeds: payload.embeds,
+      const message = { id: `message-${calls.sends.length}`, author: { id: 'bot' }, content: payload.content ?? '', embeds: payload.embeds,
         edit: async (payload) => { calls.edits.push(payload); return message; } };
       messages.set(message.id, message);
       return message;
