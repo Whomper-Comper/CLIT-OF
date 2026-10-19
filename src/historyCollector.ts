@@ -70,7 +70,8 @@ export class HistoryCollector {
     this.db.history.pruneEloObservations(now);
     for (const settings of allSettings) this.db.history.retain(settings.guild_id,settings.retention_days,now);
     let remaining = Math.max(1,Math.min(50,this.options.maxRequestsPerTick ?? 8));
-    const needsDeletionSync = allSettings.some(settings=>settings.player_history_enabled) || this.db.history.hasEloObservations();
+    const needsDeletionSync = allSettings.some(settings=>settings.player_history_enabled) || this.db.history.hasEloObservations() ||
+      this.db.community.settings.list().some(settings => settings.milestonesEnabled);
     const deletion = needsDeletionSync ? await this.deletionSync(now) : {healthy:true,requests:0};
     remaining -= deletion.requests;
     if (this.stopping) return;

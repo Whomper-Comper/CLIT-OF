@@ -29,6 +29,9 @@ export function purgeGuild(sql: DatabaseSync, guildId: string): void {
   communitySessions.purgeGuild(guildId);
 }
 export function prune(sql: DatabaseSync, now: number): void {
+  sql.prepare(`DELETE FROM community_milestone_account_attempts WHERE public_id IN (
+    SELECT public_id FROM community_milestone_account_attempts WHERE next_attempt<?
+    ORDER BY next_attempt,public_id LIMIT 200)`).run(now);
   const retired = sql.prepare(`SELECT id,guild_id FROM community_events INDEXED BY community_event_retention
     WHERE status IN ('scheduled','finished','cancelled') AND retire_at<? ORDER BY retire_at,id LIMIT 20`).all(now-90*86_400_000);
   for (const row of retired) {

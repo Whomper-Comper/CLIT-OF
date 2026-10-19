@@ -157,6 +157,10 @@ Same-account verification preserves earned cards. Account replacement, unlink, a
 
 Eligible background attempts are spaced at least 15 minutes apart. Failed or incomplete checks retain a durable exponential backoff, capped at six hours, while other due members can progress. A successful complete observation resets the interval. Announcement settings and eligibility are checked again around asynchronous profile work by the milestone worker.
 
+`/milestones view` privately shows earned cards and upcoming thresholds for the caller's current effective link. `/milestones configure` privately controls opt-in public cards and delivery recovery with existing configuration access. Cards identify the member, public profile, crossed thresholds, exact observed totals and observation time; observation time is not a claim about when an old achievement happened. Several crossings in one check produce one saved delivery.
+
+Automatic profile polling is spaced globally per public account, including an account linked in several servers and across restarts. Each server retains its own baseline, awards and failure backoff. Same-tick profile evidence may initialize several servers without another profile request. Queued delivery/recovery checks current clan eligibility separately and can make a budgeted fresh profile request before that polling interval ends; it never turns that validation into a new counter observation. Evidence is valid for at most 60 seconds, while fresh Discord membership and current local guards are checked after awaits. Unhealthy deletion-feed synchronization pauses automatic polling and queued sending even when match-history collection is disabled. Private earned cards remain available.
+
 ## Filtered match statistics
 
 A recent period or map selects the account's `/games` history and calculates results from records that match the exact public ID, selected scope/mode, time range, and normalized map.

@@ -43,6 +43,11 @@ export class MilestoneStore {
       CREATE INDEX IF NOT EXISTS community_milestone_due ON community_milestone_candidates(guild_id,next_attempt,discord_id);
       CREATE INDEX IF NOT EXISTS community_milestone_candidate_account ON community_milestone_candidates(public_id);
       CREATE INDEX IF NOT EXISTS community_milestone_candidate_identity ON community_milestone_candidates(discord_id,guild_id);
+      CREATE TABLE IF NOT EXISTS community_milestone_account_attempts (
+      public_id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,discord_id TEXT NOT NULL,next_attempt INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS community_milestone_account_due ON community_milestone_account_attempts(next_attempt,public_id);
+      CREATE INDEX IF NOT EXISTS community_milestone_account_identity ON community_milestone_account_attempts(discord_id,guild_id);
+      CREATE INDEX IF NOT EXISTS community_milestone_account_guild ON community_milestone_account_attempts(guild_id);
       CREATE TABLE IF NOT EXISTS community_milestone_intents (
       id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,discord_id TEXT NOT NULL,public_id TEXT NOT NULL,linked_at TEXT NOT NULL,
       generation TEXT,settings_revision INTEGER NOT NULL,observed_at INTEGER NOT NULL,awards TEXT NOT NULL);
@@ -124,6 +129,36 @@ export class MilestoneStore {
     return this.sql.prepare(`SELECT discord_id FROM community_milestone_candidates
       WHERE guild_id=? AND next_attempt<=? ORDER BY next_attempt,discord_id LIMIT ?`)
       .all(guildId, now, take).map(row => String(row.discord_id));
+  }
+
+  /** Exclude globally reserved accounts before LIMIT so blocked members cannot starve later ones.
+   * Fresh same-tick profile evidence may be applied to another guild without another profile request. */
+  duePollingMembers(guildId: string, now: number, limit: number, freshPublicIds: string[] = []): string[] {
+    const take = Number.isFinite(limit) ? Math.max(0, Math.min(200, Math.floor(limit))) : 0;
+    return this.sql.prepare(`SELECT c.discord_id FROM community_milestone_candidates c
+      LEFT JOIN community_milestone_account_attempts a ON a.public_id=c.public_id
+      WHERE c.guild_id=? AND c.next_attempt<=? AND
+      (a.public_id IS NULL OR a.next_attempt<=? OR c.public_id IN (SELECT value FROM json_each(?)))
+      ORDER BY c.next_attempt,c.discord_id LIMIT ?`)
+      .all(guildId, now, now, JSON.stringify(freshPublicIds), take).map(row => String(row.discord_id));
+  }
+
+  /** The account gate and guild reservation commit together, before any automatic profile fetch.
+   * A blocked account leaves the guild's durable backoff unchanged. No profile payload is retained. */
+  markPollingAttempt(binding: IdentityBinding, now: number, generation = this.candidateGeneration(binding), reuseFreshProfile = false): boolean {
+    return withCommunityTransaction(this.sql, () => {
+      this.assertCurrent(binding, generation);
+      const account = this.sql.prepare('SELECT next_attempt FROM community_milestone_account_attempts WHERE public_id=?').get(binding.publicId);
+      if (!reuseFreshProfile && account && Number(account.next_attempt) > now) return false;
+      if (!this.markAttempt(binding, now, generation)) return false;
+      if (!reuseFreshProfile) {
+        this.sql.prepare(`INSERT INTO community_milestone_account_attempts(public_id,guild_id,discord_id,next_attempt) VALUES(?,?,?,?)
+          ON CONFLICT(public_id) DO UPDATE SET next_attempt=excluded.next_attempt,
+          guild_id=excluded.guild_id,discord_id=excluded.discord_id`)
+          .run(binding.publicId, binding.guildId, binding.discordId, now + POLL_INTERVAL);
+      }
+      return true;
+    });
   }
 
   /** Persist before fetching: failures wait 15m, 30m, 1h ... capped at 6h. Success resets backoff. */
@@ -215,6 +250,13 @@ export function purgeMilestones(sql: DatabaseSync, scope: 'identity' | 'account'
   const column = scope === 'identity' ? 'discord_id' : scope === 'account' ? 'public_id' : 'guild_id';
   const clause = `${column}=?${guildId === undefined ? '' : ' AND guild_id=?'}`;
   const args = guildId === undefined ? [id] : [id, guildId];
+  // Origin IDs let unlink/departure clear a failed attempt even after inventory removed its candidate.
+  const accounts = scope === 'account' ? [{ public_id: id }] : sql.prepare(`
+    SELECT public_id FROM community_milestone_candidates WHERE ${clause}
+    UNION SELECT public_id FROM community_milestone_observations WHERE ${clause}
+    UNION SELECT public_id FROM community_milestone_intents WHERE ${clause}
+    UNION SELECT public_id FROM community_milestone_account_attempts WHERE ${clause}`)
+    .all(...args, ...args, ...args, ...args);
   sql.prepare(`DELETE FROM community_deliveries WHERE kind='milestone' AND subject_id IN
     (SELECT id FROM community_milestone_intents WHERE ${clause})`).run(...args);
   sql.prepare(`DELETE FROM community_milestone_thresholds WHERE (guild_id,public_id) IN
@@ -222,4 +264,17 @@ export function purgeMilestones(sql: DatabaseSync, scope: 'identity' | 'account'
   for (const table of ['community_milestone_observations', 'community_milestone_candidates', 'community_milestone_intents']) {
     sql.prepare(`DELETE FROM ${table} WHERE ${clause}`).run(...args);
   }
+  const affected = JSON.stringify(accounts.map(account => account.public_id));
+  // Transfer minimal ownership metadata to a remaining candidate; retain no departed origin IDs.
+  sql.prepare(`UPDATE community_milestone_account_attempts SET (guild_id,discord_id)=(
+    SELECT c.guild_id,c.discord_id FROM community_milestone_candidates c
+    WHERE c.public_id=community_milestone_account_attempts.public_id ORDER BY c.guild_id,c.discord_id LIMIT 1)
+    WHERE public_id IN (SELECT value FROM json_each(?)) AND EXISTS
+    (SELECT 1 FROM community_milestone_candidates c WHERE c.public_id=community_milestone_account_attempts.public_id)`)
+    .run(affected);
+  // Other guilds still sharing this account retain their live cadence reservation.
+  sql.prepare(`DELETE FROM community_milestone_account_attempts
+    WHERE public_id IN (SELECT value FROM json_each(?)) AND NOT EXISTS
+    (SELECT 1 FROM community_milestone_candidates c WHERE c.public_id=community_milestone_account_attempts.public_id)`)
+    .run(affected);
 }

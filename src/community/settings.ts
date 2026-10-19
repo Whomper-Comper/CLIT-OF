@@ -7,18 +7,25 @@ export interface CommunitySettings {
   guildId: string; revision: number; milestonesEnabled: boolean; milestoneChannelId: string | null;
   gameThresholds: string[]; winThresholds: string[];
 }
+function decode(row: Record<string, unknown>): CommunitySettings {
+  return {
+    guildId: String(row.guild_id), revision: Number(row.revision),
+    milestonesEnabled: !!row.milestones_enabled,
+    milestoneChannelId: row.milestone_channel_id as string | null,
+    gameThresholds: JSON.parse(String(row.game_thresholds)),
+    winThresholds: JSON.parse(String(row.win_thresholds)),
+  };
+}
 export class CommunitySettingsStore {
   constructor(private readonly sql: DatabaseSync) {}
   get(guildId: string): CommunitySettings {
     const row = this.sql.prepare("SELECT * FROM community_settings WHERE guild_id=?").get(guildId);
-    return row ? { guildId, revision: Number(row.revision), milestonesEnabled: !!row.milestones_enabled,
-      milestoneChannelId: row.milestone_channel_id as string | null,
-      gameThresholds: JSON.parse(String(row.game_thresholds)), winThresholds: JSON.parse(String(row.win_thresholds)) } :
+    return row ? decode(row) :
       { guildId, revision: 0, milestonesEnabled: false, milestoneChannelId: null,
         gameThresholds: ["10", "50", "100", "250", "500"], winThresholds: ["1", "10", "25", "50", "100"] };
   }
   list(): CommunitySettings[] {
-    return this.sql.prepare("SELECT guild_id FROM community_settings ORDER BY guild_id").all().map(row => this.get(String(row.guild_id)));
+    return this.sql.prepare("SELECT * FROM community_settings ORDER BY guild_id").all().map(decode);
   }
   save(guildId: string, draft: Omit<CommunitySettings, "guildId" | "revision">, expectedRevision: number): CommunitySettings {
     validateMilestoneThresholds({ games: draft.gameThresholds, wins: draft.winThresholds });
@@ -31,6 +38,9 @@ export class CommunitySettingsStore {
         milestones_enabled=excluded.milestones_enabled,milestone_channel_id=excluded.milestone_channel_id,
         game_thresholds=excluded.game_thresholds,win_thresholds=excluded.win_thresholds`)
         .run(guildId, Number(draft.milestonesEnabled), draft.milestoneChannelId, JSON.stringify(draft.gameThresholds), JSON.stringify(draft.winThresholds));
+      // A saved revision invalidates every unsent old-destination intent, including leased work.
+      this.sql.prepare(`UPDATE community_deliveries SET status='cancelled',lease_id=NULL,lease_until=NULL
+        WHERE guild_id=? AND kind='milestone' AND status NOT IN ('sent','cancelled')`).run(guildId);
       return this.get(guildId);
     });
   }

@@ -13,6 +13,7 @@ This guide covers configuration and routine clan management inside Discord. For 
 - [Review membership, coverage and audit](#review-membership-coverage-and-audit)
 - [Use diagnostics and debug tools](#use-diagnostics-and-debug-tools)
 - [Enable history and weekly recaps](#enable-history-and-weekly-recaps)
+- [Milestone announcements](#milestone-announcements)
 - [Change or remove clan configurations](#change-or-remove-clan-configurations)
 - [Permission and role troubleshooting](#permission-and-role-troubleshooting)
 - [Source map](#source-map)
@@ -299,3 +300,10 @@ Wheel management uses the community manager/officer/leader role rules. `/wheel p
 A preset is a complete compatible hosting package. Free For All must leave teams as `none`; Team requires a numeric team count or Duos, Trios, Quads, or Humans Vs Nations. Bots allow 0–400; nations allow `default`, `disabled`, or 1–400. Humans Vs Nations requires nations enabled even with zero bots. Normal/Compact map sizes, the four explicit supported maps and supported unit names are validated before preview/save. Extend these catalogs through a reviewed source change.
 
 Each guild starts with six editable presets once. Removing all of them intentionally leaves an empty wheel; disabled/empty wheels give actionable officer guidance. Server removal clears presets and their initialization marker. Existing public spins have their own message lifetime. An officer's private draft button snapshots the chosen map/settings/instructions and cannot publish or enroll members automatically.
+## Milestone announcements
+
+Open `/milestones configure` with Manage Server or the configured config role. Announcements default to off. Choose a server text or announcement channel where the bot has View Channel, Send Messages, Embed Links and Read Message History, review the games/wins thresholds, enable announcements and Save. Channel selection and toggles are drafts until saved. Each privileged action freshly checks membership and configuration access, including after destination validation.
+
+The default public Team lifetime thresholds are games 10/50/100/250/500 and wins 1/10/25/50/100. Each metric accepts zero to ten ascending, unique positive integers; blank disables that metric. Existing earned cards remain privately visible when thresholds or announcements are disabled. Baselines and newly introduced thresholds initialize quietly; later crossings combine into one card per observed member check. An approval role alone is not current OpenFront clan membership.
+
+Use the private delivery diagnostics and **Retry / reconcile** controls after fixing channel permissions. Uncertain sends reconcile bot-authored recovery markers; an unproven outcome stays reviewable. Saving new settings invalidates unsent deliveries captured under the old revision. Milestone enablement also keeps the account-deletion feed synchronized when match-history collection is off; an unhealthy or stale checkpoint pauses automatic polling and sending.

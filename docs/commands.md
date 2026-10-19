@@ -15,6 +15,7 @@ This reference describes the commands registered by `src/commands/index.ts` and 
 - [/config](#config)
 - [/clan](#clan)
 - [/debug](#debug)
+- [Statistic milestones](#statistic-milestones)
 - [Common command problems](#common-command-problems)
 
 ## Entering commands
@@ -23,7 +24,7 @@ Type `/` in Discord, choose the bot's command, then fill in Discord's named inpu
 
 `/clan` has one required **action option**, not slash subcommands: use `/clan action:sync`, not `/clan sync`. Likewise use `/debug action:status`. Discord can show a friendly label for a choice while its underlying value is the value documented here.
 
-There are nine registered commands: `/link`, `/unlink`, `/whois`, `/stats`, `/clan`, `/config`, `/debug`, `/dice`, and `/availability`. `/config`, `/clan`, `/debug`, and `/availability` are explicitly server-only. The other builders do not declare a server-only context; availability outside servers also depends on the application's installation and Discord command contexts. In a DM, identity lookups use verified bot-wide links, not server approvals.
+There are thirteen registered commands: `/link`, `/unlink`, `/whois`, `/stats`, `/clan`, `/config`, `/debug`, `/dice`, `/availability`, `/event`, `/onboarding`, `/wheel`, and `/milestones`. `/config`, `/clan`, `/debug`, `/availability`, `/event`, `/onboarding`, `/wheel`, and `/milestones` are explicitly server-only. The other builders do not declare a server-only context; availability outside servers also depends on the application's installation and Discord command contexts. In a DM, identity lookups use verified bot-wide links, not server approvals.
 
 ### Accepted identity inputs
 
@@ -326,6 +327,14 @@ Reminder preferences are opt-in and default off. This implementation stores the 
 Save availability with `/availability set` and find an event with `/event list`. A reserve place, withdrawn signup or cancelled event does not complete the event step. A confirmed future signup or retained past signup does; this records signup, not attendance. Past signup evidence expires with the event's 90-day retention eligibility even while cleanup is draining older rows.
 
 Community officers can use `/onboarding status user:@Member clan:MARS` for private inspection without enrolling that member. `/onboarding queue page:1` privately shows enrolled current members ten at a time, their next step and waiting/unknown guidance. Only linked members on the displayed page require profile lookups. **Previous**, **Next**, and **Refresh** reread current state, recheck officer access and allow one action per ten seconds. Private menus belong to their opener, server, channel and original message and expire after ten minutes. Onboarding remains private regardless of ordinary-reply debug settings.
+
+## Statistic milestones
+
+`/milestones view` privately shows your linked account's earned and upcoming public Team lifetime milestones. Initial observations and newly added thresholds earn quietly. Refresh retries unavailable statistics; saved earned cards remain visible during an upstream outage or when announcements are off. Current OpenFront clan membership is required to save a new observation; a Discord approval role alone does not qualify.
+
+`/milestones configure` is private and requires Manage Server or the configured config role. Select a text or announcement channel, optionally edit up to ten ascending unique positive integer thresholds for each metric, enable announcements, and press **Save**. Either threshold list may be empty; both empty pauses automatic profile polling. Draft changes do not apply until saved. Private menus expire after ten minutes and bind their owner, server, channel and message. Every configuration action refreshes access; a changed saved revision requires Refresh or reopening the menu.
+
+The configuration menu lists failed, paused and uncertain deliveries ten at a time. Choose a delivery and use **Retry / reconcile** after correcting permissions. Uncertain sends search for the original bot message before completing; an unproven outcome remains available for review instead of automatically posting a duplicate. Saving any milestone setting cancels unsent jobs from the previous settings revision. Earned milestones remain available in your private view.
 
 ## Common command problems
 

@@ -1,5 +1,5 @@
 import { ChatInputCommandInteraction, Guild, PermissionFlagsBits } from "discord.js";
-import { db } from "./db.js";
+import { db, type BotDatabase } from "./db.js";
 import { CommandError } from "./commands/support.js";
 
 export function checkClanAccess(interaction: ChatInputCommandInteraction<"cached">) {
@@ -27,14 +27,14 @@ export function checkConfigAccess(i: ChatInputCommandInteraction<"cached">) {
   }
 }
 
-export async function hasConfigAccess(guild: Guild, user: string): Promise<boolean> {
+export async function hasConfigAccess(guild: Guild, user: string, database: BotDatabase = db): Promise<boolean> {
   const member = await guild.members.fetch({ user, force: true });
-  const role = db.getGuildSettings(guild.id)?.manager_role_id;
+  const role = database.getGuildSettings(guild.id)?.manager_role_id;
   return member.permissions.has(PermissionFlagsBits.ManageGuild) || !!role && member.roles.cache.has(role);
 }
 
-export async function requireConfigAccess(guild: Guild, user: string) {
-  if (!await hasConfigAccess(guild, user)) throw new CommandError("You need Manage Server permission or the configured config role to change configuration.");
+export async function requireConfigAccess(guild: Guild, user: string, database: BotDatabase = db) {
+  if (!await hasConfigAccess(guild, user, database)) throw new CommandError("You need Manage Server permission or the configured config role to change configuration.");
 }
 
 /** Debug exports require the explicitly selected role, including for owners and administrators. */
