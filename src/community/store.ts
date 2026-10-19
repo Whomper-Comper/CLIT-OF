@@ -9,8 +9,11 @@ import { OnboardingStore } from "./onboarding.js";
 import { WheelStore } from "./wheel.js";
 import { MilestoneStore } from "./milestones.js";
 import type { IdentityBinding } from "./types.js";
+import { BingoStore } from "./bingo.js";
+import { clearBingoEvidence, retainBingoEvidence } from "./bingoLifecycle.js";
 
 export class CommunityStore {
+  readonly bingo: BingoStore;
   readonly milestones: MilestoneStore;
   readonly wheel: WheelStore;
   readonly deliveries: DeliveryStore;
@@ -19,9 +22,10 @@ export class CommunityStore {
   readonly events: EventStore;
   readonly onboarding: OnboardingStore;
   constructor(private readonly sql: DatabaseSync, identityCurrent?: (binding: IdentityBinding) => boolean) {
+    this.bingo = new BingoStore(sql, identityCurrent);
     this.milestones = new MilestoneStore(sql, identityCurrent);
     this.deliveries = new DeliveryStore(sql); this.settings = new CommunitySettingsStore(sql);
-    this.availability = new AvailabilityStore(sql);
+    this.availability = new AvailabilityStore(sql, (guildId, discordId) => clearBingoEvidence(sql, 'availability', discordId, guildId));
     this.events = new EventStore(sql);
     this.onboarding = new OnboardingStore(sql);
     this.wheel = new WheelStore(sql);
@@ -59,6 +63,7 @@ export class CommunityStore {
       CREATE INDEX IF NOT EXISTS community_delivery_kind_lease ON community_deliveries(kind,status,lease_until);
       CREATE TABLE IF NOT EXISTS community_guild_work (guild_id TEXT PRIMARY KEY,last_work INTEGER NOT NULL DEFAULT 0);
       CREATE INDEX IF NOT EXISTS community_guild_order ON community_guild_work(last_work);`);
+    BingoStore.initialize(sql);
   }
   transaction<T>(action: () => T): T { return withCommunityTransaction(this.sql,action); }
   purgeIdentity(discordId: string, guildId?: string): void { this.transaction(() => lifecycle.purgeIdentity(this.sql,discordId,guildId)); }
@@ -66,5 +71,8 @@ export class CommunityStore {
   purgeMember(guildId: string, discordId: string): void { this.transaction(() => lifecycle.purgeMember(this.sql,guildId,discordId)); }
   purgeGuild(guildId: string): void { this.transaction(() => lifecycle.purgeGuild(this.sql,guildId)); }
   clearGameEvidence(guildId?: string): void { this.transaction(() => lifecycle.clearGameEvidence(this.sql,guildId)); }
+  retainGameEvidence(guildId: string, cutoff: number): void {
+    this.transaction(() => retainBingoEvidence(this.sql, guildId, cutoff));
+  }
   prune(now: number): void { this.transaction(() => lifecycle.prune(this.sql,now)); }
 }

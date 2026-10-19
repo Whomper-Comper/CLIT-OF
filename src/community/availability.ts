@@ -27,7 +27,7 @@ function decode(row: Record<string, unknown>): MemberAvailability {
     windows:JSON.parse(String(row.windows)),revision:Number(row.revision),updatedAt:Number(row.updated_at)};
 }
 export class AvailabilityStore {
-  constructor(private readonly sql: DatabaseSync) {}
+  constructor(private readonly sql: DatabaseSync, private readonly cleared?: (guildId: string, discordId: string) => void) {}
   get(guildId:string,discordId:string): MemberAvailability|null {
     const row=this.sql.prepare("SELECT * FROM community_availability WHERE guild_id=? AND discord_id=? AND windows IS NOT NULL").get(guildId,discordId);
     return row?decode(row):null;
@@ -51,7 +51,10 @@ export class AvailabilityStore {
         this.sql.prepare(`INSERT INTO community_availability_changes(guild_id,discord_id,changed_at,revision) VALUES(?,?,?,?)
           ON CONFLICT(guild_id,discord_id) DO UPDATE SET changed_at=excluded.changed_at,revision=excluded.revision`)
           .run(input.guildId,input.discordId,now,saved.revision);
-      } else this.sql.prepare("DELETE FROM community_availability_changes WHERE guild_id=? AND discord_id=?").run(input.guildId,input.discordId);
+      } else {
+        this.sql.prepare("DELETE FROM community_availability_changes WHERE guild_id=? AND discord_id=?").run(input.guildId,input.discordId);
+        this.cleared?.(input.guildId, input.discordId);
+      }
       return saved;
     });
   }
@@ -60,6 +63,7 @@ export class AvailabilityStore {
     withCommunityTransaction(this.sql,()=>{
       this.sql.prepare("UPDATE community_availability SET windows=NULL,timezone='',updated_at=0,revision=revision+1 WHERE guild_id=? AND discord_id=? AND windows IS NOT NULL").run(guildId,discordId);
       this.sql.prepare("DELETE FROM community_availability_changes WHERE guild_id=? AND discord_id=?").run(guildId,discordId);
+      this.cleared?.(guildId, discordId);
     });
   }
 }

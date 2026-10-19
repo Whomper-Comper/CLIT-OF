@@ -28,6 +28,7 @@ export class HistoryStore {
   constructor(private readonly db: DatabaseSync, private readonly cleanup?: {
     purgeAccount(publicId: string): void;
     clearGameEvidence(guildId?: string): void;
+    retainGameEvidence?(guildId: string, cutoff: number): void;
   }) {}
   /** Called inside BotDatabase's backed-up migration transaction. */
   static initialize(db: DatabaseSync) {
@@ -115,6 +116,7 @@ export class HistoryStore {
       .run(guild,draft.clan_history_enabled,draft.player_history_enabled,draft.collection_enabled,draft.weekly_enabled,draft.channel_id,
         draft.poll_minutes,draft.retention_days,draft.weekly_day,draft.weekly_hour,draft.timezone,iso(Date.now()));
     if (!draft.player_history_enabled) this.clearGuildPlayerHistory(guild);
+    else if (!draft.collection_enabled) this.cleanup?.clearGameEvidence(guild);
     return this.getSettings(guild);
   }
   getWeeklyEnabledAt(guild: string): string | null {
@@ -141,7 +143,9 @@ export class HistoryStore {
   upsertPlayerMatches(guild: string, publicId: string, discordId: string, matches: OpenFrontPlayerSession[]) {
     if (this.isDeleted(publicId)) return;
     const statement = this.db.prepare(`INSERT INTO history_player_matches(guild_id,public_id,discord_id,game_id,game_start,payload) VALUES(?,?,?,?,?,?)
-      ON CONFLICT(guild_id,public_id,game_id) DO UPDATE SET discord_id=excluded.discord_id,game_start=excluded.game_start,payload=excluded.payload`);
+      ON CONFLICT(guild_id,public_id,game_id) DO UPDATE SET discord_id=excluded.discord_id,game_start=excluded.game_start,payload=excluded.payload
+      WHERE history_player_matches.discord_id IS NOT excluded.discord_id OR history_player_matches.game_start IS NOT excluded.game_start
+      OR history_player_matches.payload IS NOT excluded.payload`);
     this.savePage(() => {
       for (const match of matches) statement.run(guild,publicId,discordId,match.gameId,iso(Date.parse(match.gameStart)),JSON.stringify(match));
     });
@@ -330,6 +334,7 @@ export class HistoryStore {
     const cutoff = iso(dayFloor(now-days*DAY));
     this.db.prepare("DELETE FROM history_clan_matches WHERE guild_id=? AND game_start<?").run(guild,cutoff);
     this.db.prepare("DELETE FROM history_player_matches WHERE guild_id=? AND game_start<?").run(guild,cutoff);
+    this.cleanup?.retainGameEvidence?.(guild, Date.parse(cutoff));
     const eloDays = Number.isFinite(days) ? Math.max(1,Math.min(365,days)) : 90;
     this.db.prepare("DELETE FROM history_observed_elo WHERE guild_id=? AND observed_at<?").run(guild,iso(now-eloDays*DAY));
     this.db.prepare("DELETE FROM history_coverage WHERE guild_id=? AND end<?").run(guild,cutoff);

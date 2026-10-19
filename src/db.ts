@@ -112,6 +112,7 @@ export class BotDatabase {
     this.history = new HistoryStore(this.db, {
       purgeAccount: publicId => this.community.purgeAccount(publicId),
       clearGameEvidence: guildId => this.community.clearGameEvidence(guildId),
+      retainGameEvidence: (guildId, cutoff) => this.community.retainGameEvidence(guildId, cutoff),
     });
   }
   private transaction<T>(action: () => T): T {

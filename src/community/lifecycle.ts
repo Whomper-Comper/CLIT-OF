@@ -1,19 +1,25 @@
 import type { DatabaseSync } from "node:sqlite";
 import { communitySessions } from "./sessions.js";
 import { purgeMilestones } from "./milestones.js";
+import { clearBingoEvidence, purgeBingoGuild, pruneBingo } from './bingoLifecycle.js';
 
 /** Feature-owned personal tables extend these hooks as their stores are introduced. */
 export function purgeIdentity(sql: DatabaseSync, discordId: string, guildId?: string): void {
+  clearBingoEvidence(sql, 'identity', discordId, guildId);
   purgeMilestones(sql, 'identity', discordId, guildId);
   sql.prepare(`UPDATE community_onboarding SET completed_at=NULL,public_id=NULL,token=hex(randomblob(16)) WHERE discord_id=?${guildId===undefined?'':' AND guild_id=?'}`)
     .run(...(guildId===undefined?[discordId]:[discordId,guildId]));
 }
 export function purgeAccount(sql: DatabaseSync, publicId: string): void {
+  clearBingoEvidence(sql, 'account', publicId);
   purgeMilestones(sql, 'account', publicId);
   sql.prepare(`UPDATE community_onboarding SET completed_at=NULL,public_id=NULL,token=hex(randomblob(16)) WHERE public_id=?`).run(publicId);
 }
-export function clearGameEvidence(_sql: DatabaseSync, _guildId?: string): void {}
+export function clearGameEvidence(sql: DatabaseSync, guildId?: string): void {
+  clearBingoEvidence(sql, 'games', undefined, guildId);
+}
 export function purgeMember(sql: DatabaseSync, guildId: string, discordId: string): void {
+  clearBingoEvidence(sql, 'member', discordId, guildId);
   sql.prepare(`UPDATE community_events SET promotion_due=1 WHERE guild_id=? AND status='scheduled' AND id IN
     (SELECT event_id FROM community_event_signups WHERE guild_id=? AND discord_id=?)`).run(guildId,guildId,discordId);
   sql.prepare(`DELETE FROM community_event_signups WHERE guild_id=? AND discord_id=? AND event_id IN
@@ -24,11 +30,13 @@ export function purgeMember(sql: DatabaseSync, guildId: string, discordId: strin
   purgeIdentity(sql,discordId,guildId); communitySessions.purgeMember(guildId,discordId);
 }
 export function purgeGuild(sql: DatabaseSync, guildId: string): void {
+  purgeBingoGuild(sql, guildId);
   purgeMilestones(sql, 'guild', guildId);
   for (const table of ["community_wheel_presets","community_wheel_initialized","community_onboarding","community_event_reminder_parts","community_event_signups","community_events","community_settings","community_deliveries","community_guild_work","community_availability","community_availability_changes"]) sql.prepare(`DELETE FROM ${table} WHERE guild_id=?`).run(guildId);
   communitySessions.purgeGuild(guildId);
 }
 export function prune(sql: DatabaseSync, now: number): void {
+  pruneBingo(sql, now);
   sql.prepare(`DELETE FROM community_milestone_account_attempts WHERE public_id IN (
     SELECT public_id FROM community_milestone_account_attempts WHERE next_attempt<?
     ORDER BY next_attempt,public_id LIMIT 200)`).run(now);

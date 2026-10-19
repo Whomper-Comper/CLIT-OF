@@ -410,3 +410,11 @@ No. Linking establishes identity. Optional background collection and interactive
 - [Persistent collection, deletion checks, and delivery](../src/historyCollector.ts).
 - [History settings, observations, jobs, coverage, and purges](../src/historyStore.ts).
 - [Local weekly period and scheduling calculations](../src/historySchedule.ts).
+
+## Shared bingo observations
+
+Shared bingo game progress uses retained player sessions with collection and player history enabled and a healthy deletion feed. A match must start on or after board creation and before its optional closing time, have a valid end, use Public/Team mode, carry a configured clan tag and belong to a currently eligible effective identity/member. Late collection can contribute an eligible match; a match starting before the board never contributes. Repeated polling counts each account/game pair once, and corrected results can reduce wins and completed lines.
+
+`gameEvidenceState(guildId, now)` reports `observed`, `disabled` or `unavailable` with the retention horizon. `observed` describes retained observations, not exhaustive verification: the bingo interface must also surface gaps from the existing player-coverage records and label the history retention limit. Manual challenges remain usable when collection is disabled or unavailable. Expiry, unlink, departure, account deletion, history clear and collection disable remove game contributions; losing then regaining a line does not announce that line twice on the same board. A new board has a new notification namespace.
+
+Availability progress counts distinct current members with nonempty windows and a latest saved timestamp on or after board creation and before closure. It does not require a linked game account. Clearing availability removes its contribution; ordinary account unlink preserves availability. There is no append-only submission log. Manual approval corrections retain an officer audit reason and recompute current progress.
