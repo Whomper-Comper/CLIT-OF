@@ -147,9 +147,9 @@ Bars are scaled relative to the largest displayed value in that chart. Bar lengt
 
 ## Milestone counters and baselines
 
-Milestone cards use exact public **Team** lifetime games and wins, independently of player match-history collection. They exclude private games, singleplayer, Humans Vs Nations, ranked games, and recent overlapping aggregates. Every selected difficulty bucket must provide nonnegative integer wins, losses, and total, with wins plus losses equal to total. Missing, partial, unsafe numeric, or contradictory counters are unavailable and cannot earn milestones; this stricter award rule does not change the existing statistics display.
+Milestone cards use exact public **Team** lifetime games and wins, independently of player match-history collection. They exclude private games, singleplayer, Humans Vs Nations, ranked games, and recent overlapping aggregates. Every selected difficulty bucket must provide nonnegative integer wins, losses, and total, with wins plus losses no greater than total. A reported total may include games without a recorded win or loss; the bot preserves that independent total. Missing, partial, unsafe numeric, or contradictory counters are unavailable and cannot earn milestones; this award rule does not change the existing statistics display.
 
-Thresholds are ascending, unique positive decimal integers, with one to ten per metric. Defaults are games at 10, 50, 100, 250, and 500 and wins at 1, 10, 25, 50, and 100. Counters and thresholds remain exact even above the ordinary JavaScript safe integer range.
+Thresholds are ascending, unique positive decimal integers, with zero to ten per metric. Either metric or both may have an empty threshold list. Defaults are games at 10, 50, 100, 250, and 500 and wins at 1, 10, 25, 50, and 100. Counters and thresholds remain exact even above the ordinary JavaScript safe integer range.
 
 The first complete observation records already reached thresholds silently. Adding a threshold also creates a quiet baseline for that threshold. Later upward crossings earn each threshold once per server and account; lower or repeated counters never award it again. Several crossings from one check share one durable announcement intent. An award records the observed total and observation time, not an invented historical achievement date.
 

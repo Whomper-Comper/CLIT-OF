@@ -23,7 +23,7 @@ const metrics = ['games', 'wins'] as const;
 
 function validCounters(value: MilestoneCounters): boolean {
   return metrics.every(metric => typeof value[metric] === 'bigint' && value[metric] >= 0n) &&
-    typeof value.losses === 'bigint' && value.losses >= 0n && value.wins + value.losses === value.games;
+    typeof value.losses === 'bigint' && value.losses >= 0n && value.wins + value.losses <= value.games;
 }
 
 /** Read only disjoint public Team buckets, using the existing exact counter parser. */
@@ -43,10 +43,10 @@ export function readMilestoneCounters(stats: unknown): MilestoneCounters | null 
 export function validateMilestoneThresholds(input: MilestoneThresholds): MilestoneThresholds {
   for (const metric of metrics) {
     const values = input?.[metric];
-    if (!Array.isArray(values) || values.length < 1 || values.length > 10 ||
+    if (!Array.isArray(values) || values.length > 10 ||
         values.some((value, index) => typeof value !== 'string' || !/^[1-9]\d*$/.test(value) ||
           (index > 0 && BigInt(values[index - 1]) >= BigInt(value)))) {
-      throw new CommandError('Choose one to ten ascending, unique positive integer thresholds for each metric.');
+      throw new CommandError('Choose up to ten ascending, unique positive integer thresholds for each metric.');
     }
   }
   return { games: [...input.games], wins: [...input.wins] };

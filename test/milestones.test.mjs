@@ -63,7 +63,9 @@ test('public Team counters reject partial, inconsistent and unrelated scopes wit
   for (const value of [null, {}, { Private: stats.Public }, { Public: { 'Free For All': stats.Public.Team } },
     { Public: { Team: { Easy: { total: '10', wins: '2' } } } },
     { Public: { Team: { Easy: { total: '10', wins: '9', losses: '2' } } } },
-    { Public: { Team: { Easy: { total: '10', wins: '1', losses: '2' } } } },
+    { Public: { Team: { Easy: { total: '10', wins: '-1', losses: '2' } } } },
+    { Public: { Team: { Easy: { total: '10', wins: '1', losses: '-2' } } } },
+    { Public: { Team: { Easy: { total: '-10', wins: '1', losses: '2' } } } },
     { Public: { Team: { Easy: { total: 9007199254740993, wins: 1, losses: 2 } } } },
     { Public: { Team: { Easy: { total: '10', wins: '11', losses: '0' }, Hard: { total: '10', wins: '0', losses: '9' } } } },
     { Public: { Team: { Easy: { total: '10', wins: '1', losses: '9' }, Hard: {} } } },
@@ -374,3 +376,73 @@ test('verified global promotion preserves matching local awards and purges repla
     assert.ok(store.observe(binding(f.db), counters(60n), thresholds, 2).awards.every(a => !a.announce));
   } finally { await f.close(); }
 });
+
+for (const scenario of [
+  { name: 'empty games', configured: { games: [], wins: ['1'] }, earned: ['wins:1'] },
+  { name: 'empty wins', configured: { games: ['10', '50'], wins: [] }, earned: ['games:10', 'games:50'] },
+  { name: 'both metrics empty', configured: { games: [], wins: [] }, earned: [] },
+]) {
+  test(`threshold configuration accepts ${scenario.name} through pure evaluation and persisted settings`, async () => {
+    assert.deepEqual(milestones.validateMilestoneThresholds(scenario.configured), scenario.configured);
+    const evaluated = milestones.evaluateMilestones(empty(), counters(51n, 1n), scenario.configured);
+    assert.deepEqual(evaluated.awards.map(award => `${award.metric}:${award.threshold}`), scenario.earned);
+    assert.ok(evaluated.awards.every(award => !award.announce));
+    const f = communityFixture();
+    try {
+      f.db.linkUser('u', 'p', null, 'identity_token');
+      const saved = f.db.community.settings.save('g', {
+        milestonesEnabled: true, milestoneChannelId: 'c',
+        gameThresholds: scenario.configured.games, winThresholds: scenario.configured.wins,
+      }, 0);
+      assert.deepEqual(saved.gameThresholds, scenario.configured.games);
+      assert.deepEqual(saved.winThresholds, scenario.configured.wins);
+      const store = f.db.community.milestones;
+      store.observe(binding(f.db), counters(9n), scenario.configured, 1);
+      const crossing = store.observe(binding(f.db), counters(51n, 1n), scenario.configured, 2);
+      assert.deepEqual(crossing.awards.map(award => `${award.metric}:${award.threshold}`), scenario.earned);
+      assert.deepEqual([...store.getState('g', 'p').earned], scenario.earned);
+      assert.equal(store.getState('g', 'p').counters.games, 51n);
+      assert.equal(f.db.community.deliveries.list('g').length, scenario.earned.length ? 1 : 0);
+    } finally { await f.close(); }
+  });
+}
+
+for (const scenario of [
+  {
+    name: 'a single difficulty bucket',
+    stats: { Public: { Team: { Easy: { total: '10', wins: '1', losses: '2' } } } },
+    expected: { games: 10n, wins: 1n, losses: 2n },
+    earned: ['games:10', 'wins:1'],
+  },
+  {
+    name: 'multiple difficulty buckets with exact large aggregate totals',
+    stats: { Public: { Team: {
+      Easy: { total: '10', wins: '1', losses: '2' },
+      Hard: { total: '9007199254740993', wins: '1', losses: '9007199254740990' },
+    } } },
+    expected: { games: 9007199254741003n, wins: 2n, losses: 9007199254740992n },
+    earned: ['games:10', 'games:50', 'wins:1'],
+  },
+]) {
+  test(`positive counter gaps remain available and award milestones for ${scenario.name}`, async () => {
+    const current = milestones.readMilestoneCounters(scenario.stats);
+    assert.deepEqual(current, scenario.expected);
+    const f = communityFixture();
+    try {
+      f.db.linkUser('u', 'p', null, 'identity_token');
+      enable(f.db);
+      const store = f.db.community.milestones;
+      store.observe(binding(f.db), { games: 9n, wins: 0n, losses: 2n }, thresholds, 1);
+      const result = store.observe(binding(f.db), current, thresholds, 2);
+      assert.deepEqual(result.awards.map(award => `${award.metric}:${award.threshold}`), scenario.earned);
+      assert.ok(result.awards.every(award => award.announce));
+      assert.deepEqual(store.getState('g', 'p').counters, scenario.expected);
+      const [job] = f.db.community.deliveries.list('g');
+      const intent = store.getIntent(job.subjectId);
+      assert.deepEqual(intent.awards.map(award => `${award.metric}:${award.threshold}`), scenario.earned);
+      assert.equal(intent.awards[0].total, String(scenario.expected.games));
+      assert.throws(() => store.observe(binding(f.db), { games: 10n, wins: 9n, losses: 2n }, thresholds, 3));
+      assert.deepEqual(store.getState('g', 'p').counters, scenario.expected);
+    } finally { await f.close(); }
+  });
+}
