@@ -101,7 +101,8 @@ export function registerMilestoneWork(service: CommunityService, client: Client,
     return evidence;
   };
   service.registerDelivery('milestone', {
-    requestBudget: 3,
+    // Recovery needs one profile read plus fresh membership at all three prepare boundaries.
+    requestBudget: 4,
     async prepare(job, now = Date.now(), tick) {
       const guild = client.guilds.cache.get(job.guildId);
       return guild ? prepareMilestoneDelivery(job, guild, db, now, tick, api, forTick(tick)) : null;

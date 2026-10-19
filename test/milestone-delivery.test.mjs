@@ -258,6 +258,42 @@ test('reconciliation rereads membership and reuses profile evidence while never 
   } finally { await f.close(); }
 });
 
+test('reconciliation reserves fresh validation capacity while other accounts are due for polling', async () => {
+  const f = milestoneFixture();
+  try {
+    enable(f);
+    const job = queue(f);
+    const { deliveryMarker } = await import('../dist/community/deliveries.js');
+    const claimed = f.db.community.deliveries.claim(f.now(), 1)[0];
+    f.db.community.deliveries.fail(claimed.id, claimed.leaseId, 'needs_review', 'uncertain', f.now());
+    f.db.community.deliveries.retry('g', job.id, 1, f.now());
+    assert.equal(f.db.community.deliveries.get(job.id).reconcileRequired, true);
+    assert.ok(!f.db.community.milestones.dueMembers('g', f.now(), 8).includes('u'));
+    f.messages.set('recovered-busy', {
+      id: 'recovered-busy', author: { id: 'bot' }, content: '',
+      embeds: [{ footer: { text: deliveryMarker(job) } }],
+    });
+    for (let n = 0; n < 6; n++) {
+      const id = `busy${n}`;
+      f.addMember(id);
+      f.db.linkGuildUser('g', 'admin', id, `busy-account${n}`, null);
+    }
+
+    await service(f).runOnce();
+
+    const recovered = f.db.community.deliveries.get(job.id);
+    assert.equal(recovered.status, 'sent');
+    assert.equal(recovered.messageId, 'recovered-busy');
+    assert.equal(f.calls.sends.length, 0);
+    assert.equal(f.calls.requests.filter(([id]) => id === 'player').length, 1);
+    assert.ok(f.calls.requests.some(([id]) => id.startsWith('busy-account')));
+    assert.equal(f.calls.memberFetches.filter(options => options?.user === 'u').length, 3);
+    assert.ok(f.calls.requests.length + f.calls.memberFetches.length <= 8);
+    assert.ok(f.db.community.milestones.dueMembers('g', f.now(), 8).some(id => id.startsWith('busy')));
+    assert.equal(f.db.community.milestones.getState('g', 'player').counters.games, 51n);
+  } finally { await f.close(); }
+});
+
 test('global polling gate survives reopen, preserves local backoff when blocked and opens at the exact boundary', async () => {
   const { DatabaseSync } = await import('node:sqlite');
   const { CommunityStore } = await import('../dist/community/store.js');
