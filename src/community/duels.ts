@@ -3,6 +3,8 @@ import type { DatabaseSync } from 'node:sqlite';
 import { CommandError } from '../commandError.js';
 import { withCommunityTransaction } from './transactions.js';
 import type { EntityBinding } from './types.js';
+import { beginDuelMembershipCheck, closeDuel, enqueueDuelPublish, getDuelClosure, invalidateDuelMembership, queueDuelUpdate } from './duelTransport.js';
+import { DeliveryStore } from './deliveries.js';
 
 export interface DuelRecord extends EntityBinding {
   id: string;
@@ -12,6 +14,8 @@ export interface DuelRecord extends EntityBinding {
   challengerRoll: number | null;
   opponentRoll: number | null;
   createdAt: number;
+  /** One-time canonical activation immediately before the first enabling request. */
+  activatedAt: number | null;
   expiresAt: number;
   /** Terminal instant for every status; expiry uses the invitation's deadline. */
   resolvedAt: number | null;
@@ -31,6 +35,7 @@ const decode = (row: Record<string, unknown>): DuelRecord => ({
   challengerRoll: row.challenger_roll as number | null,
   opponentRoll: row.opponent_roll as number | null,
   createdAt: Number(row.created_at),
+  activatedAt: row.activated_at as number | null,
   expiresAt: Number(row.expires_at),
   resolvedAt: row.resolved_at as number | null,
   revision: Number(row.revision),
@@ -47,7 +52,7 @@ export class DuelStore {
       status TEXT NOT NULL CHECK(status IN ('pending','resolved','declined','cancelled','expired')),
       challenger_roll INTEGER CHECK(challenger_roll BETWEEN 1 AND 6),
       opponent_roll INTEGER CHECK(opponent_roll BETWEEN 1 AND 6),
-      created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,resolved_at INTEGER,
+      created_at INTEGER NOT NULL,activated_at INTEGER,expires_at INTEGER NOT NULL,resolved_at INTEGER,
       revision INTEGER NOT NULL,rematch_of TEXT,CHECK(challenger_id!=opponent_id));
       CREATE INDEX IF NOT EXISTS community_duel_guild ON community_duels(guild_id,id);
       CREATE INDEX IF NOT EXISTS community_duel_expiry ON community_duels(expires_at,id) WHERE status='pending';
@@ -60,6 +65,71 @@ export class DuelStore {
         guild_id TEXT NOT NULL,discord_id TEXT NOT NULL,available_at INTEGER NOT NULL,
         PRIMARY KEY(guild_id,discord_id));
       CREATE INDEX IF NOT EXISTS community_duel_cooldown_expiry ON community_duel_cooldowns(available_at);`);
+    const columns = sql.prepare('PRAGMA table_info(community_duels)').all();
+    if (!columns.some(column => column.name === 'activated_at')) sql.exec('ALTER TABLE community_duels ADD COLUMN activated_at INTEGER');
+    sql.exec(`CREATE TABLE IF NOT EXISTS community_duel_closures (
+      id TEXT PRIMARY KEY,guild_id TEXT NOT NULL,channel_id TEXT NOT NULL,message_id TEXT,
+      revision INTEGER NOT NULL,closed_at INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS community_duel_closure_guild ON community_duel_closures(guild_id,id);
+      CREATE INDEX IF NOT EXISTS community_duel_closure_retention ON community_duel_closures(closed_at,id);`);
+  }
+
+  beginMembershipCheck(guildId: string, ids: readonly string[]) {
+    return beginDuelMembershipCheck(this.sql, guildId, ids);
+  }
+
+  closure(guildId: string, id: string) { return getDuelClosure(this.sql, guildId, id); }
+
+  bindPublication(guildId: string, id: string, channelId: string, messageId: string, now: number): void {
+    withCommunityTransaction(this.sql, () => {
+      const duel = this.get(guildId, id);
+      if (duel && duel.channelId === channelId) {
+        this.bindMessage(guildId, id, duel.revision, messageId);
+        return;
+      }
+      const closure = this.closure(guildId, id);
+      if (!closure || closure.channelId !== channelId || (closure.messageId && closure.messageId !== messageId)) throw unavailable();
+      this.sql.prepare('UPDATE community_duel_closures SET message_id=? WHERE guild_id=? AND id=?')
+        .run(messageId, guildId, id);
+      queueDuelUpdate(this.sql, { ...closure, messageId }, now);
+    });
+  }
+
+  closeUnavailable(guildId: string, duelId: string, now: number): void {
+    withCommunityTransaction(this.sql, () => {
+      const duel = this.get(guildId, duelId);
+      if (duel?.status === 'pending') closeDuel(this.sql, duel, now);
+    });
+  }
+
+  expireInvitation(guildId: string, duelId: string, now: number): DuelRecord | null {
+    return withCommunityTransaction(this.sql, () => {
+      const duel = this.get(guildId, duelId);
+      return duel?.status === 'pending' && now >= duel.expiresAt
+        ? this.terminal(duel, 'expired', duel.expiresAt) : duel;
+    });
+  }
+
+  activate(guildId: string, duelId: string, channelId: string, messageId: string, now: number): DuelRecord | null {
+    return withCommunityTransaction(this.sql, () => {
+      const duel = this.expireInvitation(guildId, duelId, now);
+      if (!duel || duel.channelId !== channelId || duel.messageId !== messageId) return null;
+      if (duel.status !== 'pending' || duel.activatedAt !== null) return duel;
+      // The unactivated expiry is a separate hard wait bound; it never slides on retries.
+      if (now >= duel.createdAt + 120_000) return this.terminal(duel, 'expired', duel.expiresAt);
+      this.sql.prepare(`UPDATE community_duels SET activated_at=?,expires_at=?
+        WHERE guild_id=? AND id=? AND status='pending' AND activated_at IS NULL`)
+        .run(now, now + 120_000, guildId, duelId);
+      return this.require(guildId, duelId);
+    });
+  }
+
+  refresh(guildId: string, duelId: string, now: number): void {
+    withCommunityTransaction(this.sql, () => {
+      let duel = this.require(guildId, duelId);
+      if (duel.status === 'pending' && now >= duel.expiresAt) duel = this.terminal(duel, 'expired', duel.expiresAt);
+      queueDuelUpdate(this.sql, duel, now, true);
+    });
   }
 
   get(guildId: string, duelId: string): DuelRecord | null {
@@ -99,15 +169,22 @@ export class DuelStore {
       this.sql.prepare(`INSERT INTO community_duel_cooldowns(guild_id,discord_id,available_at) VALUES(?,?,?)
         ON CONFLICT(guild_id,discord_id) DO UPDATE SET available_at=excluded.available_at`)
         .run(binding.guildId, challengerId, now + 30_000);
-      return this.require(binding.guildId, id);
+      const invitation = this.require(binding.guildId, id);
+      enqueueDuelPublish(this.sql, invitation, now);
+      return invitation;
     });
   }
 
   bindMessage(guildId: string, duelId: string, revision: number, messageId: string): void {
-    const changed = this.sql.prepare(`UPDATE community_duels SET message_id=?
-      WHERE guild_id=? AND id=? AND revision=? AND (message_id IS NULL OR message_id=?)`)
-      .run(messageId, guildId, duelId, revision, messageId);
-    if (!changed.changes) throw unavailable();
+    withCommunityTransaction(this.sql, () => {
+      const changed = this.sql.prepare(`UPDATE community_duels SET message_id=?
+        WHERE guild_id=? AND id=? AND revision=? AND (message_id IS NULL OR message_id=?)`)
+        .run(messageId, guildId, duelId, revision, messageId);
+      if (!changed.changes) throw unavailable();
+      const duel = this.require(guildId, duelId);
+      new DeliveryStore(this.sql).cancelSubject(guildId, 'duel_publish', duelId, duel.createdAt);
+      queueDuelUpdate(this.sql, duel, duel.resolvedAt ?? duel.createdAt);
+    });
   }
 
   resolve(guildId: string, duelId: string, actorId: string, now: number,
@@ -191,23 +268,29 @@ export class DuelStore {
       .run(status, now, duel.guildId, duel.id, duel.revision);
     if (!claimed.changes) throw unavailable();
     this.sql.prepare('DELETE FROM community_duel_participants WHERE duel_id=?').run(duel.id);
-    return this.require(duel.guildId, duel.id);
+    const saved = this.require(duel.guildId, duel.id);
+    new DeliveryStore(this.sql).cancelSubject(duel.guildId, 'duel_update', duel.id, now);
+    queueDuelUpdate(this.sql, saved, now);
+    return saved;
   }
 }
 
 /** Member departure removes pending consent, while completed public outcomes retain their lifetime. */
 export function purgeDuelMember(sql: DatabaseSync, guildId: string, discordId: string): void {
+  invalidateDuelMembership(sql, guildId, discordId);
   const slot = sql.prepare(`SELECT duel_id FROM community_duel_participants WHERE guild_id=? AND discord_id=?`)
     .get(guildId, discordId);
   if (slot) {
-    sql.prepare('DELETE FROM community_duel_participants WHERE duel_id=?').run(slot.duel_id!);
-    sql.prepare("DELETE FROM community_duels WHERE guild_id=? AND id=? AND status='pending'").run(guildId, slot.duel_id!);
+    const duel = new DuelStore(sql).get(guildId, String(slot.duel_id));
+    if (duel?.status === 'pending') closeDuel(sql, duel, Date.now());
   }
   sql.prepare('DELETE FROM community_duel_cooldowns WHERE guild_id=? AND discord_id=?').run(guildId, discordId);
 }
 
-/** Each pass removes at most 200 terminal records and 200 elapsed cooldowns. */
+/** Each pass removes at most 200 closures, 200 terminal records and 200 elapsed cooldowns. */
 export function pruneDuels(sql: DatabaseSync, now: number): void {
+  sql.prepare(`DELETE FROM community_duel_closures WHERE id IN (SELECT id FROM community_duel_closures
+    WHERE closed_at<? ORDER BY closed_at,id LIMIT 200)`).run(now - 30 * 86_400_000);
   sql.prepare(`DELETE FROM community_duels WHERE id IN (SELECT id FROM community_duels
     WHERE status!='pending' AND resolved_at<? ORDER BY resolved_at,id LIMIT 200)`).run(now - 30 * 86_400_000);
   sql.prepare(`DELETE FROM community_duel_cooldowns WHERE rowid IN (SELECT rowid FROM community_duel_cooldowns

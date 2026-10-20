@@ -2,7 +2,7 @@ import type { Client, Message, MessageCreateOptions, MessageEditOptions, TextBas
 import type { BotDatabase } from "../db.js";
 import type { OpenFrontApi } from "../api.js";
 import { deliveryMarker, deliveryNonce } from "./deliveries.js";
-import type { CommunityDeliveryHandler, CommunityTick, DeliveryJob } from "./types.js";
+import type { CommunityDeliveryHandler, CommunityTick, DeliveryJob, PreparedDelivery } from "./types.js";
 import { CommunityBudgetExhaustedError } from "./types.js";
 export type { CommunityDeliveryHandler, CommunityTick, PreparedDelivery } from "./types.js";
 
@@ -169,7 +169,18 @@ export class CommunityService {
         if (!await handler.prepare(job,this.now(),tick)) { store.cancel(job.id,job.leaseId!,this.now()); return; }
         accepted = true; this.complete(job,recovered,handler); return;
       }
-      const payload = payloadFor(job,prepared.payload);
+      const finalPreparation = (expectedMessageId: string | undefined): PreparedDelivery | null => {
+        const final = handler.beforeDeliver ? handler.beforeDeliver(job, this.now()) : prepared;
+        if (!store.owns(job)) return null;
+        if (!final) { store.cancel(job.id, job.leaseId!, this.now()); return null; }
+        if (this.stopped) { fail('transient', new Error('Community service stopped before delivery.')); return null; }
+        if (job.leaseUntil! <= this.now()) return null;
+        if (final.messageId !== expectedMessageId) {
+          fail('transient', new Error('The saved message binding changed before delivery. Retry the current revision.'));
+          return null;
+        }
+        return final;
+      };
       let message: Message;
       if (prepared.messageId) {
         const messageId = prepared.messageId;
@@ -181,9 +192,14 @@ export class CommunityService {
         if (job.leaseUntil! <= this.now()) return;
         if (prepared.messageId !== messageId) { fail("transient",new Error("The saved message binding changed during lookup. Retry the current revision.")); return; }
         if (existing.author.id !== this.client.user?.id) { fail("paused",new Error("The saved message is not owned by this bot.")); return; }
+        const final = finalPreparation(messageId);
+        if (!final) return;
         attempted = true;
-        message = await existing.edit(editPayload(payloadFor(job,prepared.payload)));
+        message = await existing.edit(editPayload(payloadFor(job,final.payload)));
       } else {
+        const final = finalPreparation(undefined);
+        if (!final) return;
+        const payload = payloadFor(job, final.payload);
         attempted = true; message = await channel.send(payload);
       }
       accepted = true;

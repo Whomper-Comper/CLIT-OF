@@ -3,6 +3,7 @@ import { communitySessions } from "./sessions.js";
 import { purgeMilestones } from "./milestones.js";
 import { clearBingoEvidence, purgeBingoGuild, pruneBingo } from './bingoLifecycle.js';
 import { purgeDuelMember, pruneDuels } from './duels.js';
+import { invalidateDuelMembership } from './duelTransport.js';
 
 /** Feature-owned personal tables extend these hooks as their stores are introduced. */
 export function purgeIdentity(sql: DatabaseSync, discordId: string, guildId?: string): void {
@@ -33,7 +34,8 @@ export function purgeMember(sql: DatabaseSync, guildId: string, discordId: strin
   purgeIdentity(sql,discordId,guildId); communitySessions.purgeMember(guildId,discordId);
 }
 export function purgeGuild(sql: DatabaseSync, guildId: string): void {
-  for (const table of ['community_duel_participants', 'community_duel_cooldowns', 'community_duels']) {
+  invalidateDuelMembership(sql, guildId);
+  for (const table of ['community_duel_participants', 'community_duel_cooldowns', 'community_duels', 'community_duel_closures']) {
     sql.prepare(`DELETE FROM ${table} WHERE guild_id=?`).run(guildId);
   }
   purgeMilestones(sql, 'guild', guildId);

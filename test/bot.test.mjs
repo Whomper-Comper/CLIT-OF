@@ -62,7 +62,12 @@ after(() => db.close());
 
 test("command registration exposes one clan command with an action choice and shared inputs", () => {
   const data = commands.map((command) => command.data.toJSON());
-  assert.deepEqual(data.map((command) => command.name), ["link", "unlink", "whois", "stats", "clan", "config", "debug", "dice", "availability", "event", "onboarding", "wheel", "milestones", "bingo"]);
+  assert.deepEqual(data.map((command) => command.name), ["link", "unlink", "whois", "stats", "clan", "config", "debug", "dice", "availability", "event", "onboarding", "wheel", "milestones", "bingo", "duel"]);
+  const duel = data.find((command) => command.name === 'duel');
+  assert.deepEqual(duel.contexts, [0]);
+  assert.equal(duel.options.length, 1);
+  assert.equal(duel.options[0].name, 'opponent');
+  assert.equal(duel.options[0].required, true);
   const clan = data.find((command) => command.name === "clan");
   assert.equal(clan.options.length, 13);
   assert.equal(clan.options[0].name, "action");

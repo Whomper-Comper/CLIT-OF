@@ -118,6 +118,7 @@ Discord commands below use named options. `/clan` is one command with an `action
 | `/whois` | Look up exactly one Discord user or public OpenFront account |
 | `/stats` | Browse one account's statistics, lifetime buildings, recorded games, and observed ranked ratings |
 | `/dice` | Roll 1–25 dice with 1–1000 sides; defaults to one six-sided die |
+| `/duel opponent:@member` | Invite a current server member to a public, consent-based D6 duel |
 | `/config` | Open private server configuration |
 | `/clan` | Set up clans, sync, inspect pending approvals/rosters/audits/coverage/health, manage server links, or view history/recaps |
 | `/debug` | Inspect status, export current member links, or change verbose/private-reply settings using a separate debug role |

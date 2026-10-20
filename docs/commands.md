@@ -11,6 +11,7 @@ This reference describes the commands registered by `src/commands/index.ts` and 
 - [/whois](#whois)
 - [/stats](#stats)
 - [/dice](#dice)
+- [/duel](#duel)
 - [/availability](#availability)
 - [/config](#config)
 - [/clan](#clan)
@@ -25,7 +26,7 @@ Type `/` in Discord, choose the bot's command, then fill in Discord's named inpu
 
 `/clan` has one required **action option**, not slash subcommands: use `/clan action:sync`, not `/clan sync`. Likewise use `/debug action:status`. Discord can show a friendly label for a choice while its underlying value is the value documented here.
 
-There are fourteen registered commands: `/link`, `/unlink`, `/whois`, `/stats`, `/clan`, `/config`, `/debug`, `/dice`, `/availability`, `/event`, `/onboarding`, `/wheel`, `/milestones`, and `/bingo`. `/config`, `/clan`, `/debug`, `/availability`, `/event`, `/onboarding`, `/wheel`, `/milestones`, and `/bingo` are explicitly server-only. The other builders do not declare a server-only context; availability outside servers also depends on the application's installation and Discord command contexts. In a DM, identity lookups use verified bot-wide links, not server approvals.
+There are fifteen registered commands: `/link`, `/unlink`, `/whois`, `/stats`, `/clan`, `/config`, `/debug`, `/dice`, `/availability`, `/event`, `/onboarding`, `/wheel`, `/milestones`, `/bingo`, and `/duel`. `/config`, `/clan`, `/debug`, `/availability`, `/event`, `/onboarding`, `/wheel`, `/milestones`, `/bingo`, and `/duel` are explicitly server-only. The other builders do not declare a server-only context; availability outside servers also depends on the application's installation and Discord command contexts. In a DM, identity lookups use verified bot-wide links, not server approvals.
 
 ### Accepted identity inputs
 
@@ -40,6 +41,7 @@ For `/whois` and `/stats`, `openfront_id` additionally accepts a Discord user ID
 | `/link` | Account owner verifies ownership | Always private |
 | `/unlink` | Your own links | Private by default; server setting can make public |
 | `/whois`, `/stats`, valid `/dice` | No selected management role required | Public |
+| `/duel` | Current human server members; the opponent alone accepts/declines, the challenger cancels | Private acknowledgment; public invitation and result |
 | `/config`, `/clan action:config` | Manage Server permission **or** configured config role | Always private |
 | All other `/clan` actions | Must hold configured config role | Private by default, except roster and whole-clan sync are public |
 | `/debug` | Must hold configured debug role | Always private |
@@ -156,6 +158,16 @@ Suggestions are public counts and Discord timestamps, never member IDs or raw sc
 | `count` | 1 | Integer 1–25 |
 
 Rolls use Node's cryptographic random integer generator. Five rolling frames run at 600 ms each, then the public result lists each die and a total for multiple dice. With at least three sides, 1 is a critical minimum and the highest face is a critical maximum. D1 and D2 do not show critical labels. Per-user cooldown: 4 seconds.
+
+## `/duel`
+
+`/duel opponent:@member` queues a public invitation between two different current human members in the same server. The private acknowledgment confirms the request. The public card offers **Accept**, **Decline**, **Cancel**, and **Refresh** after the saved invitation is bound to its canonical message. Only the opponent can accept/decline; only the challenger can cancel. Each member may have one pending duel per server, and challengers wait 30 seconds between invitations.
+
+Publication/activation may wait up to two minutes in the shared queue. A saved activation immediately before the first request enabling consent starts the two-minute acceptance deadline. The usable window is reduced by that enabling request's duration. Retries never extend it. Total waiting plus acceptance can approach four minutes from the command; a busy queue can instead expire an invitation before activation. Use `/duel` again after an expired invitation. Disabled cards show their activation wait deadline, and enabled cards show their acceptance deadline.
+
+Acceptance freshly checks both memberships and saves two independent cryptographic D6 rolls atomically before any public result update. The higher roll wins. A tie offers **Rematch** to either participant, creating a new invitation that still requires the other person's fresh acceptance and respects pending slots/cooldowns. There are no bets, currency or rankings. Button acknowledgments are private and public changes use the shared background queue; notification mentions are suppressed.
+
+**Refresh** recovers the saved state on the original public card after an update failure; it cannot reroll. Participant departure removes pending personal invitation data and queues a generic closed card. Declined, cancelled, expired and resolved cards disable their original consent controls. Completed records remain for 30 days; published Discord messages have a separate lifetime. Existing `/dice` settings and animation are unchanged.
 
 ## `/config`
 

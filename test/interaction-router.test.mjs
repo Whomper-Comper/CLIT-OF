@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, mock, test } from "node:test";
-import { Client, Events, MessageFlags } from "discord.js";
+import { Client, Collection, Events, MessageFlags } from "discord.js";
 
 process.env.DB_PATH = ":memory:";
 process.env.DISCORD_TOKEN = "test";
@@ -16,6 +16,31 @@ const { defaultBingoObjectives } = await import("../dist/community/bingo.js");
 const { communitySessions } = await import("../dist/community/sessions.js");
 const route = client.listeners(Events.InteractionCreate)[0];
 after(async () => { await client.destroy(); db.close(); mock.restoreAll(); });
+
+test('actual interaction event dispatches saved duel consent through the complete community chain', async () => {
+  const guildId = 'router-duel-event';
+  try {
+    assert.ok(commandsByName.has('duel'));
+    const d = db.community.duels.invite({ guildId, channelId: 'duel-channel', messageId: null }, 'challenger', 'opponent', Date.now());
+    db.community.duels.bindMessage(guildId, d.id, d.revision, 'duel-message');
+    db.community.duels.activate(guildId, d.id, 'duel-channel', 'duel-message', Date.now());
+    let memberFetches = 0;
+    const i = interaction({ guildId, channelId: 'duel-channel', user: { id: 'opponent' },
+      guild: { id: guildId, members: { fetch: async options => {
+        memberFetches++;
+        assert.deepEqual(options.user, ['challenger', 'opponent']);
+        return new Collection(options.user.map(id => [id, { user: { id, bot: false } }]));
+      } } },
+      message: { id: 'duel-message' }, customId: `clit-duel:${d.id}:accept`,
+      async deferReply(payload) { this.deferred = true; this.deferPayload = payload; } });
+    await route(i);
+    assert.equal(db.community.duels.get(guildId, d.id).status, 'resolved');
+    assert.equal(memberFetches, 1);
+    assert.equal(i.deferPayload.flags, MessageFlags.Ephemeral);
+    assert.equal(i.edits.length, 1);
+    assert.equal(i.followups.length, 0);
+  } finally { db.community.purgeGuild(guildId); }
+});
 
 function interaction(overrides = {}) {
   return {

@@ -8,6 +8,79 @@ function service(f, handler = { prepare: async () => ({ payload: { embeds: [{ ti
   const s = new CommunityService(f.client,f.db,f.api,{ now: f.now, ...options });
   s.registerDelivery('test', handler); f.services.push(s); return s;
 }
+
+test('synchronous final-delivery hook uses the actual post-lookup clock and replaces the prepared edit payload', async () => {
+  const f = communityFixture();
+  try {
+    const message = await f.channel.send({ content: 'original' });
+    const start = f.now(), channelFetch = f.client.channels.fetch, messageFetch = f.channel.messages.fetch;
+    f.client.channels.fetch = async id => { f.advance(10); return channelFetch(id); };
+    f.channel.messages.fetch = async id => { f.advance(20); return messageFetch(id); };
+    let hooks = 0;
+    const s = service(f, {
+      prepare: async () => ({ messageId: message.id, payload: { content: 'stale prepared state' } }),
+      beforeDeliver(job, now) {
+        hooks++;
+        assert.equal(now, start + 30);
+        return { messageId: message.id, payload: { content: `fresh saved state ${now}` } };
+      },
+    });
+    const job = f.db.community.deliveries.enqueue(jobInput(f));
+    await s.runOnce();
+    assert.equal(hooks, 1);
+    assert.equal(f.calls.edits[0].content, `fresh saved state ${start + 30}`);
+    assert.ok(f.calls.edits[0].embeds[0].footer.text.includes(deliveryMarker(job)));
+    assert.equal('nonce' in f.calls.edits[0], false);
+  } finally { await f.close(); }
+});
+
+test('final-delivery hook cannot change the canonical target, revive obsolete work, or bypass stop and lease guards', async () => {
+  for (const mode of ['target', 'obsolete', 'stopped', 'lease', 'cancelled']) {
+    const f = communityFixture();
+    try {
+      const message = await f.channel.send({ content: 'original' });
+      let job, s;
+      s = service(f, {
+        prepare: async () => ({ messageId: message.id, payload: { content: 'prepared' } }),
+        beforeDeliver() {
+          if (mode === 'obsolete') return null;
+          if (mode === 'stopped') void s.stop();
+          if (mode === 'lease') f.advance(300000);
+          if (mode === 'cancelled') f.db.community.deliveries.cancelSubject('g', 'test', 's', f.now());
+          return { messageId: mode === 'target' ? 'replacement' : message.id, payload: { content: 'final' } };
+        },
+      }, { maxSendsPerTick: 1 });
+      job = f.db.community.deliveries.enqueue(jobInput(f));
+      await s.runOnce();
+      assert.equal(f.calls.edits.length, 0, mode);
+      assert.equal(f.calls.sends.length, 1, mode);
+      if (mode === 'obsolete' || mode === 'cancelled') assert.equal(f.db.community.deliveries.get(job.id).status, 'cancelled');
+    } finally { await f.close(); }
+  }
+});
+
+test('final create hook preserves four-send limit, stable nonce/marker and suppressed mentions', async () => {
+  const f = communityFixture();
+  try {
+    let hooks = 0;
+    const s = service(f, {
+      prepare: async () => ({ payload: { content: 'stale' } }),
+      beforeDeliver(job, now) {
+        hooks++;
+        return { payload: { content: `fresh ${now}`, allowedMentions: { parse: ['everyone'] } } };
+      },
+    });
+    for (let n = 0; n < 9; n++) f.db.community.deliveries.enqueue(jobInput(f, { key: `hook-${n}` }));
+    await s.runOnce();
+    assert.equal(hooks, 4);
+    assert.equal(f.calls.sends.length, 4);
+    assert.ok(f.calls.sends.every(payload => payload.content === `fresh ${f.now()}`));
+    assert.ok(f.calls.sends.every(payload => payload.enforceNonce && /^\d+$/.test(payload.nonce)));
+    assert.ok(f.calls.sends.every(payload => payload.allowedMentions.parse.length === 0));
+    const sent = f.db.community.deliveries.list('g').filter(job => job.status === 'sent');
+    for (const job of sent) assert.ok(f.calls.sends.some(payload => payload.embeds[0].footer.text.includes(deliveryMarker(job))));
+  } finally { await f.close(); }
+});
 test('worker bounds requests to eight and sends to four, with suppressed mentions and stable delivery markers', async () => {
   const f = communityFixture();
   try {
