@@ -10,6 +10,10 @@ mock.method(Client.prototype, "login", async function () { client = this; return
 await import("../dist/index.js");
 const { db } = await import("../dist/db.js");
 const { commandsByName } = await import("../dist/commands/index.js");
+const { handleCommunityInteraction } = await import("../dist/community/interactions.js");
+const { milestonesCommand } = await import("../dist/commands/milestones.js");
+const { defaultBingoObjectives } = await import("../dist/community/bingo.js");
+const { communitySessions } = await import("../dist/community/sessions.js");
 const route = client.listeners(Events.InteractionCreate)[0];
 after(async () => { await client.destroy(); db.close(); mock.restoreAll(); });
 
@@ -72,4 +76,57 @@ test("deferred slash errors replace their own reply and hide unexpected details"
   assert.deepEqual(i.edits[0].embeds, []);
   assert.deepEqual(i.edits[0].components, []);
   assert.doesNotMatch(i.edits[0].content, /private exception detail/);
+});
+
+function bingoControl(guildId) {
+  const draft = db.community.bingo.createDraft(guildId, 'router-channel', defaultBingoObjectives(), null, Date.now());
+  const board = db.community.bingo.publish(guildId, draft.id, draft.revision, 'router-board');
+  return interaction({ guildId, guild: { id: guildId }, channelId: 'router-channel', user: { id: 'router-user' },
+    message: { id: 'router-board' }, customId: `bingo:${board.id}:claim:${board.revision}`,
+    async showModal(modal) { this.modal = modal; this.replied = true; } });
+}
+
+test('community router awaits the unrelated milestones result and reaches a valid bingo claim control', async () => {
+  const guildId = 'router-bingo-direct';
+  try {
+    const i = bingoControl(guildId);
+    assert.equal(await milestonesCommand.handleInteraction(i), false);
+    assert.equal(await handleCommunityInteraction(i), true);
+    assert.match(i.modal.toJSON().custom_id, /^bingomenu:/);
+    assert.equal(i.modal.toJSON().components.length, 3);
+  } finally { db.community.purgeGuild(guildId); }
+});
+
+test('actual interaction event opens bingo controls before legacy routing', async () => {
+  const guildId = 'router-bingo-event';
+  try {
+    const i = bingoControl(guildId);
+    await route(i);
+    assert.ok(i.modal, 'the actual event route must open the private claim form');
+    assert.equal(i.replies.length, 0);
+    assert.equal(i.followups.length, 0);
+  } finally { db.community.purgeGuild(guildId); }
+});
+
+test('milestones controls still resolve true and unrelated legacy prefixes fall through without type probing', async () => {
+  const guildId = 'router-milestones';
+  const session = communitySessions.create({ kind: 'milestones-configure', ownerId: 'router-user', guildId,
+    channelId: 'router-channel', messageId: 'router-private',
+    data: { draft: db.community.settings.get(guildId), selectedJob: null, page: 0, busy: false, lastRead: -Infinity } }, Date.now());
+  try {
+    const i = interaction({ guildId, channelId: 'router-channel', user: { id: 'router-user' },
+      guild: { id: guildId, members: { fetch: async () => ({ permissions: { has: () => true } }) } },
+      message: { id: 'router-private' }, customId: `milestones:${session.id}:thresholds`,
+      async showModal(modal) { this.modal = modal; } });
+    assert.equal(await handleCommunityInteraction(i), true);
+    assert.match(i.modal.toJSON().custom_id, /^milestones:/);
+    assert.equal(await handleCommunityInteraction({ customId: 'whois-stats:legacy' }), false);
+    const legacy = interaction();
+    await route(legacy);
+    assert.equal(legacy.replies.length, 1);
+    assert.equal(legacy.replies[0].flags, MessageFlags.Ephemeral);
+  } finally {
+    communitySessions.delete(session.id);
+    db.community.purgeGuild(guildId);
+  }
 });

@@ -8,6 +8,10 @@ import { bingoCommand } from '../commands/bingo.js';
 
 /** Feature command modules add their prefix dispatch here as they are introduced. */
 export async function handleCommunityInteraction(interaction: Interaction): Promise<boolean> {
-  return await eventCommand.handleInteraction(interaction) || await availabilityCommand.handleInteraction(interaction) ||
-    await onboardingCommand.handleInteraction(interaction) || await wheelCommand.handleInteraction(interaction) || milestonesCommand.handleInteraction(interaction) || bingoCommand.handleInteraction(interaction);
+  return await eventCommand.handleInteraction(interaction) ||
+    await availabilityCommand.handleInteraction(interaction) ||
+    await onboardingCommand.handleInteraction(interaction) ||
+    await wheelCommand.handleInteraction(interaction) ||
+    await milestonesCommand.handleInteraction(interaction) ||
+    await bingoCommand.handleInteraction(interaction);
 }
