@@ -11,8 +11,10 @@ import { MilestoneStore } from "./milestones.js";
 import type { IdentityBinding } from "./types.js";
 import { BingoStore } from "./bingo.js";
 import { clearBingoEvidence, retainBingoEvidence } from "./bingoLifecycle.js";
+import { DuelStore } from "./duels.js";
 
 export class CommunityStore {
+  readonly duels: DuelStore;
   readonly bingo: BingoStore;
   readonly milestones: MilestoneStore;
   readonly wheel: WheelStore;
@@ -22,6 +24,7 @@ export class CommunityStore {
   readonly events: EventStore;
   readonly onboarding: OnboardingStore;
   constructor(private readonly sql: DatabaseSync, identityCurrent?: (binding: IdentityBinding) => boolean) {
+    this.duels = new DuelStore(sql);
     this.bingo = new BingoStore(sql, identityCurrent);
     this.milestones = new MilestoneStore(sql, identityCurrent);
     this.deliveries = new DeliveryStore(sql); this.settings = new CommunitySettingsStore(sql);
@@ -31,6 +34,7 @@ export class CommunityStore {
     this.wheel = new WheelStore(sql);
   }
   static initialize(sql: DatabaseSync): void {
+    DuelStore.initialize(sql);
     MilestoneStore.initialize(sql);
     initializeEvents(sql);
     WheelStore.initialize(sql);
