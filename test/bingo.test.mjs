@@ -74,3 +74,13 @@ test('current lines can be corrected, notification namespace survives loss and r
     assert.equal(f.db.community.deliveries.list('g').filter(d => d.kind === 'bingo_complete').length, 2);
   } finally { await f.close(); }
 });
+
+test('draft and its initial evidence generation are created atomically', async () => {
+  const f = communityFixture();
+  try {
+    f.db.db.exec(`CREATE TRIGGER reject_initial_generation BEFORE INSERT ON community_bingo_generations
+      BEGIN SELECT RAISE(ABORT,'test generation failure'); END;`);
+    assert.throws(() => f.db.community.bingo.createDraft('g', 'c', defaultBingoObjectives(), null, f.now()), /test generation failure/);
+    assert.equal(f.db.db.prepare('SELECT COUNT(*) AS n FROM community_bingo_boards').get().n, 0);
+  } finally { await f.close(); }
+});

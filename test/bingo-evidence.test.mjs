@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { communityFixture } from './helpers/community.mjs';
-import { defaultBingoObjectives } from '../dist/community/bingo.js';
+import { BingoStore, defaultBingoObjectives } from '../dist/community/bingo.js';
 import { collectBingoEvidence } from '../dist/community/bingoEvidence.js';
 const session = (at, gameId = 'game', extra = {}) => ({ public_id: 'p', discord_id: 'u', gameId, gameStart: new Date(at).toISOString(), gameEnd: new Date(at + 1000).toISOString(), gameType: 'Public', gameMode: 'Team', clanTag: 'MARS', hasWon: true, gameRankedType: 'Unranked', clientId: 'x', username: 'x', ...extra });
 const identity = f => { const link = f.db.getEffectiveLink('g', 'u'); return { guildId: 'g', discordId: 'u', publicId: 'p', linkedAt: link.linked_at }; };
@@ -354,5 +354,269 @@ test('manual approval refreshes unhealthy game observations before evaluating cu
     store.setManualApproval('g', board.id, board.revision, 13, true, 'officer', 'Verified', f.now());
     assert.equal(store.get('g', board.id).cells[0].progress, 0);
     assert.equal(store.get('g', board.id).cells[13].complete, true);
+  } finally { await f.close(); }
+});
+
+test('guild purge removes sources after saved and tombstoned availability delete triggers', async () => {
+  const f = communityFixture();
+  try {
+    const { store, board } = setup(f);
+    saveAvailability(f);
+    f.db.community.availability.save({ guildId: 'g', discordId: 'cleared', timezone: 'UTC', windows: [] }, 0, f.now());
+    f.db.community.availability.clear('g', 'cleared');
+    const stage = store.beginEvidenceStage(store.evidenceSnapshot('g', board.id, f.now()), f.now());
+    store.stageEvidencePage(stage, new Map(), new Set(), new Set(['u']), f.now());
+    store.stageEvidencePage(stage, new Map(), new Set(), new Set(['u']), f.now());
+    f.db.community.purgeGuild('g');
+    assert.deepEqual(f.db.db.prepare("SELECT * FROM community_bingo_sources WHERE guild_id='g'").all(), []);
+    assert.deepEqual(f.db.db.prepare("SELECT * FROM community_availability WHERE guild_id='g'").all(), []);
+    for (const table of ['community_bingo_evidence', 'community_bingo_generations', 'community_bingo_groups', 'community_bingo_totals']) {
+      assert.equal(f.db.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0);
+    }
+  } finally { await f.close(); }
+});
+
+test('trusted staged production finalization publishes complete generations with zero history payload reads', async () => {
+  const f = communityFixture();
+  const originalParse = JSON.parse;
+  try {
+    const { store, board } = setup(f);
+    const matches = Array.from({ length: 451 }, (_, i) => session(f.now() + i, String(i).padStart(4, '0')));
+    f.db.history.upsertPlayerMatches('g', 'p', 'u', matches);
+    saveAvailability(f);
+    const identities = new Map([['u', identity(f)]]);
+    store.syncEvidenceEligibility('g', [...identities.values()], ['u'], ['MARS']);
+    const stageId = store.beginEvidenceStage(store.evidenceSnapshot('g', board.id, f.now()), f.now());
+    let result;
+    const processed = [];
+    const parse = JSON.parse;
+    let parsedGamePayloads = 0;
+    JSON.parse = (...args) => {
+      if (typeof args[0] === 'string' && args[0].includes('"gameId"') && args[0].includes('"gameStart"')) parsedGamePayloads++;
+      return parse(...args);
+    };
+    do {
+      result = store.stageEvidencePage(stageId, identities, new Set(['MARS']), new Set(['u']), f.now());
+      assert.ok(result.processed <= 200);
+      processed.push(result.processed);
+      assert.equal(store.get('g', board.id).cells[0].progress, 0);
+    } while (result.phase !== 'ready');
+    JSON.parse = parse;
+    assert.equal(parsedGamePayloads, 451);
+    assert.deepEqual(processed, [200, 200, 51, 1]);
+    const prepare = f.db.db.prepare.bind(f.db.db);
+    let historyPayloadReads = 0;
+    let evidenceRowsRead = 0;
+    let finalGameParses = 0;
+    JSON.parse = (...args) => {
+      if (typeof args[0] === 'string' && args[0].includes('"gameId"') && args[0].includes('"gameStart"')) finalGameParses++;
+      return parse(...args);
+    };
+    f.db.db.prepare = sql => {
+      if (sql.includes('payload') && sql.includes('history_player_matches')) historyPayloadReads++;
+      const statement = prepare(sql);
+      if (sql.startsWith('SELECT * FROM community_bingo_evidence')) {
+        const all = statement.all.bind(statement);
+        statement.all = (...args) => { const rows = all(...args); evidenceRowsRead += rows.length; return rows; };
+      }
+      return statement;
+    };
+    store.finalizeEvidenceStage(stageId, f.now());
+    JSON.parse = parse;
+    assert.equal(historyPayloadReads, 0);
+    assert.equal(evidenceRowsRead, 0);
+    assert.equal(finalGameParses, 0);
+    f.db.db.prepare = prepare;
+    assert.equal(store.get('g', board.id).cells[0].progress, 451);
+    assert.equal(store.get('g', board.id).cells[11].progress, 1);
+    assert.equal(store.needsEvidenceRefresh('g', board.id, f.now()), false);
+    f.db.history.upsertPlayerMatches('g', 'p', 'u', [{ ...matches[0], hasWon: false }]);
+    const dirtyPrepare = f.db.db.prepare.bind(f.db.db);
+    let dirtyReads = 0;
+    f.db.db.prepare = sql => { if (sql.includes('payload FROM history_player_matches')) dirtyReads++; return dirtyPrepare(sql); };
+    store.refresh('g', board.id, f.now());
+    assert.ok(dirtyReads > 0 && dirtyReads <= 200);
+    f.db.db.prepare = dirtyPrepare;
+    store.refresh('g', board.id, f.now());
+    store.refresh('g', board.id, f.now());
+    assert.equal(store.get('g', board.id).cells[3].progress, 450);
+  } finally {
+    JSON.parse = originalParse;
+    await f.close();
+  }
+});
+
+test('partial, corrected, expired and privacy-invalidated stages never publish, and abandoned generations drain boundedly', async () => {
+  const f = communityFixture();
+  try {
+    const { store, board } = setup(f);
+    const matches = Array.from({ length: 451 }, (_, i) => session(f.now() + i, String(i).padStart(4, '0')));
+    f.db.history.upsertPlayerMatches('g', 'p', 'u', matches);
+    const identities = new Map([['u', identity(f)]]);
+    store.syncEvidenceEligibility('g', [...identities.values()], ['u'], ['MARS']);
+    const stage = store.beginEvidenceStage(store.evidenceSnapshot('g', board.id, f.now()), f.now());
+    store.stageEvidencePage(stage, identities, new Set(['MARS']), new Set(['u']), f.now());
+    assert.throws(() => store.finalizeEvidenceStage(stage, f.now()));
+    f.db.history.upsertPlayerMatches('g', 'p', 'u', [{ ...matches[0], hasWon: false }]);
+    assert.throws(() => store.stageEvidencePage(stage, identities, new Set(['MARS']), new Set(['u']), f.now()));
+    const replacement = store.beginEvidenceStage(store.evidenceSnapshot('g', board.id, f.now()), f.now());
+    let result;
+    do { result = store.stageEvidencePage(replacement, identities, new Set(['MARS']), new Set(['u']), f.now()); } while (result.phase !== 'ready');
+    assert.throws(() => store.finalizeEvidenceStage(replacement, f.now() + 90 * 86_400_000 + 1));
+    f.db.community.purgeIdentity('u');
+    assert.throws(() => store.finalizeEvidenceStage(replacement, f.now()));
+    assert.equal(f.db.db.prepare("SELECT COUNT(*) AS n FROM community_bingo_generations WHERE board_id=? AND status='staging'").get(board.id).n, 0);
+    f.db.community.prune(f.now());
+    assert.equal(f.db.db.prepare("SELECT COUNT(*) AS n FROM community_bingo_generations WHERE board_id=? AND status='abandoned'").get(board.id).n, 0);
+    assert.equal(store.get('g', board.id).cells[0].progress, 0);
+  } finally { await f.close(); }
+});
+
+test('replaced and abandoned generations drain two hundred evidence rows per prune tick', async () => {
+  const f = communityFixture();
+  try {
+    const { store, board } = setup(f);
+    const matches = Array.from({ length: 451 }, (_, i) => session(f.now() + i, String(i).padStart(4, '0')));
+    f.db.history.upsertPlayerMatches('g', 'p', 'u', matches);
+    const identities = new Map([['u', identity(f)]]);
+    const stage = store.beginEvidenceStage(store.evidenceSnapshot('g', board.id, f.now()), f.now());
+    for (let i = 0; i < 3; i++) store.stageEvidencePage(stage, identities, new Set(['MARS']), new Set(['u']), f.now());
+    store.beginEvidenceStage(store.evidenceSnapshot('g', board.id, f.now()), f.now());
+    const count = () => Number(f.db.db.prepare('SELECT COUNT(*) AS n FROM community_bingo_evidence WHERE generation=?').get(stage).n);
+    assert.equal(count(), 451);
+    f.db.community.prune(f.now());
+    assert.equal(count(), 251);
+    f.db.community.prune(f.now());
+    assert.equal(count(), 51);
+    f.db.community.prune(f.now());
+    assert.equal(count(), 0);
+    assert.equal(f.db.db.prepare('SELECT COUNT(*) AS n FROM community_bingo_generations WHERE id=?').get(stage).n, 0);
+    const expiredStage = f.db.db.prepare("SELECT id FROM community_bingo_generations WHERE board_id=? AND status='staging'").get(board.id).id;
+    f.db.community.prune(f.now() + 86_400_000 + 1);
+    assert.equal(f.db.db.prepare('SELECT COUNT(*) AS n FROM community_bingo_generations WHERE id=?').get(expiredStage).n, 0);
+  } finally { await f.close(); }
+});
+
+test('persisted generation aggregates match distinct contributors and largest shared groups through privacy removal', async () => {
+  const f = communityFixture();
+  try {
+    const { store, board } = setup(f);
+    f.db.linkUser('v', 'q', null, 'identity_token');
+    const other = f.db.getEffectiveLink('g', 'v');
+    const identities = new Map([['u', identity(f)], ['v', { guildId: 'g', discordId: 'v', publicId: 'q', linkedAt: other.linked_at }]]);
+    f.db.history.upsertPlayerMatches('g', 'p', 'u', [session(f.now(), 'shared'), session(f.now(), 'solo', { hasWon: false })]);
+    f.db.history.upsertPlayerMatches('g', 'q', 'v', [session(f.now(), 'shared', { public_id: 'q', discord_id: 'v' })]);
+    const stage = store.beginEvidenceStage(store.evidenceSnapshot('g', board.id, f.now()), f.now());
+    let result;
+    do { result = store.stageEvidencePage(stage, identities, new Set(['MARS']), new Set(['u', 'v']), f.now()); } while (result.phase !== 'ready');
+    store.finalizeEvidenceStage(stage, f.now());
+    assert.deepEqual(store.get('g', board.id).cells.slice(0, 12).map(cell => cell.progress), [3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 0]);
+    f.db.community.purgeIdentity('v');
+    assert.deepEqual(store.get('g', board.id).cells.slice(0, 12).map(cell => cell.progress), [2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 0]);
+    f.db.community.purgeIdentity('u');
+    assert.deepEqual(store.get('g', board.id).cells.slice(0, 12).map(cell => cell.progress), [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  } finally { await f.close(); }
+});
+
+test('routine retention removal is limited to two hundred evidence rows and refresh drains the rest', async () => {
+  const f = communityFixture();
+  try {
+    const { store, board } = setup(f);
+    const matches = Array.from({ length: 451 }, (_, i) => session(f.now() + i, String(i).padStart(4, '0')));
+    f.db.history.upsertPlayerMatches('g', 'p', 'u', matches);
+    const identities = new Map([['u', identity(f)]]);
+    const stage = store.beginEvidenceStage(store.evidenceSnapshot('g', board.id, f.now()), f.now());
+    let result;
+    do { result = store.stageEvidencePage(stage, identities, new Set(['MARS']), new Set(['u']), f.now()); } while (result.phase !== 'ready');
+    store.finalizeEvidenceStage(stage, f.now());
+    f.db.history.retain('g', 14, f.now() + 15 * 86_400_000);
+    assert.equal(store.get('g', board.id).cells[0].progress, 251);
+    store.refresh('g', board.id, f.now());
+    assert.equal(store.get('g', board.id).cells[0].progress, 51);
+    store.refresh('g', board.id, f.now());
+    assert.equal(store.get('g', board.id).cells[0].progress, 0);
+  } finally { await f.close(); }
+});
+
+test('legacy bingo evidence upgrades to generations without losing cells, approvals or aggregate corrections', async () => {
+  const f = communityFixture();
+  try {
+    const { store, board } = setup(f);
+    const match = session(f.now());
+    f.db.history.upsertPlayerMatches('g', 'p', 'u', [match]);
+    const available = saveAvailability(f);
+    store.replaceEvidence('g', board.id, board.revision, collect(f, board, [match], [available]), undefined, f.now());
+    store.setManualApproval('g', board.id, board.revision, 13, true, 'officer', 'Verified', f.now());
+    // Recreate the reviewed pre-generation schema with its real persisted records.
+    f.db.db.exec(`DROP TRIGGER bingo_evidence_insert; DROP TRIGGER bingo_evidence_delete; DROP TRIGGER bingo_evidence_update;
+      ALTER TABLE community_bingo_evidence RENAME TO generation_evidence;
+      CREATE TABLE community_bingo_evidence (board_id TEXT NOT NULL,guild_id TEXT NOT NULL,evidence_key TEXT NOT NULL,
+        discord_id TEXT NOT NULL,public_id TEXT,kind TEXT NOT NULL,game_id TEXT,at INTEGER NOT NULL,won INTEGER NOT NULL,
+        linked_at TEXT,PRIMARY KEY(board_id,evidence_key));
+      INSERT INTO community_bingo_evidence SELECT board_id,guild_id,evidence_key,discord_id,public_id,kind,game_id,at,won,linked_at
+        FROM generation_evidence;
+      DROP TABLE generation_evidence;
+      DROP TABLE community_bingo_totals; DROP TABLE community_bingo_groups; DROP TABLE community_bingo_generations;
+      ALTER TABLE community_bingo_boards DROP COLUMN evidence_generation;
+      ALTER TABLE community_bingo_boards DROP COLUMN refresh_cursor;
+      ALTER TABLE community_bingo_boards DROP COLUMN refresh_version;`);
+    BingoStore.initialize(f.db.db);
+    assert.equal(store.get('g', board.id).cells[13].complete, true);
+    assert.equal(store.listEvidence('g', board.id).length, 2);
+    f.db.history.upsertPlayerMatches('g', 'p', 'u', [{ ...match, hasWon: false }]);
+    store.refresh('g', board.id, f.now());
+    assert.equal(store.get('g', board.id).cells[0].progress, 1);
+    assert.equal(store.get('g', board.id).cells[3].progress, 0);
+    assert.equal(store.get('g', board.id).cells[6].progress, 1);
+    assert.equal(store.get('g', board.id).cells[11].progress, 1);
+    assert.equal(store.get('g', board.id).cells[13].complete, true);
+  } finally { await f.close(); }
+});
+
+test('partial dirty refresh cannot consume a mixed-line notification key before fresh completion', async () => {
+  const f = communityFixture();
+  try {
+    const { store, board: original } = setup(f);
+    store.archive('g', original.id, original.revision, f.now());
+    const definitions = Array.from({ length: 24 }, (_, i) => ({ kind: 'manual', target: 1, label: String(i) }));
+    definitions[4] = { kind: 'wins', target: 1, label: 'Observed win' };
+    const draft = store.createDraft('g', 'c', definitions, null, f.now());
+    const board = store.publish('g', draft.id, draft.revision, 'mixed');
+    for (let index = 0; index < 3; index++) store.setManualApproval('g', board.id, board.revision, index, true, 'officer', 'Verified', f.now());
+    const matches = Array.from({ length: 451 }, (_, i) => session(f.now() + i, String(i).padStart(4, '0')));
+    f.db.history.upsertPlayerMatches('g', 'p', 'u', matches);
+    store.replaceEvidence('g', board.id, board.revision, collect(f, board, matches), undefined, f.now());
+    f.db.history.setMeta('deletions_error', 'offline');
+    store.setManualApproval('g', board.id, board.revision, 3, true, 'officer', 'Verified', f.now());
+    assert.equal(store.get('g', board.id).cells[4].progress, 251);
+    assert.equal(f.db.db.prepare('SELECT COUNT(*) AS n FROM community_bingo_notifications WHERE board_id=?').get(board.id).n, 0);
+    f.db.history.setMeta('deletions_error', '');
+    const identities = new Map([['u', identity(f)]]);
+    const stage = store.beginEvidenceStage(store.evidenceSnapshot('g', board.id, f.now()), f.now());
+    let result;
+    do { result = store.stageEvidencePage(stage, identities, new Set(['MARS']), new Set(['u']), f.now()); } while (result.phase !== 'ready');
+    store.finalizeEvidenceStage(stage, f.now());
+    assert.equal(f.db.db.prepare("SELECT COUNT(*) AS n FROM community_bingo_notifications WHERE board_id=? AND line_key='row:0'").get(board.id).n, 1);
+  } finally { await f.close(); }
+});
+
+test('a failed final publication rolls back generation pointers and can retry the complete stage', async () => {
+  const f = communityFixture();
+  try {
+    const { store, board } = setup(f);
+    f.db.history.upsertPlayerMatches('g', 'p', 'u', [session(f.now())]);
+    const identities = new Map([['u', identity(f)]]);
+    const stage = store.beginEvidenceStage(store.evidenceSnapshot('g', board.id, f.now()), f.now());
+    let result;
+    do { result = store.stageEvidencePage(stage, identities, new Set(['MARS']), new Set(['u']), f.now()); } while (result.phase !== 'ready');
+    f.db.db.exec(`CREATE TRIGGER reject_bingo_publication BEFORE UPDATE OF evidence_generation ON community_bingo_boards
+      BEGIN SELECT RAISE(ABORT,'test publication failure'); END;`);
+    assert.throws(() => store.finalizeEvidenceStage(stage, f.now()), /test publication failure/);
+    assert.equal(store.get('g', board.id).cells[0].progress, 0);
+    assert.equal(f.db.db.prepare('SELECT status FROM community_bingo_generations WHERE id=?').get(stage).status, 'staging');
+    assert.equal(f.db.db.prepare('SELECT status FROM community_bingo_generations WHERE id=?').get(board.id).status, 'current');
+    f.db.db.exec('DROP TRIGGER reject_bingo_publication');
+    store.finalizeEvidenceStage(stage, f.now());
+    assert.equal(store.get('g', board.id).cells[0].progress, 1);
   } finally { await f.close(); }
 });

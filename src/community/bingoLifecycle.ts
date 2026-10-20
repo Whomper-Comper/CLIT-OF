@@ -3,6 +3,9 @@ import { BingoStore } from './bingo.js';
 
 /** Also advance generations when no evidence was committed yet: an awaited snapshot may still exist. */
 export function invalidateBingoSources(sql: DatabaseSync, guildId?: string): void {
+  sql.prepare(`UPDATE community_bingo_generations SET status='abandoned',updated_at=?
+    WHERE status='staging'${guildId === undefined ? '' : ' AND guild_id=?'}`)
+    .run(...(guildId === undefined ? [Date.now()] : [Date.now(), guildId]));
   if (guildId !== undefined) {
     sql.prepare(`INSERT INTO community_bingo_sources(guild_id,revision) VALUES(?,1)
       ON CONFLICT(guild_id) DO UPDATE SET revision=revision+1`).run(guildId);
@@ -32,26 +35,48 @@ export function clearBingoEvidence(sql: DatabaseSync, scope: 'identity' | 'accou
   }
 }
 export function purgeBingoGuild(sql: DatabaseSync, guildId: string): void {
+  sql.prepare('DELETE FROM community_bingo_evidence WHERE guild_id=?').run(guildId);
   for (const table of ['community_bingo_approvals', 'community_bingo_audit', 'community_bingo_notifications']) {
     sql.prepare(`DELETE FROM ${table} WHERE board_id IN (SELECT id FROM community_bingo_boards WHERE guild_id=?)`).run(guildId);
   }
-  for (const table of ['community_bingo_evidence', 'community_bingo_boards', 'community_bingo_sources']) {
+  for (const table of ['community_bingo_totals', 'community_bingo_groups', 'community_bingo_generations']) {
+    sql.prepare(`DELETE FROM ${table} WHERE board_id IN (SELECT id FROM community_bingo_boards WHERE guild_id=?)`).run(guildId);
+  }
+  for (const table of ['community_bingo_boards', 'community_bingo_sources']) {
     sql.prepare(`DELETE FROM ${table} WHERE guild_id=?`).run(guildId);
   }
 }
 export function retainBingoEvidence(sql: DatabaseSync, guildId: string, cutoff: number): void {
-  const affected = sql.prepare(`SELECT DISTINCT board_id FROM community_bingo_evidence
-    WHERE guild_id=? AND kind='game' AND at<?`).all(guildId, cutoff);
-  sql.prepare("DELETE FROM community_bingo_evidence WHERE guild_id=? AND kind='game' AND at<?").run(guildId, cutoff);
-  if (!affected.length) return;
+  const rows = sql.prepare(`SELECT rowid,board_id FROM community_bingo_evidence
+    WHERE guild_id=? AND kind='game' AND at<? ORDER BY at LIMIT 200`).all(guildId, cutoff);
+  const remove = sql.prepare('DELETE FROM community_bingo_evidence WHERE rowid=?');
+  for (const row of rows) remove.run(row.rowid!);
+  if (!rows.length) return;
   invalidateBingoSources(sql, guildId);
   const store = new BingoStore(sql);
-  for (const row of affected) {
-    const board = store.get(guildId, String(row.board_id));
+  for (const boardId of new Set(rows.map(row => String(row.board_id)))) {
+    const board = store.get(guildId, boardId);
     if (board && board.status !== 'archived') store.recompute(guildId, board.id, Date.now());
   }
 }
+function pruneGenerations(sql: DatabaseSync, now: number): void {
+  sql.prepare(`UPDATE community_bingo_generations SET status='abandoned' WHERE id IN (
+    SELECT id FROM community_bingo_generations WHERE status='staging' AND updated_at<? ORDER BY updated_at,id LIMIT 20)`)
+    .run(now - 86_400_000);
+  const retired = sql.prepare(`SELECT id,board_id FROM community_bingo_generations WHERE status IN ('retired','abandoned')
+    ORDER BY updated_at,id LIMIT 20`).all();
+  for (const row of retired) {
+    sql.prepare(`DELETE FROM community_bingo_evidence WHERE rowid IN (
+      SELECT rowid FROM community_bingo_evidence WHERE board_id=? AND generation=? LIMIT 200)`).run(row.board_id!, row.id!);
+    if (sql.prepare('SELECT 1 FROM community_bingo_evidence WHERE board_id=? AND generation=? LIMIT 1').get(row.board_id!, row.id!)) continue;
+    for (const table of ['community_bingo_totals', 'community_bingo_groups']) {
+      sql.prepare(`DELETE FROM ${table} WHERE board_id=? AND generation=?`).run(row.board_id!, row.id!);
+    }
+    sql.prepare('DELETE FROM community_bingo_generations WHERE id=?').run(row.id!);
+  }
+}
 export function pruneBingo(sql: DatabaseSync, now: number): void {
+  pruneGenerations(sql, now);
   const rows = sql.prepare(`SELECT id,guild_id FROM community_bingo_boards WHERE status='archived' AND archived_at<?
     ORDER BY archived_at,id LIMIT 20`).all(now - 90 * 86_400_000);
   for (const row of rows) {
@@ -59,6 +84,12 @@ export function pruneBingo(sql: DatabaseSync, now: number): void {
     for (const table of ['community_bingo_evidence', 'community_bingo_approvals', 'community_bingo_audit', 'community_bingo_notifications']) {
       sql.prepare(`DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE board_id=? LIMIT 200)`).run(row.id!);
       if (sql.prepare(`SELECT 1 FROM ${table} WHERE board_id=? LIMIT 1`).get(row.id!)) remaining = true;
+    }
+    if (!sql.prepare('SELECT 1 FROM community_bingo_evidence WHERE board_id=? LIMIT 1').get(row.id!)) {
+      for (const table of ['community_bingo_totals', 'community_bingo_groups', 'community_bingo_generations']) {
+        sql.prepare(`DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE board_id=? LIMIT 200)`).run(row.id!);
+        if (sql.prepare(`SELECT 1 FROM ${table} WHERE board_id=? LIMIT 1`).get(row.id!)) remaining = true;
+      }
     }
     sql.prepare(`DELETE FROM community_deliveries WHERE id IN (SELECT id FROM community_deliveries
       WHERE guild_id=? AND subject_id=? AND kind IN ('bingo_publish','bingo_update','bingo_complete') LIMIT 200)`).run(row.guild_id!, row.id!);

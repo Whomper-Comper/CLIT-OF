@@ -3,7 +3,9 @@ import type { DatabaseSync } from 'node:sqlite';
 import { CommandError } from '../commandError.js';
 import { DeliveryStore } from './deliveries.js';
 import { withCommunityTransaction } from './transactions.js';
-import { bingoAvailabilityKey, bingoGameKey, type BingoEvidence } from './bingoEvidence.js';
+import { bingoAvailabilityKey, bingoGameKey, collectBingoEvidence, type BingoEvidence } from './bingoEvidence.js';
+import { initializeBingoGenerations, currentBingoGeneration, writeBingoEvidence, bingoGenerationProgress } from './bingoGenerations.js';
+import type { MemberAvailability } from './availability.js';
 import type { IdentityBinding } from './types.js';
 import type { StoredPlayerSession } from '../historyStore.js';
 export type { BingoEvidence } from './bingoEvidence.js';
@@ -80,6 +82,11 @@ export function evaluateBingo(cells: BingoCell[], evidence: BingoEvidence[], app
   let largest = 0;
   for (const group of groups.values()) largest = Math.max(largest, group.size);
   const progress = { appearances: games.size, wins, contributors: contributors.size, shared_game: largest, availability: availability.size };
+  return evaluateProgress(cells, progress, approvedCells);
+}
+function evaluateProgress(cells: BingoCell[], progress: ReturnType<typeof bingoGenerationProgress>, approvedCells: Set<number>): {
+  cells: BingoCell[]; lines: string[]; complete: boolean;
+} {
   const evaluated = cells.map(cell => {
     if (cell.index === 12) return { ...cell, objective: null, progress: 1, complete: true };
     const objective = cell.objective!;
@@ -100,6 +107,14 @@ function decode(row: Record<string, unknown>): BingoBoard {
     messageId: row.message_id as string | null, createdAt: Number(row.created_at), closesAt: row.closes_at as number | null,
     status: row.status as BingoBoard['status'], revision: Number(row.revision), cells: JSON.parse(String(row.cells)) };
 }
+function lineCells(key: string): number[] {
+  if (key === 'board') return Array.from({ length: 25 }, (_, index) => index);
+  const [kind, value] = key.split(':');
+  const index = Number(value);
+  if (kind === 'row') return [0, 1, 2, 3, 4].map(column => index * 5 + column);
+  if (kind === 'column') return [0, 1, 2, 3, 4].map(row => row * 5 + index);
+  return index === 0 ? [0, 6, 12, 18, 24] : [4, 8, 12, 16, 20];
+}
 export class BingoStore {
   constructor(private readonly sql: DatabaseSync, private readonly identityCurrent?: (binding: IdentityBinding) => boolean) {}
 
@@ -112,14 +127,6 @@ export class BingoStore {
       CREATE INDEX IF NOT EXISTS community_bingo_guild ON community_bingo_boards(guild_id,status,id);
       CREATE INDEX IF NOT EXISTS community_bingo_active_page ON community_bingo_boards(status,id);
       CREATE INDEX IF NOT EXISTS community_bingo_retention ON community_bingo_boards(status,archived_at,id);
-      CREATE TABLE IF NOT EXISTS community_bingo_evidence (
-      board_id TEXT NOT NULL,guild_id TEXT NOT NULL,evidence_key TEXT NOT NULL,discord_id TEXT NOT NULL,public_id TEXT,
-      kind TEXT NOT NULL,game_id TEXT,at INTEGER NOT NULL,won INTEGER NOT NULL,linked_at TEXT,
-      PRIMARY KEY(board_id,evidence_key));
-      CREATE INDEX IF NOT EXISTS community_bingo_evidence_member ON community_bingo_evidence(discord_id,guild_id,kind,board_id);
-      CREATE INDEX IF NOT EXISTS community_bingo_evidence_account ON community_bingo_evidence(public_id,board_id);
-      CREATE INDEX IF NOT EXISTS community_bingo_evidence_guild ON community_bingo_evidence(guild_id,kind,board_id);
-      CREATE INDEX IF NOT EXISTS community_bingo_evidence_time ON community_bingo_evidence(board_id,kind,at);
       CREATE TABLE IF NOT EXISTS community_bingo_approvals (
       board_id TEXT NOT NULL,cell_index INTEGER NOT NULL,approved INTEGER NOT NULL,PRIMARY KEY(board_id,cell_index));
       CREATE TABLE IF NOT EXISTS community_bingo_audit (
@@ -130,6 +137,7 @@ export class BingoStore {
       board_id TEXT NOT NULL,line_key TEXT NOT NULL,at INTEGER NOT NULL,PRIMARY KEY(board_id,line_key));
       CREATE TABLE IF NOT EXISTS community_bingo_sources (
       guild_id TEXT PRIMARY KEY,revision INTEGER NOT NULL DEFAULT 0,eligibility TEXT);`);
+    initializeBingoGenerations(sql);
     if (sql.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='history_player_matches'").get()) {
       sql.exec('CREATE INDEX IF NOT EXISTS history_bingo_page ON history_player_matches(guild_id,game_start,public_id,game_id)');
     }
@@ -166,9 +174,13 @@ export class BingoStore {
     const cells = Array.from({ length: 25 }, (_, index) => ({ index, objective: index === 12 ? null : { ...objectives[next++] },
       complete: index === 12, progress: index === 12 ? 1 : 0 }));
     const id = randomUUID();
-    this.sql.prepare(`INSERT INTO community_bingo_boards(id,guild_id,channel_id,created_at,closes_at,status,revision,cells)
-      VALUES(?,?,?,?,?,'draft',1,?)`).run(id, guildId, channelId, now, closesAt, JSON.stringify(cells));
-    return this.get(guildId, id)!;
+    return withCommunityTransaction(this.sql, () => {
+      this.sql.prepare(`INSERT INTO community_bingo_boards(id,guild_id,channel_id,created_at,closes_at,status,revision,cells,evidence_generation)
+        VALUES(?,?,?,?,?,'draft',1,?,?)`).run(id, guildId, channelId, now, closesAt, JSON.stringify(cells), id);
+      this.sql.prepare(`INSERT INTO community_bingo_generations(id,board_id,guild_id,status,created_at,updated_at)
+        VALUES(?,?,?,'current',?,?)`).run(id, id, guildId, now, now);
+      return this.get(guildId, id)!;
+    });
   }
   get(guildId: string, boardId: string): BingoBoard | null {
     const row = this.sql.prepare('SELECT * FROM community_bingo_boards WHERE guild_id=? AND id=?').get(guildId, boardId);
@@ -261,6 +273,80 @@ export class BingoStore {
     return { matches: page.map(row => ({ ...JSON.parse(String(row.payload)), public_id: String(row.public_id), discord_id: String(row.discord_id) })),
       next: rows.length > take && last ? { start: String(last.game_start), publicId: String(last.public_id), gameId: String(last.game_id) } : null };
   }
+  beginEvidenceStage(snapshot: BingoSnapshot, now = Date.now()): string {
+    return withCommunityTransaction(this.sql, () => {
+      this.assertSnapshot(snapshot, now);
+      this.sql.prepare("UPDATE community_bingo_generations SET status='abandoned',updated_at=? WHERE board_id=? AND status='staging'")
+        .run(now, snapshot.boardId);
+      const id = randomUUID();
+      this.sql.prepare(`INSERT INTO community_bingo_generations(id,board_id,guild_id,status,snapshot,created_at,updated_at)
+        VALUES(?,?,?,'staging',?,?,?)`).run(id, snapshot.boardId, snapshot.guildId, JSON.stringify(snapshot), now, now);
+      return id;
+    });
+  }
+  private stage(id: string, now: number): { row: Record<string, unknown>; snapshot: BingoSnapshot; board: BingoBoard } {
+    const row = this.sql.prepare("SELECT * FROM community_bingo_generations WHERE id=? AND status='staging'").get(id);
+    if (!row || !row.snapshot) throw changed();
+    const snapshot = JSON.parse(String(row.snapshot)) as BingoSnapshot;
+    return { row, snapshot, board: this.assertSnapshot(snapshot, now) };
+  }
+  /** Trusted producer: this call reads, parses, validates and stages at most 200 canonical source rows.
+   * The consumer syncs the fresh inventory before continuing; no accumulated array is passed to finalization. */
+  stageEvidencePage(id: string, identities: Map<string, IdentityBinding>, clanTags: Set<string>, currentMembers: Set<string>,
+    now = Date.now(), limit = 200): { phase: 'games' | 'availability' | 'ready'; processed: number } {
+    return withCommunityTransaction(this.sql, () => {
+      const { row, snapshot, board } = this.stage(id, now);
+      const take = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : 200;
+      let phase = row.phase as 'games' | 'availability' | 'ready';
+      if (phase === 'ready') return { phase, processed: 0 };
+      let matches: StoredPlayerSession[] = [];
+      let available: MemberAvailability[] = [];
+      let cursor: string | null = null;
+      let processed: number;
+      if (phase === 'games') {
+        const page = this.readGamePage(snapshot, row.cursor ? JSON.parse(String(row.cursor)) : null, take, now);
+        matches = page.matches;
+        processed = matches.length;
+        cursor = page.next ? JSON.stringify(page.next) : null;
+        if (!page.next) phase = 'availability';
+      } else {
+        const rows = this.sql.prepare(`SELECT * FROM community_availability WHERE guild_id=? AND discord_id>?
+          AND windows IS NOT NULL ORDER BY discord_id LIMIT ?`).all(board.guildId, row.cursor ? String(row.cursor) : '', take + 1);
+        const page = rows.slice(0, take);
+        available = page.map(item => ({ guildId: board.guildId, discordId: String(item.discord_id), timezone: String(item.timezone),
+          windows: JSON.parse(String(item.windows)), revision: Number(item.revision), updatedAt: Number(item.updated_at) }));
+        processed = available.length;
+        cursor = rows.length > take ? String(page.at(-1)!.discord_id) : null;
+        if (cursor === null) phase = 'ready';
+      }
+      const context = this.validationContext(board.guildId, now);
+      const tags = new Set([...clanTags].map(tag => tag.trim().toUpperCase()).filter(tag => context.tags.has(tag)));
+      const evidence = collectBingoEvidence(board, context.state.status === 'observed' ? matches : [], available,
+        identities, tags, snapshot.retentionStart, currentMembers);
+      for (const item of evidence) {
+        if (item.kind === 'game' && !this.bindingAllowed(board, item, context)) continue;
+        writeBingoEvidence(this.sql, board.guildId, id, item);
+      }
+      this.sql.prepare('UPDATE community_bingo_generations SET phase=?,cursor=?,updated_at=? WHERE id=?').run(phase, cursor, now, id);
+      return { phase, processed };
+    });
+  }
+  /** Constant-size atomic publication: token/health/retention check, generation pointer and 25 cells.
+   * Staging already validated source payloads; source mutations invalidate the token. */
+  finalizeEvidenceStage(id: string, now = Date.now()): BingoBoard {
+    return withCommunityTransaction(this.sql, () => {
+      const { row, snapshot, board } = this.stage(id, now);
+      if (row.phase !== 'ready') throw new CommandError('Finish every bingo source page before publishing progress.');
+      const previous = currentBingoGeneration(this.sql, board.id);
+      this.sql.prepare("UPDATE community_bingo_generations SET status='retired',updated_at=? WHERE id=?").run(now, previous);
+      this.sql.prepare("UPDATE community_bingo_generations SET status='current',snapshot=NULL,cursor=NULL,updated_at=? WHERE id=?").run(now, id);
+      const first = this.sql.prepare("SELECT MIN(at) AS at FROM community_bingo_evidence WHERE board_id=? AND generation=? AND kind='game'").get(board.id, id)!;
+      const nextExpiry = first.at === null ? null : Number(first.at) + this.gameEvidenceState(board.guildId, now).retentionDays * DAY + 1;
+      this.sql.prepare(`UPDATE community_bingo_boards SET evidence_generation=?,source_version=?,next_expiry=?,refresh_cursor=NULL,refresh_version=NULL
+        WHERE id=?`).run(id, snapshot.version, nextExpiry, board.id);
+      return this.evaluate(board, now);
+    });
+  }
   private validationContext(guildId: string, now: number): ValidationContext {
     return { state: this.gameEvidenceState(guildId, now), identities: new Map(),
       tags: new Set(this.sql.prepare('SELECT clan_tag FROM guild_clan_configs WHERE guild_id=?').all(guildId)
@@ -277,13 +363,7 @@ export class BingoStore {
     }
     const state = context.state;
     if (item.kind !== 'game' || state.status !== 'observed' || item.at < state.retentionStart || !item.publicId || !item.gameId || !item.linkedAt) return null;
-    const bindingKey = JSON.stringify([item.discordId, item.publicId, item.linkedAt]);
-    if (!context.identities.has(bindingKey)) {
-      const binding = { guildId: board.guildId, discordId: item.discordId, publicId: item.publicId, linkedAt: item.linkedAt };
-      context.identities.set(bindingKey, (!this.identityCurrent || this.identityCurrent(binding)) &&
-        !this.sql.prepare('SELECT 1 FROM history_deleted_players WHERE public_id=?').get(item.publicId));
-    }
-    if (!context.identities.get(bindingKey)) return null;
+    if (!this.bindingAllowed(board, item, context)) return null;
     const row = this.sql.prepare('SELECT discord_id,payload FROM history_player_matches WHERE guild_id=? AND public_id=? AND game_id=?')
       .get(board.guildId, item.publicId, item.gameId);
     if (!row || row.discord_id !== item.discordId) return null;
@@ -291,11 +371,20 @@ export class BingoStore {
     if (Date.parse(match.gameStart) !== item.at || !match.gameEnd || !Number.isFinite(Date.parse(match.gameEnd)) ||
         Date.parse(match.gameEnd) < item.at || match.gameType !== 'Public' || match.gameMode !== 'Team' ||
         !match.clanTag || !context.tags.has(match.clanTag.trim().toUpperCase())) return null;
-    // Current Discord/clan eligibility is the fresh inventory consumer's responsibility.
     return { ...item, key: bingoGameKey(item.publicId, item.gameId), won: match.hasWon === true };
   }
-  /** Atomic whole-snapshot replacement. Awaited callers MUST pass the token captured before any await.
-   * Accumulate bounded pages externally; never finalize a partial scan. */
+  private bindingAllowed(board: BingoBoard, item: BingoEvidence, context: ValidationContext): boolean {
+    if (!item.publicId || !item.linkedAt) return false;
+    const bindingKey = JSON.stringify([item.discordId, item.publicId, item.linkedAt]);
+    if (!context.identities.has(bindingKey)) {
+      const binding = { guildId: board.guildId, discordId: item.discordId, publicId: item.publicId, linkedAt: item.linkedAt };
+      context.identities.set(bindingKey, (!this.identityCurrent || this.identityCurrent(binding)) &&
+        !this.sql.prepare('SELECT 1 FROM history_deleted_players WHERE public_id=?').get(item.publicId));
+    }
+    return context.identities.get(bindingKey) === true;
+  }
+  /** Synchronous compatibility for untrusted arrays: canonical validation is proportional to input.
+   * Production workers must use bounded stageEvidencePage + finalizeEvidenceStage instead. */
   replaceEvidence(guildId: string, boardId: string, revision: number, evidence: BingoEvidence[], snapshot?: BingoSnapshot, now = Date.now()): void {
     withCommunityTransaction(this.sql, () => {
       const board = this.require(guildId, boardId, revision);
@@ -303,47 +392,51 @@ export class BingoStore {
       if (snapshot && (snapshot.guildId !== guildId || snapshot.boardId !== boardId || snapshot.revision !== revision)) throw changed();
       if (snapshot) this.assertSnapshot(snapshot, at);
       const current = new Map(this.listEvidence(guildId, boardId).map(item => [item.key, item]));
+      const generation = currentBingoGeneration(this.sql, boardId);
       const desired = new Map<string, BingoEvidence>();
       const context = this.validationContext(guildId, at);
       for (const item of evidence) {
         const accepted = this.canonical(board, item, context);
         if (accepted) desired.set(accepted.key, accepted);
       }
-      const remove = this.sql.prepare('DELETE FROM community_bingo_evidence WHERE board_id=? AND evidence_key=?');
-      for (const key of current.keys()) if (!desired.has(key)) remove.run(boardId, key);
-      const upsert = this.sql.prepare(`INSERT INTO community_bingo_evidence
-        (board_id,guild_id,evidence_key,discord_id,public_id,kind,game_id,at,won,linked_at) VALUES(?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(board_id,evidence_key) DO UPDATE SET discord_id=excluded.discord_id,public_id=excluded.public_id,
-        kind=excluded.kind,game_id=excluded.game_id,at=excluded.at,won=excluded.won,linked_at=excluded.linked_at`);
+      const remove = this.sql.prepare('DELETE FROM community_bingo_evidence WHERE board_id=? AND generation=? AND evidence_key=?');
+      for (const key of current.keys()) if (!desired.has(key)) remove.run(boardId, generation, key);
       for (const [key, item] of desired) {
         const previous = current.get(key);
         if (previous && previous.discordId === item.discordId && previous.publicId === item.publicId && previous.kind === item.kind &&
             previous.gameId === item.gameId && previous.at === item.at && previous.won === item.won && previous.linkedAt === item.linkedAt) continue;
-        upsert.run(boardId, guildId, key, item.discordId, item.publicId, item.kind, item.gameId, item.at, Number(item.won), item.linkedAt ?? null);
+        writeBingoEvidence(this.sql, guildId, generation, item);
       }
-      this.evaluate(board, at);
       const version = this.sourceVersion(guildId, at);
-      const first = this.sql.prepare("SELECT MIN(at) AS at FROM community_bingo_evidence WHERE board_id=? AND kind='game'").get(boardId)!;
+      const first = this.sql.prepare("SELECT MIN(at) AS at FROM community_bingo_evidence WHERE board_id=? AND generation=? AND kind='game'").get(boardId, generation)!;
       const nextExpiry = first.at === null ? null : Number(first.at) + this.gameEvidenceState(guildId, at).retentionDays * DAY + 1;
       this.sql.prepare(`UPDATE community_bingo_boards SET source_version=?,next_expiry=? WHERE id=?
         AND (source_version IS NOT ? OR next_expiry IS NOT ?)`).run(version, nextExpiry, boardId, version, nextExpiry);
+      this.evaluate(board, at);
     });
   }
   listEvidence(guildId: string, boardId: string): BingoEvidence[] {
-    return this.sql.prepare('SELECT * FROM community_bingo_evidence WHERE guild_id=? AND board_id=? ORDER BY evidence_key').all(guildId, boardId)
-      .map(row => ({ key: String(row.evidence_key), boardId, discordId: String(row.discord_id), publicId: row.public_id as string | null,
+    const generation = currentBingoGeneration(this.sql, boardId);
+    return this.sql.prepare('SELECT * FROM community_bingo_evidence WHERE guild_id=? AND board_id=? AND generation=? ORDER BY evidence_key').all(guildId, boardId, generation)
+      .map(row => this.decodeEvidence(row, boardId));
+  }
+  private decodeEvidence(row: Record<string, unknown>, boardId: string): BingoEvidence {
+    return { key: String(row.evidence_key), boardId, discordId: String(row.discord_id), publicId: row.public_id as string | null,
         kind: row.kind as BingoEvidence['kind'], gameId: row.game_id as string | null, at: Number(row.at), won: !!row.won,
-        linkedAt: row.linked_at === null ? undefined : String(row.linked_at) }));
+        linkedAt: row.linked_at === null ? undefined : String(row.linked_at) };
   }
   private evaluate(board: BingoBoard, now: number): BingoBoard {
     const approvals = this.sql.prepare('SELECT cell_index FROM community_bingo_approvals WHERE board_id=? AND approved=1').all(board.id);
-    const result = evaluateBingo(board.cells, this.listEvidence(board.guildId, board.id), new Set(approvals.map(row => Number(row.cell_index))));
+    const result = evaluateProgress(board.cells, bingoGenerationProgress(this.sql, board.id), new Set(approvals.map(row => Number(row.cell_index))));
     const cells = JSON.stringify(result.cells);
     const lines = JSON.stringify(result.lines);
     this.sql.prepare('UPDATE community_bingo_boards SET cells=?,lines=? WHERE id=? AND (cells<>? OR lines<>?)').run(cells, lines, board.id, cells, lines);
     if (board.status === 'active') {
+      const fresh = !this.needsEvidenceRefresh(board.guildId, board.id, now);
       const notifications = result.complete ? [...result.lines, 'board'] : result.lines;
       for (const line of notifications) {
+        // A partial correction may leave stale automatic counts. Do not consume their historical keys.
+        if (!fresh && !lineCells(line).every(index => index === 12 || result.cells[index].objective?.kind === 'manual')) continue;
         const inserted = this.sql.prepare('INSERT OR IGNORE INTO community_bingo_notifications(board_id,line_key,at) VALUES(?,?,?)').run(board.id, line, now);
         if (inserted.changes) new DeliveryStore(this.sql).enqueue({ key: `bingo:${board.id}:${line}`, guildId: board.guildId,
           channelId: board.channelId, kind: 'bingo_complete', subjectId: board.id, revision: board.revision, dueAt: now,
@@ -360,15 +453,23 @@ export class BingoStore {
     return withCommunityTransaction(this.sql, () => {
       const board = this.require(guildId, boardId);
       if (!this.needsEvidenceRefresh(guildId, boardId, now)) return board;
-      const evidence = this.listEvidence(guildId, boardId);
+      const version = this.sourceVersion(guildId, now);
+      const state = this.sql.prepare('SELECT evidence_generation,refresh_cursor,refresh_version FROM community_bingo_boards WHERE id=?').get(boardId)!;
+      const cursor = state.refresh_version === version ? String(state.refresh_cursor ?? '') : '';
+      const generation = String(state.evidence_generation);
+      const rows = this.sql.prepare(`SELECT * FROM community_bingo_evidence WHERE board_id=? AND generation=? AND evidence_key>?
+        ORDER BY evidence_key LIMIT 200`).all(boardId, generation, cursor);
+      const evidence = rows.map(row => this.decodeEvidence(row, boardId));
       const context = this.validationContext(guildId, now);
-      const remove = this.sql.prepare('DELETE FROM community_bingo_evidence WHERE board_id=? AND evidence_key=?');
-      const update = this.sql.prepare('UPDATE community_bingo_evidence SET won=? WHERE board_id=? AND evidence_key=?');
+      const remove = this.sql.prepare('DELETE FROM community_bingo_evidence WHERE board_id=? AND generation=? AND evidence_key=?');
+      const update = this.sql.prepare('UPDATE community_bingo_evidence SET won=? WHERE board_id=? AND generation=? AND evidence_key=?');
       for (const item of evidence) {
         const canonical = this.canonical(board, item, context);
-        if (!canonical) remove.run(boardId, item.key);
-        else if (canonical.won !== item.won) update.run(Number(canonical.won), boardId, item.key);
+        if (!canonical) remove.run(boardId, generation, item.key);
+        else if (canonical.won !== item.won) update.run(Number(canonical.won), boardId, generation, item.key);
       }
+      this.sql.prepare('UPDATE community_bingo_boards SET refresh_cursor=?,refresh_version=? WHERE id=?')
+        .run(evidence.length === 200 ? evidence.at(-1)!.key : null, version, boardId);
       return this.evaluate(board, now);
     });
   }
