@@ -16,6 +16,7 @@ This reference describes the commands registered by `src/commands/index.ts` and 
 - [/clan](#clan)
 - [/debug](#debug)
 - [Statistic milestones](#statistic-milestones)
+- [Shared server bingo](#shared-server-bingo)
 - [Common command problems](#common-command-problems)
 
 ## Entering commands
@@ -24,7 +25,7 @@ Type `/` in Discord, choose the bot's command, then fill in Discord's named inpu
 
 `/clan` has one required **action option**, not slash subcommands: use `/clan action:sync`, not `/clan sync`. Likewise use `/debug action:status`. Discord can show a friendly label for a choice while its underlying value is the value documented here.
 
-There are thirteen registered commands: `/link`, `/unlink`, `/whois`, `/stats`, `/clan`, `/config`, `/debug`, `/dice`, `/availability`, `/event`, `/onboarding`, `/wheel`, and `/milestones`. `/config`, `/clan`, `/debug`, `/availability`, `/event`, `/onboarding`, `/wheel`, and `/milestones` are explicitly server-only. The other builders do not declare a server-only context; availability outside servers also depends on the application's installation and Discord command contexts. In a DM, identity lookups use verified bot-wide links, not server approvals.
+There are fourteen registered commands: `/link`, `/unlink`, `/whois`, `/stats`, `/clan`, `/config`, `/debug`, `/dice`, `/availability`, `/event`, `/onboarding`, `/wheel`, `/milestones`, and `/bingo`. `/config`, `/clan`, `/debug`, `/availability`, `/event`, `/onboarding`, `/wheel`, `/milestones`, and `/bingo` are explicitly server-only. The other builders do not declare a server-only context; availability outside servers also depends on the application's installation and Discord command contexts. In a DM, identity lookups use verified bot-wide links, not server approvals.
 
 ### Accepted identity inputs
 
@@ -364,3 +365,17 @@ Officers use `/wheel presets` to choose a package, `/wheel add` to create one, `
 Six editable starters appear once per guild: Classic clan teams, Squad skirmish, Naval night, Conventional warfare, Friendly free-for-all, and Humans versus nations. Removing every preset does not restore them; `/wheel add` creates a replacement. Disabling every preset makes spins ask an officer to enable or add a package.
 
 Officer spinners receive a separate private **Create event draft** button. It copies the exact selected settings and instructions into an unpublished event draft; later preset edits/removals do not change that copy. Review the proposed date in event management before publishing. No members are automatically signed up. Private wheel controls belong to their opener, server, channel and original private message, expire after ten minutes, and recheck current officer access. Reopen `/wheel presets` after a stale revision.
+
+## Shared server bingo
+
+`/bingo view` privately shows the current shared 5×5 board and links to its canonical public message. The public card shows five numbered rows, current completion/progress and completed lines, with **Refresh** and **Claim a cell**. Long labels are shortened on the card; `/bingo view cell:14` reads the full immutable challenge. The center (13) is free.
+
+Officers use `/bingo create` to create or resume their own private draft in the chosen destination channel. **Edit challenges** opens two groups of twelve definitions, in `kind | target | description` format, and an optional closing instant in `YYYY-MM-DDTHH:mm:ssZ` UTC format (`-` means no closing date). Supported kinds are `appearances`, `wins`, `contributors`, `shared_game`, `availability`, and `manual`. Targets are 1–1,000,000; manual targets must be 1, descriptions at most 160 characters. Edit all 24 definitions before explicitly pressing **Publish board**. Publication is queued and definitions freeze once published. Boards never reset automatically. `/bingo reset` previews a replacement and requires **Confirm reset**, which archives the old board and queues the replacement.
+
+`/bingo claim cell:14 explanation:… [evidence:https://…]` submits a private manual claim. The public **Claim a cell** button opens the same private form. A repeated pending claim from the same person for the same cell returns the existing claim. Automatic cells and the center reject manual claims. Explanations allow 1000 characters and evidence URLs 500; evidence must use HTTPS and is stored as text without being fetched. Claims close at the optional board closing instant.
+
+Officers use `/bingo review [page:1]` to inspect ten claims at a time. Choose a claim to read its full explanation/evidence, enter `approve` or `reject`, and give an audit reason. Rejecting an approved claim revokes the cell approval. Decisions and explanations remain private. Private controls bind their owner, server, channel, message and board/claim revision and expire after ten minutes; reopen after a change. Each privileged action refreshes officer access. Collection-disabled and unavailable game tracking still allow manual claims and review.
+
+Automatic progress uses retained observed public Team sessions and current linked humans/configured clan tags, plus current humans' availability submissions after board creation. A full fresh scan may take several ticks; automatic cells and mixed lines show refreshing until it completes. Cards label disabled/unavailable collection, incomplete coverage and the retention horizon. Existing progress can decrease after corrections, retention, unlink or departure. A lost/regained line announces only once per board. Refresh queues a card update; it does not fetch OpenFront profiles.
+
+Paused/failed/uncertain deliveries appear in `/bingo create` for unpublished drafts and `/bingo review` for active boards. **Retry / reconcile** rechecks officer access and deliberately retries after permissions are corrected. An uncertain accepted post is reconciled using its existing bot recovery marker; an unproven outcome stays reviewable without an automatic duplicate publication.

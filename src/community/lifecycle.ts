@@ -19,6 +19,7 @@ export function clearGameEvidence(sql: DatabaseSync, guildId?: string): void {
   clearBingoEvidence(sql, 'games', undefined, guildId);
 }
 export function purgeMember(sql: DatabaseSync, guildId: string, discordId: string): void {
+  sql.prepare("DELETE FROM community_bingo_claims WHERE guild_id=? AND actor_id=? AND status='pending'").run(guildId,discordId);
   clearBingoEvidence(sql, 'member', discordId, guildId);
   sql.prepare(`UPDATE community_events SET promotion_due=1 WHERE guild_id=? AND status='scheduled' AND id IN
     (SELECT event_id FROM community_event_signups WHERE guild_id=? AND discord_id=?)`).run(guildId,guildId,discordId);

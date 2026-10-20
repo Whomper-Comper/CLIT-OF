@@ -8,6 +8,7 @@ import { initializeBingoGenerations, currentBingoGeneration, writeBingoEvidence,
 import type { MemberAvailability } from './availability.js';
 import type { IdentityBinding } from './types.js';
 import type { StoredPlayerSession } from '../historyStore.js';
+import { BingoClaims, initializeBingoClaims } from './bingoClaims.js';
 export type { BingoEvidence } from './bingoEvidence.js';
 
 export interface BingoObjective {
@@ -115,6 +116,19 @@ function lineCells(key: string): number[] {
   if (kind === 'column') return [0, 1, 2, 3, 4].map(row => row * 5 + index);
   return index === 0 ? [0, 6, 12, 18, 24] : [4, 8, 12, 16, 20];
 }
+function draftCells(objectives: BingoObjective[], closesAt: number | null, now: number): BingoCell[] {
+  const kinds = new Set(['appearances', 'wins', 'contributors', 'shared_game', 'availability', 'manual']);
+  if (!Number.isSafeInteger(now) || (closesAt !== null && (!Number.isSafeInteger(closesAt) || closesAt <= now)) ||
+      !Array.isArray(objectives) || objectives.length !== 24 || objectives.some(objective => !objective ||
+        !kinds.has(objective.kind) || !Number.isSafeInteger(objective.target) || objective.target < 1 || objective.target > 1_000_000 ||
+        (objective.kind === 'manual' && objective.target !== 1) || typeof objective.label !== 'string' ||
+        !objective.label.trim() || objective.label.length > 160)) {
+    throw new CommandError('Choose 24 valid bingo challenges and a future closing date.');
+  }
+  let next = 0;
+  return Array.from({ length: 25 }, (_, index) => ({ index, objective: index === 12 ? null : { ...objectives[next++] },
+    complete: index === 12, progress: index === 12 ? 1 : 0 }));
+}
 export class BingoStore {
   constructor(private readonly sql: DatabaseSync, private readonly identityCurrent?: (binding: IdentityBinding) => boolean) {}
 
@@ -138,6 +152,10 @@ export class BingoStore {
       CREATE TABLE IF NOT EXISTS community_bingo_sources (
       guild_id TEXT PRIMARY KEY,revision INTEGER NOT NULL DEFAULT 0,eligibility TEXT);`);
     initializeBingoGenerations(sql);
+    initializeBingoClaims(sql);
+    const columns = new Set(sql.prepare('PRAGMA table_info(community_bingo_boards)').all().map(row => row.name));
+    if (!columns.has('draft_owner')) sql.exec('ALTER TABLE community_bingo_boards ADD COLUMN draft_owner TEXT');
+    sql.exec('CREATE INDEX IF NOT EXISTS community_bingo_draft_owner ON community_bingo_boards(guild_id,draft_owner,status,created_at DESC)');
     if (sql.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='history_player_matches'").get()) {
       sql.exec('CREATE INDEX IF NOT EXISTS history_bingo_page ON history_player_matches(guild_id,game_start,public_id,game_id)');
     }
@@ -163,20 +181,13 @@ export class BingoStore {
     if (!board || board.status === 'archived' || (revision !== undefined && board.revision !== revision)) throw changed();
     return board;
   }
-  createDraft(guildId: string, channelId: string, objectives: BingoObjective[], closesAt: number | null, now: number): BingoBoard {
-    const kinds = new Set(['appearances', 'wins', 'contributors', 'shared_game', 'availability', 'manual']);
-    if (!guildId || !channelId || !Number.isSafeInteger(now) || (closesAt !== null && (!Number.isSafeInteger(closesAt) || closesAt <= now)) ||
-        !Array.isArray(objectives) || objectives.length !== 24 || objectives.some(objective => !objective ||
-          !kinds.has(objective.kind) || !Number.isSafeInteger(objective.target) || objective.target < 1 || objective.target > 1_000_000 ||
-          (objective.kind === 'manual' && objective.target !== 1) || typeof objective.label !== 'string' ||
-          !objective.label.trim() || objective.label.length > 160)) throw new CommandError('Choose 24 valid bingo challenges and a future closing date.');
-    let next = 0;
-    const cells = Array.from({ length: 25 }, (_, index) => ({ index, objective: index === 12 ? null : { ...objectives[next++] },
-      complete: index === 12, progress: index === 12 ? 1 : 0 }));
+  createDraft(guildId: string, channelId: string, objectives: BingoObjective[], closesAt: number | null, now: number, ownerId?: string): BingoBoard {
+    if (!guildId || !channelId) throw changed();
+    const cells = draftCells(objectives, closesAt, now);
     const id = randomUUID();
     return withCommunityTransaction(this.sql, () => {
-      this.sql.prepare(`INSERT INTO community_bingo_boards(id,guild_id,channel_id,created_at,closes_at,status,revision,cells,evidence_generation)
-        VALUES(?,?,?,?,?,'draft',1,?,?)`).run(id, guildId, channelId, now, closesAt, JSON.stringify(cells), id);
+      this.sql.prepare(`INSERT INTO community_bingo_boards(id,guild_id,channel_id,created_at,closes_at,status,revision,cells,evidence_generation,draft_owner)
+        VALUES(?,?,?,?,?,'draft',1,?,?,?)`).run(id, guildId, channelId, now, closesAt, JSON.stringify(cells), id, ownerId ?? null);
       this.sql.prepare(`INSERT INTO community_bingo_generations(id,board_id,guild_id,status,created_at,updated_at)
         VALUES(?,?,?,'current',?,?)`).run(id, id, guildId, now, now);
       return this.get(guildId, id)!;
@@ -185,6 +196,78 @@ export class BingoStore {
   get(guildId: string, boardId: string): BingoBoard | null {
     const row = this.sql.prepare('SELECT * FROM community_bingo_boards WHERE guild_id=? AND id=?').get(guildId, boardId);
     return row ? decode(row) : null;
+  }
+  draft(guildId: string, ownerId?: string): BingoBoard | null {
+    const row = this.sql.prepare(`SELECT * FROM community_bingo_boards WHERE guild_id=? AND status='draft'
+      ${ownerId === undefined ? '' : 'AND draft_owner=?'} ORDER BY created_at DESC,rowid DESC LIMIT 1`)
+      .get(guildId, ...(ownerId === undefined ? [] : [ownerId]));
+    return row ? decode(row) : null;
+  }
+  editDraft(guildId: string, boardId: string, revision: number, objectives: BingoObjective[], closesAt: number | null, now: number): BingoBoard {
+    return withCommunityTransaction(this.sql, () => {
+      const board = this.require(guildId, boardId, revision);
+      if (board.status !== 'draft' || this.deliveryJobs(guildId, boardId).length) throw changed();
+      const cells = draftCells(objectives, closesAt, now);
+      this.sql.prepare('UPDATE community_bingo_boards SET cells=?,closes_at=?,revision=revision+1 WHERE id=?')
+        .run(JSON.stringify(cells), closesAt, boardId);
+      return this.get(guildId, boardId)!;
+    });
+  }
+  requestPublish(guildId: string, boardId: string, revision: number, replace: { id: string; revision: number } | null, now: number): void {
+    withCommunityTransaction(this.sql, () => {
+      const board = this.require(guildId, boardId, revision);
+      if (board.status !== 'draft') throw changed();
+      const active = this.getActive(guildId);
+      if (replace) {
+        if (!active || active.id !== replace.id || active.revision !== replace.revision) throw changed();
+        this.archive(guildId, active.id, active.revision, now);
+      } else if (active) throw new CommandError('Use /bingo reset to explicitly confirm replacement.');
+      new DeliveryStore(this.sql).enqueue({ key: `bingo:${board.id}:publish:${revision}`, guildId,
+        channelId: board.channelId, kind: 'bingo_publish', subjectId: board.id, revision, dueAt: now, part: 0 });
+    });
+  }
+  deliveryJobs(guildId: string, boardId: string) {
+    const rows = this.sql.prepare(`SELECT id FROM community_deliveries WHERE guild_id=? AND subject_id=?
+      AND kind IN ('bingo_publish','bingo_update','bingo_complete') AND status IN ('paused','failed','needs_review','pending','sending')
+      ORDER BY due_at DESC LIMIT 10`).all(guildId, boardId);
+    const deliveries = new DeliveryStore(this.sql);
+    return rows.map(row => deliveries.get(String(row.id))!);
+  }
+  queueUpdate(guildId: string, boardId: string, signature: string, now: number): void {
+    withCommunityTransaction(this.sql, () => {
+      const board = this.require(guildId, boardId);
+      if (board.status !== 'active' || !board.messageId) return;
+      const state = this.sql.prepare('SELECT signature,sequence FROM community_bingo_public_state WHERE board_id=?').get(boardId);
+      if (state?.signature === signature) return;
+      const sequence = Number(state?.sequence ?? 0) + 1;
+      this.sql.prepare(`INSERT INTO community_bingo_public_state(board_id,signature,sequence) VALUES(?,?,?)
+        ON CONFLICT(board_id) DO UPDATE SET signature=excluded.signature,sequence=excluded.sequence`).run(boardId, signature, sequence);
+      const deliveries = new DeliveryStore(this.sql);
+      deliveries.cancelSubject(guildId, 'bingo_update', boardId, now);
+      deliveries.enqueue({ key: `bingo:${boardId}:update:${sequence}`, guildId, channelId: board.channelId,
+        kind: 'bingo_update', subjectId: boardId, revision: board.revision, dueAt: now, part: 0 });
+    });
+  }
+  claim(guildId: string, boardId: string, cell: number, actorId: string, explanation: string, evidenceUrl: string | null, now: number) {
+    return new BingoClaims(this.sql, this).claim(guildId, boardId, cell, actorId, explanation, evidenceUrl, now);
+  }
+  review(guildId: string, claimId: string, officerId: string, approve: boolean, reason: string, expectedRevision: number, now: number): void {
+    new BingoClaims(this.sql, this).review(guildId, claimId, officerId, approve, reason, expectedRevision, now);
+  }
+  claims(guildId: string, boardId: string, page = 1) {
+    return new BingoClaims(this.sql, this).list(guildId, boardId, page);
+  }
+  pendingCells(guildId: string, boardId: string): Set<number> {
+    const board = this.get(guildId, boardId);
+    const pending = new Set<number>();
+    const query = this.sql.prepare("SELECT 1 FROM community_bingo_claims WHERE board_id=? AND cell_index=? AND guild_id=? AND status='pending' LIMIT 1");
+    for (const cell of board?.cells ?? []) {
+      if (cell.objective?.kind === 'manual' && query.get(boardId, cell.index, guildId)) pending.add(cell.index);
+    }
+    return pending;
+  }
+  findClaim(guildId: string, boardId: string, claimId: string) {
+    return new BingoClaims(this.sql, this).find(guildId, boardId, claimId);
   }
   getActive(guildId: string): BingoBoard | null {
     const row = this.sql.prepare("SELECT * FROM community_bingo_boards WHERE guild_id=? AND status='active'").get(guildId);

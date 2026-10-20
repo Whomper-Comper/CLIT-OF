@@ -35,6 +35,8 @@ export function clearBingoEvidence(sql: DatabaseSync, scope: 'identity' | 'accou
   }
 }
 export function purgeBingoGuild(sql: DatabaseSync, guildId: string): void {
+  sql.prepare('DELETE FROM community_bingo_claims WHERE guild_id=?').run(guildId);
+  sql.prepare('DELETE FROM community_bingo_public_state WHERE board_id IN (SELECT id FROM community_bingo_boards WHERE guild_id=?)').run(guildId);
   sql.prepare('DELETE FROM community_bingo_evidence WHERE guild_id=?').run(guildId);
   for (const table of ['community_bingo_approvals', 'community_bingo_audit', 'community_bingo_notifications']) {
     sql.prepare(`DELETE FROM ${table} WHERE board_id IN (SELECT id FROM community_bingo_boards WHERE guild_id=?)`).run(guildId);
@@ -81,7 +83,7 @@ export function pruneBingo(sql: DatabaseSync, now: number): void {
     ORDER BY archived_at,id LIMIT 20`).all(now - 90 * 86_400_000);
   for (const row of rows) {
     let remaining = false;
-    for (const table of ['community_bingo_evidence', 'community_bingo_approvals', 'community_bingo_audit', 'community_bingo_notifications']) {
+    for (const table of ['community_bingo_evidence', 'community_bingo_approvals', 'community_bingo_audit', 'community_bingo_notifications', 'community_bingo_claims', 'community_bingo_public_state']) {
       sql.prepare(`DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE board_id=? LIMIT 200)`).run(row.id!);
       if (sql.prepare(`SELECT 1 FROM ${table} WHERE board_id=? LIMIT 1`).get(row.id!)) remaining = true;
     }

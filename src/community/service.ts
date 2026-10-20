@@ -67,6 +67,7 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : "
 export class CommunityService {
   private readonly tasks = new Map<string, (tick: CommunityTick) => Promise<void>>();
   private readonly handlers = new Map<string, CommunityDeliveryHandler>();
+  private readonly stopHandlers = new Map<string, () => void>();
   private readonly now: () => number;
   private readonly tickMs: number;
   private readonly requestLimit: number;
@@ -83,6 +84,7 @@ export class CommunityService {
   }
   registerTask(key: string, task: (tick: CommunityTick) => Promise<void>): void { this.tasks.set(key,task); }
   registerDelivery(kind: string, handler: CommunityDeliveryHandler): void { this.handlers.set(kind,handler); }
+  registerStopHandler(key: string, handler: () => void): void { this.stopHandlers.set(key, handler); }
   start(): void {
     if (this.timer || this.stopped) return;
     this.timer = setInterval(() => { void this.runOnce().catch(error => console.warn("[Community] Tick failed:",error)); },this.tickMs);
@@ -97,6 +99,8 @@ export class CommunityService {
   }
   async stop(): Promise<void> {
     this.stopped = true;
+    for (const handler of this.stopHandlers.values()) handler();
+    this.stopHandlers.clear();
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     await this.inFlight;
