@@ -2,7 +2,7 @@
 
 Date: 2026-10-18
 
-Status: Design approved on 2026-10-18. All seven features implemented and independently reviewed on `codex/clan-community`; final integration locally verified (490/490 tests), with controller-owned release review pending as of 2026-10-20. Command registration and deployment remain separate.
+Status: Design approved on 2026-10-18. All seven features implemented and independently reviewed on `codex/clan-community`; final integration and final-review fixes locally verified (510/510 tests), with controller-owned scoped release re-review pending as of 2026-10-20. Command registration and deployment remain separate.
 
 ## Intent and approved scope
 

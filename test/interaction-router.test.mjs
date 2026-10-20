@@ -55,7 +55,7 @@ function interaction(overrides = {}) {
   };
 }
 
-test('every community prefix reaches its actual handler and forged saved bindings leave SQLite unchanged', async () => {
+test('persistent community prefixes reject forged saved bindings without changing SQLite', async () => {
   const guildId = 'router-all-prefixes';
   const now = Date.now();
   const event = db.community.events.createDraft({ guildId, channelId: 'saved-channel', creatorId: 'owner',
@@ -66,15 +66,8 @@ test('every community prefix reaches its actual handler and forged saved binding
   const board = db.community.bingo.publish(guildId, draft.id, draft.revision, 'saved-message');
   const duel = db.community.duels.invite({ guildId, channelId: 'saved-channel', messageId: null }, 'a', 'b', now);
   db.community.duels.bindMessage(guildId, duel.id, duel.revision, 'saved-message');
-  const sessions = [];
   const ids = [`event:${event.id}:join:${event.revision}`, `bingo:${board.id}:claim:${board.revision}`,
     `clit-duel:${duel.id}:accept`];
-  for (const prefix of ['evtmenu', 'availability', 'onboarding', 'wheel', 'milestones', 'bingomenu']) {
-    const s = communitySessions.create({ kind: `${prefix}-integration`, ownerId: 'owner', guildId,
-      channelId: 'saved-channel', messageId: 'saved-message', data: {} }, now);
-    sessions.push(s.id);
-    ids.push(`${prefix}:${s.id}:refresh`);
-  }
   const snapshot = () => db.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'community_%' ORDER BY name")
     .all().map(({ name }) => [name, db.db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all()]);
   try {
@@ -94,7 +87,61 @@ test('every community prefix reaches its actual handler and forged saved binding
       }
     }
   } finally {
+    db.community.purgeGuild(guildId);
+  }
+});
+
+test('each valid private route succeeds before owner, guild, channel and message forgeries are rejected privately', async () => {
+  const guildId = 'router-private-valid', now = Date.now();
+  const sessions = [];
+  const event = db.community.events.createDraft({ guildId, channelId: 'saved-channel', creatorId: 'owner',
+    title: 'private integration title', description: '', startAt: now + 3600000,
+    durationMinutes: 60, capacity: 20, squads: [], reminderMinutes: 0 }, now);
+  const board = db.community.bingo.createDraft(guildId, 'saved-channel', defaultBingoObjectives(), null, now);
+  const preset = db.community.wheel.list(guildId)[0];
+  db.setManagerRole(guildId, 'manager');
+  const member = { id: 'owner', user: { id: 'owner', bot: false },
+    roles: { cache: new Collection([['manager', true]]) }, permissions: { has: () => true } };
+  const guild = { id: guildId, members: { fetch: async () => member } };
+  const fixtures = [
+    ['evtmenu', 'event-manage', { eventId: event.id, revision: event.revision }, 'details', 'modal'],
+    ['availability', 'availability', { targetId: 'owner', revision: 0, page: 0, selected: null }, 'next', 'update'],
+    ['onboarding', 'onboarding-status', { targetId: 'owner', clanTag: 'TEST', page: 0, lastAction: -Infinity, busy: false }, 'refresh', 'edit'],
+    ['wheel', 'wheel-editor', { preset, expected: preset.revision, remove: false }, 'basics', 'modal'],
+    ['milestones', 'milestones-configure', { draft: db.community.settings.get(guildId), selectedJob: null, page: 0, busy: false }, 'thresholds', 'modal'],
+    ['bingomenu', 'bingo-draft', { boardId: board.id, revision: board.revision }, 'edit', 'modal'],
+  ];
+  const snapshot = () => db.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'community_%' ORDER BY name")
+    .all().map(({ name }) => [name, db.db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all()]);
+  try {
+    for (const [prefix, kind, data, action, output] of fixtures) {
+      const s = communitySessions.create({ kind, ownerId: 'owner', guildId, channelId: 'saved-channel',
+        messageId: 'saved-message', data }, now);
+      sessions.push(s.id);
+      const make = (forged = {}) => interaction({ guildId, guild, channelId: 'saved-channel', user: { id: 'owner' },
+        message: { id: 'saved-message' }, customId: `${prefix}:${s.id}:${action}`,
+        isStringSelectMenu: () => false, isChannelSelectMenu: () => false,
+        async deferUpdate() { this.deferred = true; },
+        async update(value) { this.updated = value; },
+        async showModal(modal) { this.modal = modal.toJSON(); }, ...forged });
+      const valid = make();
+      assert.equal(await handleCommunityInteraction(valid), true, prefix);
+      assert.ok(output === 'modal' ? valid.modal : output === 'update' ? valid.updated : valid.edits.length, prefix);
+      const before = snapshot();
+      for (const forged of [{ user: { id: 'intruder' } }, { guildId: 'forged-guild', guild: { id: 'forged-guild' } },
+        { channelId: 'forged-channel' }, { message: { id: 'forged-message' } }]) {
+        await assert.rejects(handleCommunityInteraction(make(forged)), /unavailable|expired|reopen/i, prefix);
+        const invalid = make(forged); await route(invalid);
+        const response = [...invalid.replies, ...invalid.followups, ...invalid.edits];
+        assert.equal(response.length, 1, prefix);
+        assert.equal(response[0].flags, MessageFlags.Ephemeral, prefix);
+        assert.doesNotMatch(JSON.stringify(response), /private integration title/);
+        assert.deepEqual(snapshot(), before, prefix);
+      }
+    }
+  } finally {
     for (const id of sessions) communitySessions.delete(id);
+    communitySessions.purgeGuild(guildId);
     db.community.purgeGuild(guildId);
   }
 });

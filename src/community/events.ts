@@ -173,6 +173,9 @@ export class EventStore {
   list(guildId: string): EventRecord[] {
     return this.sql.prepare("SELECT * FROM community_events WHERE guild_id=? ORDER BY start_at DESC,id LIMIT 100").all(guildId).map(decode);
   }
+  listPublished(guildId: string): EventRecord[] {
+    return this.sql.prepare("SELECT * FROM community_events WHERE guild_id=? AND status<>'draft' ORDER BY start_at DESC,id LIMIT 100").all(guildId).map(decode);
+  }
   deliveryJobs(guildId: string, eventId: string): DeliveryJob[] {
     const rows = this.sql.prepare(`SELECT id FROM community_deliveries WHERE guild_id=? AND kind IN ('event_publish','event_update','event_reminder')
       AND subject_id=? AND status NOT IN ('sent','cancelled') ORDER BY updated_at DESC,id DESC LIMIT 5`).all(guildId, eventId);

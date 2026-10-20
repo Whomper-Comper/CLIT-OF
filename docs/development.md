@@ -81,7 +81,7 @@ After verification, inspect the actual changed files and report which commands r
 
 ## Test inventory
 
-There are **39 test files** under `test/` in the documented source tree: the 18 existing suites below and 21 community suites in the [community inventory](#community-regression-inventory-and-performance-evidence). This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
+There are **40 test files** under `test/` in the documented source tree: the 18 existing suites below and 22 community suites in the [community inventory](#community-regression-inventory-and-performance-evidence). This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
 
 | File | Behaviors protected |
 | --- | --- |
@@ -174,6 +174,7 @@ Choose affected feature suites while iterating; run `npm test` once when ready f
 | `test/duels.test.mjs` | Consent/state/cooldowns/slots, cryptographic draw ownership, saved ties/results, expiry, restart, cleanup and indexed bounded retention |
 | `test/duel-interactions.test.mjs` | Canonical consent/bindings, activation cadence/deadlines, enabling failures, shared final hook, expiry/departure lease/timeout marker recovery and no fresh closed publication |
 | `test/community-integration.test.mjs` | Actual runtime signup/checklist/availability evidence, deletion across guilds/account isolation, milestone disable, maximum cards/lists and indexed mixed-history diagnostics with real private pagination |
+| `test/final-review-regressions.test.mjs` | Event final-roster permission and private-session revocation/expiry, availability draft source validation, published list cap, bounded milestone cooldown/in-flight sharing across menus, members and accounts |
 
 `test/bot.test.mjs` also asserts exactly 15 unique commands, the unchanged `sides`/`count` dice interface and all seven Guild contexts. `test/interaction-router.test.mjs` exercises the actual central dispatcher and InteractionCreate listener across every community public/private prefix, malformed/forged bindings, valid bingo/milestones/duel controls and legacy fallthrough. The fixture substitutes only Discord/API boundaries; state transitions and query plans use real SQLite.
 

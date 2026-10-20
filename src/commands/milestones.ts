@@ -12,13 +12,13 @@ import { CommunitySessions, communitySessions, type PrivateCommunitySession } fr
 import type { CommunitySettings } from '../community/settings.js';
 import { milestoneBinding, milestoneClanEligible, milestoneHealth, milestoneIdentityCurrent } from '../community/milestoneWorker.js';
 import { readMilestoneCounters, validateMilestoneThresholds } from '../community/milestoneCounters.js';
+import { CommandLimits } from '../queues.js';
 
 interface Menu {
   draft: CommunitySettings;
   selectedJob: string | null;
   page: number;
   busy: boolean;
-  lastRead: number;
 }
 interface Dependencies { db?: BotDatabase; api?: OpenFrontApi; now?: () => number; sessions?: CommunitySessions }
 type Component = Extract<Interaction, { customId: string }>;
@@ -28,6 +28,9 @@ export function createMilestonesCommand(dependencies: Dependencies = {}) {
   const api = dependencies.api ?? openfrontApi;
   const now = dependencies.now ?? Date.now;
   const sessions = dependencies.sessions ?? communitySessions;
+  // Share the foreground gate across every private menu; retain no profile or eligibility cache.
+  const readLimits = new CommandLimits(400);
+  const readsInFlight = new Set<string>();
   const button = (s: PrivateCommunitySession, action: string, text: string, style = ButtonStyle.Secondary) =>
     new ButtonBuilder().setCustomId(`milestones:${s.id}:${action}`).setLabel(text).setStyle(style);
   function get(i: Component, id: string): PrivateCommunitySession {
@@ -75,30 +78,38 @@ export function createMilestonesCommand(dependencies: Dependencies = {}) {
     return { embeds: [embed], components, allowedMentions: { parse: [] as never[] } };
   }
   async function view(i: ChatInputCommandInteraction | Component, s: PrivateCommunitySession, refresh: boolean) {
+    sessions.get(s.id, i.user.id, { guildId: s.guildId, channelId: s.channelId, messageId: s.messageId }, now());
     const binding = milestoneBinding(db, s.guildId, i.user.id);
     if (!binding || !milestoneIdentityCurrent(db, binding)) throw new CommandError('Link your current OpenFront account with /link before viewing milestones.');
     const settings = db.community.settings.get(s.guildId);
     const data = s.data as Menu;
     let available = false;
-    if (refresh && now() - data.lastRead >= 10_000 && milestoneHealth(db, now())) {
-      data.lastRead = now();
-      const before = await i.guild!.members.fetch({ user: i.user.id, force: true });
-      if (before.user.bot || !milestoneIdentityCurrent(db, binding)) throw changed();
-      const generation = db.community.milestones.prepareObservation(binding, now());
-      const fetchedAt = now();
-      let profile = null;
-      try { profile = await api.getPlayerProfile(binding.publicId, { fresh: true }); } catch { /* Keep durable earned cards visible. */ }
-      const member = await i.guild!.members.fetch({ user: i.user.id, force: true });
-      sessions.get(s.id, i.user.id, { guildId: s.guildId, channelId: s.channelId, messageId: s.messageId }, now());
-      if (member.user.bot || !milestoneIdentityCurrent(db, binding) ||
-        db.community.settings.get(s.guildId).revision !== settings.revision ||
-        db.community.milestones.candidateGeneration(binding) !== generation) throw changed();
-      const counters = readMilestoneCounters(profile?.stats);
-      if (counters && now() >= fetchedAt && now() - fetchedAt <= 60_000 &&
-        milestoneHealth(db, now()) && milestoneClanEligible(db, s.guildId, profile)) {
-        db.community.milestones.observe(binding, counters,
-          { games: settings.gameThresholds, wins: settings.winThresholds }, now(), generation, settings.revision);
-        available = true;
+    const readKeys = [`member:${i.user.id}`, `account:${binding.publicId}`];
+    if (refresh && milestoneHealth(db, now()) && readsInFlight.size <= 398 &&
+      readKeys.every(key => !readsInFlight.has(key)) &&
+      readKeys.every(key => readLimits.take(key, 10_000, now()))) {
+      for (const key of readKeys) readsInFlight.add(key);
+      try {
+        const before = await i.guild!.members.fetch({ user: i.user.id, force: true });
+        if (before.user.bot || !milestoneIdentityCurrent(db, binding)) throw changed();
+        const generation = db.community.milestones.prepareObservation(binding, now());
+        const fetchedAt = now();
+        let profile = null;
+        try { profile = await api.getPlayerProfile(binding.publicId, { fresh: true }); } catch { /* Keep durable earned cards visible. */ }
+        const member = await i.guild!.members.fetch({ user: i.user.id, force: true });
+        sessions.get(s.id, i.user.id, { guildId: s.guildId, channelId: s.channelId, messageId: s.messageId }, now());
+        if (member.user.bot || !milestoneIdentityCurrent(db, binding) ||
+          db.community.settings.get(s.guildId).revision !== settings.revision ||
+          db.community.milestones.candidateGeneration(binding) !== generation) throw changed();
+        const counters = readMilestoneCounters(profile?.stats);
+        if (counters && now() >= fetchedAt && now() - fetchedAt <= 60_000 &&
+          milestoneHealth(db, now()) && milestoneClanEligible(db, s.guildId, profile)) {
+          db.community.milestones.observe(binding, counters,
+            { games: settings.gameThresholds, wins: settings.winThresholds }, now(), generation, settings.revision);
+          available = true;
+        }
+      } finally {
+        for (const key of readKeys) readsInFlight.delete(key);
       }
     }
     if (!milestoneIdentityCurrent(db, binding)) throw changed();
@@ -154,7 +165,7 @@ export function createMilestonesCommand(dependencies: Dependencies = {}) {
       if (configuring) await requireConfigAccess(i.guild, i.user.id, db);
       const s = sessions.create({ kind: configuring ? 'milestones-configure' : 'milestones-view', ownerId: i.user.id,
         guildId: i.guildId, channelId: i.channelId, messageId: null,
-        data: { draft: db.community.settings.get(i.guildId), selectedJob: null, page: 0, busy: false, lastRead: -Infinity } satisfies Menu }, now());
+        data: { draft: db.community.settings.get(i.guildId), selectedJob: null, page: 0, busy: false } satisfies Menu }, now());
       const payload = configuring ? config(s) : await view(i, s, true);
       const message = await i.editReply(payload);
       sessions.bind(s.id, message.id);

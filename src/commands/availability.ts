@@ -18,7 +18,12 @@ function minute(value:string):number {
   const [hour,min]=value.split(":").map(Number);return hour*60+min;
 }
 interface ViewData { targetId:string; revision:number; page:number; selected:string|null }
-interface Dependencies { db?:BotDatabase; now?:()=>number; sessions?:CommunitySessions; createDraft?:(i:Interaction,seed:Partial<EventDraftInput>)=>Promise<void> }
+interface Dependencies {
+  db?:BotDatabase;
+  now?:()=>number;
+  sessions?:CommunitySessions;
+  createDraft?:(i:Interaction,seed:Partial<EventDraftInput>,assertSourceCurrent?:()=>void)=>Promise<void>;
+}
 
 export function createAvailabilityCommand(dependencies:Dependencies={}) {
   const database=dependencies.db??defaultDatabase, now=dependencies.now??Date.now,sessions=dependencies.sessions??communitySessions;
@@ -126,12 +131,15 @@ export function createAvailabilityCommand(dependencies:Dependencies={}) {
       if (!(i.isButton()||i.isStringSelectMenu()||i.isModalSubmit())) return false;
       if (!i.guild || !i.guildId || !i.channelId) throw new CommandError("Use availability in a server.");
       const [,id,action]=i.customId.split(":");
-      const session=sessions.get(id,i.user.id,{guildId:i.guildId,channelId:i.channelId,messageId:i.message?.id??null},now());
+      const binding={guildId:i.guildId,channelId:i.channelId,messageId:i.message?.id??null};
+      const recheckSession=()=>sessions.get(id,i.user.id,binding,now());
+      const session=recheckSession();
       if(session.kind==='availability-suggest') {
         if(!/^draft[0-2]$/.test(action)||!i.isButton())throw new CommandError('Reopen availability suggestions.');
         const seed=(session.data as Partial<EventDraftInput>[])[Number(action.slice(-1))];if(!seed)throw new CommandError('Reopen availability suggestions.');
         // Draft creation performs fresh officer authorization and always opens privately.
-        await (dependencies.createDraft??createEventDraft)(i,seed);return true;
+        await (dependencies.createDraft??createEventDraft)(i,seed,recheckSession);
+        return true;
       }
       if (session.kind!==(action==="save"?"availability-edit":"availability")) throw new CommandError("Reopen your availability menu.");
       const data=session.data as ViewData;

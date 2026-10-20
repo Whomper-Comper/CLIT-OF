@@ -1,7 +1,7 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, InteractionContextType, ModalBuilder, SlashCommandBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle, type ChatInputCommandInteraction, type Interaction } from "discord.js";
 import { db as defaultDatabase, type BotDatabase } from "../db.js";
 import { CommandError, privateReply } from "./support.js";
-import { assertCommunityBinding, requireCommunityOfficer } from "../community/access.js";
+import { assertCommunityBinding, hasCommunityOfficerRole, requireCommunityOfficer } from "../community/access.js";
 import { communitySessions, type CommunitySessions, type PrivateCommunitySession } from "../community/sessions.js";
 import type { EventDraftInput, EventRecord } from "../community/events.js";
 import { resolveEventStart } from "../community/time.js";
@@ -98,11 +98,17 @@ export function createEventCommand(dependencies: Dependencies = {}) {
     }, now());
     await openMenu(i, e);
   }
-  async function eligible(i: Interaction): Promise<Set<string>> {
+  async function eligible(i: Interaction, requireOfficer = false): Promise<Set<string>> {
     if (!i.guild) {
       throw new CommandError('Use event in a server.');
     }
     const roster = await i.guild.members.fetch({ withPresences: false });
+    if (requireOfficer) {
+      const actor = roster.get(i.user.id);
+      if (!actor || !hasCommunityOfficerRole(i.guild.id, actor, database)) {
+        throw new CommandError('You need the configured manager, officer, or leader role for this community action.');
+      }
+    }
     return new Set([...roster.values()].filter(m => !m.user.bot).map(m => m.id));
   }
   function modal(session: PrivateCommunitySession, title: string, fields: [string, string, string, number][]): ModalBuilder {
@@ -164,7 +170,7 @@ export function createEventCommand(dependencies: Dependencies = {}) {
         return;
       }
       if (sub === 'list') {
-        const all = store.list(i.guildId).filter(e => e.status !== 'draft');
+        const all = store.listPublished(i.guildId);
         const page = i.options.getInteger('page') ?? 1;
         if (page > Math.max(1, Math.ceil(all.length / 10))) {
           throw new CommandError('Choose an existing event page.');
@@ -216,11 +222,13 @@ export function createEventCommand(dependencies: Dependencies = {}) {
           throw new CommandError('Invalid control. Reopen event management.');
         }
         const [, id, action] = parts;
-        const session = sessions.get(id, i.user.id, {
+        const binding = {
           guildId: i.guildId,
           channelId: i.channelId,
           messageId: i.message?.id ?? null
-        }, now());
+        };
+        const recheckSession = () => sessions.get(id, i.user.id, binding, now());
+        const session = recheckSession();
         const data = session.data as MenuData;
         if (!['event-manage', 'event-squad', 'event-details', 'event-squads', 'event-move'].includes(session.kind)) {
           throw new CommandError('Reopen your event menu.');
@@ -237,6 +245,7 @@ export function createEventCommand(dependencies: Dependencies = {}) {
             throw new CommandError('Event message changed. Reopen its public card.');
           }
           const member = await i.guild.members.fetch({ user: i.user.id, force: true });
+          recheckSession();
           if (member.user.bot) {
             throw new CommandError('Only server members can join.');
           }
@@ -244,6 +253,7 @@ export function createEventCommand(dependencies: Dependencies = {}) {
           const existing = store.signup(i.guildId, e.id, i.user.id);
           if (existing) {
             const members = await eligible(i);
+            recheckSession();
             assertFresh(e);
             store.move(i.guildId, e.id, i.user.id, i.values[0], members, now());
           }
@@ -259,6 +269,7 @@ export function createEventCommand(dependencies: Dependencies = {}) {
           return true;
         }
         await requireCommunityOfficer(i.guild, i.user.id, database);
+        recheckSession();
         assertFresh(e);
         if (action === 'save' && i.isModalSubmit()) {
           if (session.kind === 'event-details') {
@@ -297,7 +308,8 @@ export function createEventCommand(dependencies: Dependencies = {}) {
           else if (session.kind === 'event-move') {
             const target = i.fields.getTextInputValue('member').trim();
             const squad = i.fields.getTextInputValue('squad').trim();
-            const members = await eligible(i);
+            const members = await eligible(i, true);
+            recheckSession();
             assertFresh(e);
             store.move(i.guildId, e.id, target, squad, members, now());
           }

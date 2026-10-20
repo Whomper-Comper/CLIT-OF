@@ -52,9 +52,11 @@ export class MemberLocks {
 /** Reject bursts before expensive API work; idle entries are discarded. */
 export class CommandLimits {
   private until = new Map<string, number>();
+  constructor(private readonly maximumEntries = Infinity) {}
   take(key: string, milliseconds: number, now = Date.now()): boolean {
     for (const [id, expiry] of this.until) if (expiry <= now) this.until.delete(id);
     if ((this.until.get(key) ?? 0) > now) return false;
+    if (this.until.size >= this.maximumEntries) return false;
     this.until.set(key, now + milliseconds);
     return true;
   }

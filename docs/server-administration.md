@@ -280,7 +280,7 @@ Events publish through the shared delivery worker. The saved draft exists before
 
 Use `/event edit` to inspect paused or uncertain publication jobs. Correct missing channel permissions before retrying a paused delivery. A post with an uncertain outcome is marked **Needs review**, and the shared worker checks recent bot messages for its recovery marker before any retry. A successful Discord post whose database binding fails also requires review; automatic ticks do not blindly post duplicates. Draft changes remain locked while publication is unresolved. Do not remove the marker manually during reconciliation.
 
-Member departure removes active signups and marks reserve promotion due; unlinking an OpenFront account preserves unrelated event signups. Server removal clears that server's events/signups. Automatic promotion housekeeping, reminder sends, expiry, retention and richer operational recovery belong to the following scheduling implementation task.
+Member departure removes active signups and marks reserve promotion due; unlinking an OpenFront account preserves unrelated event signups. Server removal clears that server's events/signups. The worker promotes present reserves, sends opted-in reminders, closes signups at the start and marks ended events finished. Bounded retention cleanup removes events and signups strictly after ninety days from the actual end or cancellation; active drafts remain saved. Use the publication recovery guidance above for paused or uncertain jobs. See [event scheduling and delivery](architecture.md#event-scheduling-and-delivery) for worker budgets and retention limits.
 
 ## Newcomer follow-up
 
