@@ -12,7 +12,9 @@ export function registerDuelWork(service: CommunityService, _client: Client, db:
       if (duel) {
         if (duel.channelId !== job.channelId) return null;
         if (kind === 'duel_update' && (duel.revision !== job.revision || !duel.messageId)) return null;
-        if (kind === 'duel_publish' && !duel.messageId && duel.status !== 'pending') return null;
+        // Keep uncertain publications recoverable after expiry. Only the final request
+        // boundary rejects a fresh send; ordinary prepare must still permit marker binding.
+        if (activate && kind === 'duel_publish' && !duel.messageId && duel.status !== 'pending') return null;
         if (activate && kind === 'duel_update' && duel.messageId && duel.status === 'pending') {
           duel = db.community.duels.activate(duel.guildId, duel.id, duel.channelId, duel.messageId, now);
           if (!duel || duel.revision !== job.revision) return null;
@@ -20,9 +22,12 @@ export function registerDuelWork(service: CommunityService, _client: Client, db:
         return { payload: renderDuel(duel), messageId: duel.messageId ?? undefined };
       }
       const closure = db.community.duels.closure(job.guildId, job.subjectId);
-      if (!closure?.messageId || closure.channelId !== job.channelId) return null;
+      if (!closure || closure.channelId !== job.channelId) return null;
+      // An accepted-but-unbound post can outlive its participant consent. Reconciliation
+      // may bind its generic closure, but an unbound closure can never be freshly posted.
+      if (!closure.messageId && (kind !== 'duel_publish' || activate)) return null;
       if (kind === 'duel_update' && closure.revision !== job.revision) return null;
-      return { payload: renderClosedDuel(), messageId: closure.messageId };
+      return { payload: renderClosedDuel(), messageId: closure.messageId ?? undefined };
     };
     service.registerDelivery(kind, {
       async prepare(job, now = Date.now()) { return prepare(job, now); },

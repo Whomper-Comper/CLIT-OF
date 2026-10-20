@@ -478,3 +478,112 @@ test('twenty concurrent refreshes coalesce one stable revision job and one canon
   assert.equal(f.calls.edits.length, beforeEdits + 1);
   assert.equal(f.calls.sends.length, 1);
 });
+
+test('interrupted accepted publication reclaims its five-minute lease and closes the proven expired card', async t => {
+  const f = setup(t), send = f.channel.send;
+  let entered, release;
+  const accepted = new Promise(resolve => { entered = resolve; });
+  const suspended = new Promise(resolve => { release = resolve; });
+  f.channel.send = async payload => {
+    const message = await send(payload);
+    entered();
+    await suspended;
+    return message;
+  };
+  await f.command.execute(interaction(f));
+  const interrupted = f.service.runOnce();
+  await accepted;
+  const publication = f.db.community.deliveries.list('g')[0];
+  assert.equal(publication.status, 'sending');
+  assert.equal(record(f).messageId, null);
+  assert.equal(f.calls.sends.length, 1);
+  try {
+    f.advance(300001);
+    const restarted = new CommunityService(f.client, f.db, f.api, { now: f.now });
+    worker.registerDuelWork(restarted, f.client, f.db); f.services.push(restarted);
+    await restarted.runOnce();
+    assert.equal(f.db.community.deliveries.get(publication.id).status, 'sent');
+    assert.equal(record(f).status, 'expired');
+    assert.equal(record(f).messageId, 'message-1');
+    assert.equal(record(f).activatedAt, null);
+    assert.equal(f.calls.sends.length, 1);
+    assert.match(JSON.stringify(f.calls.edits.at(-1)), /expired.*try again/i);
+    assert.ok(buttons(f.calls.edits.at(-1)).filter(b => b.label === 'Accept').every(b => b.disabled));
+  } finally {
+    release();
+    await interrupted;
+  }
+  assert.equal(f.db.community.deliveries.get(publication.id).status, 'sent');
+});
+
+test('departure after accepted publication plus timeout reconciles only the generic canonical closure', async t => {
+  const f = setup(t), send = f.channel.send;
+  f.channel.send = async payload => {
+    await send(payload);
+    f.db.community.purgeMember('g', 'b');
+    throw Error('accepted send timed out');
+  };
+  await f.command.execute(interaction(f));
+  await f.service.runOnce();
+  assert.equal(record(f), null);
+  assert.equal(f.calls.sends.length, 1);
+  const closure = f.db.db.prepare('SELECT * FROM community_duel_closures').get();
+  assert.equal(closure.message_id, 'message-1');
+  assert.equal(Object.values(closure).includes('a'), false);
+  assert.equal(Object.values(closure).includes('b'), false);
+  assert.equal(f.db.community.deliveries.list('g').every(job => job.status === 'sent'), true);
+  assert.match(JSON.stringify(f.calls.edits.at(-1)), /closed/i);
+  assert.deepEqual(f.calls.edits.at(-1).components, []);
+});
+
+test('expired uncertain publication without a bot marker stays reviewable on manual retries without a fresh send', async t => {
+  const { deliveryMarker } = await import('../dist/community/deliveries.js');
+  for (const departure of [false, true]) {
+    const f = setup(t), fetch = f.channel.messages.fetch;
+    let attempts = 0, reconciliations = 0;
+    f.channel.send = async () => { attempts++; throw Error('unknown send outcome'); };
+    f.channel.messages.fetch = async input => {
+      if (typeof input !== 'string') reconciliations++;
+      return fetch(input);
+    };
+    await f.command.execute(interaction(f));
+    await f.service.runOnce();
+    const publication = f.db.community.deliveries.list('g')[0];
+    assert.equal(publication.status, 'needs_review');
+    assert.equal(reconciliations, 1);
+    f.messages.set('forged-marker', { id: 'forged-marker', author: { id: 'third' }, content: deliveryMarker(publication), embeds: [] });
+    if (departure) f.db.community.purgeMember('g', 'b');
+    f.advance(300001);
+    for (let n = 0; n < 2; n++) {
+      f.db.community.deliveries.retry('g', publication.id, publication.revision, f.now());
+      await f.service.runOnce();
+      assert.equal(f.db.community.deliveries.get(publication.id).status, 'needs_review');
+      if (departure) {
+        assert.equal(record(f), null);
+        assert.equal(f.db.community.duels.closure('g', publication.subjectId).messageId, null);
+      } else {
+        assert.equal(record(f).status, 'expired');
+        assert.equal(record(f).messageId, null);
+        assert.equal(record(f).activatedAt, null);
+      }
+    }
+    assert.equal(reconciliations, 3);
+    assert.equal(attempts, 1);
+    assert.equal(f.calls.sends.length, 0);
+    assert.equal(f.calls.edits.length, 0);
+  }
+});
+
+test('expired or departed unbound publications with no prior send never publish a fresh closing card', async t => {
+  for (const departure of [false, true]) {
+    const f = setup(t);
+    await f.command.execute(interaction(f));
+    const publication = f.db.community.deliveries.list('g')[0];
+    if (departure) f.db.community.purgeMember('g', 'b');
+    else f.advance(120000);
+    await f.service.runOnce();
+    assert.equal(f.db.community.deliveries.get(publication.id).status, 'cancelled');
+    assert.equal(f.calls.sends.length, 0);
+    assert.equal(f.calls.edits.length, 0);
+  }
+});
