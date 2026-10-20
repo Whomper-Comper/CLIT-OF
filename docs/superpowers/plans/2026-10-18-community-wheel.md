@@ -1,6 +1,8 @@
 # Curated Challenge Wheel Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+Status (2026-10-20): Implemented and independently reviewed on `codex/clan-community`; final release integration/review remains tracked in the main plan. Checkboxes record completed implementation verification, not live deployment.
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Spin complete, compatible map/settings presets that officers can edit through Discord.
 
@@ -34,7 +36,7 @@
 
 `validateWheelPreset(input: WheelPreset): WheelPreset`; `spinWheel(presets: WheelPreset[], roll?: (min: number, maxExclusive: number) => number): { preset: WheelPreset; map: string }`. `WheelStore.list(guildId: string): WheelPreset[]`, `.save(input: WheelPreset, expectedRevision: number): WheelPreset`, `.remove(guildId: string, presetId: string, expectedRevision: number): void`; expose `.wheel`. Lazy-seed the six presets only on first guild initialization; record initialization separately so removing all presets does not reseed them. Consume scheduling's `createEventDraft` for officer-only event creation with a copied settings description.
 
-- [ ] **Step 1: Write preset/command tests.** Verify all six named starters exactly match the approved map/settings table, including zero bots for Humans Vs Nations and all four nuclear units disabled for Conventional warfare. Include:
+- [x] **Step 1: Write preset/command tests.** Verify all six named starters exactly match the approved map/settings table, including zero bots for Humans Vs Nations and all four nuclear units disabled for Conventional warfare. Include:
 
 ```js
 test('wheel uses the selected package and chooses only one of its allowed maps', () => {
@@ -50,7 +52,7 @@ test('wheel uses the selected package and chooses only one of its allowed maps',
 ```
 
 Reject51 presets,11 maps, duplicate maps, unsupported maps/units/difficulties, bot counts outside0-400, invalid positive nation counts, FFA with teams, Team without teams, and HvN with disabled nations. Also test exact RNG bounds, no enabled presets, cooldown before drawing, revision conflict, private officer edit sessions, forged components, and copied event settings remaining unchanged after preset edits.
-- [ ] **Step 2: Build and run `node --test test/wheel.test.mjs`.** Expected red for new exports/command.
-- [ ] **Step 3: Implement the named interfaces and `/wheel spin|presets|add|edit|remove`.** Keep a small explicit supported map catalog containing World, Europe, Black Sea, and Caribbean; adding maps is a deliberate source update. Validate the complete settings bundle, store presets with revisions, and use `randomInt` by default. Provide readable form/select controls through owner-bound private sessions; do not require JSON or filesystem editing. Public spin embeds list all approved hosting fields; private preview validates before save. Add a permission-checked event-draft button containing the copied package, with no automatic publication/signups. Extend guild cleanup.
-- [ ] **Step 4: Build and run wheel, event interaction, foundation access, and existing dice suites.** Expected all pass; confirm every preset form fits five inputs/row limits and no public card exposes private availability.
-- [ ] **Step 5: Commit `feat: add curated map and settings challenge wheel` with tests/docs.**
+- [x] **Step 2: Build and run `node --test test/wheel.test.mjs`.** Expected red for new exports/command.
+- [x] **Step 3: Implement the named interfaces and `/wheel spin|presets|add|edit|remove`.** Keep a small explicit supported map catalog containing World, Europe, Black Sea, and Caribbean; adding maps is a deliberate source update. Validate the complete settings bundle, store presets with revisions, and use `randomInt` by default. Provide readable form/select controls through owner-bound private sessions; do not require JSON or filesystem editing. Public spin embeds list all approved hosting fields; private preview validates before save. Add a permission-checked event-draft button containing the copied package, with no automatic publication/signups. Extend guild cleanup.
+- [x] **Step 4: Build and run wheel, event interaction, foundation access, and existing dice suites.** Expected all pass; confirm every preset form fits five inputs/row limits and no public card exposes private availability.
+- [x] **Step 5: Commit `feat: add curated map and settings challenge wheel` with tests/docs.**

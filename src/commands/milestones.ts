@@ -40,8 +40,7 @@ export function createMilestonesCommand(dependencies: Dependencies = {}) {
   function config(s: PrivateCommunitySession) {
     const data = s.data as Menu;
     const settings = data.draft;
-    const jobs = db.community.deliveries.list(s.guildId).filter(j => j.kind === 'milestone' &&
-      ['paused', 'failed', 'needs_review'].includes(j.status));
+    const { jobs, hasNext } = db.community.deliveries.diagnosticsPage(s.guildId, 'milestone', data.page);
     const embed = new EmbedBuilder().setColor(0x5865f2).setTitle('Milestone announcements · Private')
       .setDescription('Changes remain drafts until Save. Earned milestones remain available when announcements are off.')
       .addFields(
@@ -49,7 +48,7 @@ export function createMilestonesCommand(dependencies: Dependencies = {}) {
         { name: 'Destination', value: settings.milestoneChannelId ? `<#${settings.milestoneChannelId}>` : 'Not selected', inline: true },
         { name: 'Games thresholds', value: settings.gameThresholds.join(', ') || 'None', inline: true },
         { name: 'Wins thresholds', value: settings.winThresholds.join(', ') || 'None', inline: true },
-        { name: 'Delivery diagnostics', value: jobs.slice(data.page * 10, data.page * 10 + 10)
+        { name: 'Delivery diagnostics', value: jobs
           .map(j => `${j.id} · ${j.status}: ${j.lastError ?? 'Review required'}`).join('\n').slice(0, 1024) || 'No failed deliveries on this page.' },
       ).setFooter({ text: `Private menu · 10 minutes · Revision ${settings.revision} · Diagnostics page ${data.page + 1}` });
     const channel = new ChannelSelectMenuBuilder().setCustomId(`milestones:${s.id}:channel`)
@@ -64,14 +63,13 @@ export function createMilestonesCommand(dependencies: Dependencies = {}) {
         button(s, 'refresh', 'Refresh'),
       ),
     ];
-    const page = jobs.slice(data.page * 10, data.page * 10 + 10);
-    if (page.length) components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    if (jobs.length) components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
       new StringSelectMenuBuilder().setCustomId(`milestones:${s.id}:job`).setPlaceholder('Choose a delivery to retry / reconcile')
-        .addOptions(page.map(j => ({ label: `${j.status} · ${j.id}`, value: j.id }))),
+        .addOptions(jobs.map(j => ({ label: `${j.status} · ${j.id}`, value: j.id }))),
     ));
     components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(
       button(s, 'previous', 'Previous').setDisabled(data.page === 0),
-      button(s, 'next', 'Next').setDisabled((data.page + 1) * 10 >= jobs.length),
+      button(s, 'next', 'Next').setDisabled(!hasNext),
       button(s, 'retry', 'Retry / reconcile').setDisabled(!data.selectedJob),
     ));
     return { embeds: [embed], components, allowedMentions: { parse: [] as never[] } };

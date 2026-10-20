@@ -63,6 +63,12 @@ after(() => db.close());
 test("command registration exposes one clan command with an action choice and shared inputs", () => {
   const data = commands.map((command) => command.data.toJSON());
   assert.deepEqual(data.map((command) => command.name), ["link", "unlink", "whois", "stats", "clan", "config", "debug", "dice", "availability", "event", "onboarding", "wheel", "milestones", "bingo", "duel"]);
+  assert.equal(data.length, 15);
+  assert.equal(new Set(data.map(command => command.name)).size, 15);
+  assert.deepEqual(data.find(command => command.name === 'dice').options.map(option => option.name), ['sides', 'count']);
+  for (const name of ['availability', 'event', 'onboarding', 'wheel', 'milestones', 'bingo', 'duel']) {
+    assert.deepEqual(data.find(command => command.name === name).contexts, [0], name);
+  }
   const duel = data.find((command) => command.name === 'duel');
   assert.deepEqual(duel.contexts, [0]);
   assert.equal(duel.options.length, 1);
@@ -339,6 +345,8 @@ test("queued writes recheck identity after waiting for the global role lane", as
 });
 
 test("role API failures are reported and do not advance the success timestamp", async (t) => {
+  const warnings = [];
+  t.mock.method(console, 'warn', (...args) => warnings.push(args));
   const guild = guildFixture("role-fail"), c = config(guild.id); db.setGuildClanConfig(c);
   db.linkUser("failed-user", "failed-id", null, "identity_token");
   t.mock.method(openfrontApi, "getPlayerProfile", async () => profile([membership()]));
@@ -347,6 +355,7 @@ test("role API failures are reported and do not advance the success timestamp", 
   const [result] = await serviceFixture().syncGuildClan(guild, c);
   assert.match(result.error, /Missing Permissions/);
   assert.equal(db.getGuildClanConfig(guild.id, "TEST").last_sync_at, null);
+  assert.deepEqual(warnings, [['[ClanSync] Role update failed for failed-user in guild role-fail:', 'Missing Permissions']]);
 });
 
 test("role lane serializes writes with a one-second gap even after a failed write", async () => {
@@ -396,12 +405,14 @@ test("one failed addition does not prevent removing an obsolete officer role", a
   const guild = guildFixture("partial-update"), c = config(guild.id, "TEST", { officer_role_id: "officer" });
   db.setGuildClanConfig(c); db.linkUser("partial-user", "partial-id", null, "identity_token");
   t.mock.method(openfrontApi, "getPlayerProfile", async () => profile([membership()]));
-  t.mock.method(console, "warn", () => {});
+  const warnings = [];
+  t.mock.method(console, "warn", (...args) => warnings.push(args));
   const m = memberFixture(guild, "partial-user", ["officer"]);
   m.roles.add = async () => { throw new Error("Missing Permissions"); };
   const result = await serviceFixture().syncMemberForClan(m, db.getUserByDiscordId(m.id), c);
   assert.match(result.error, /Missing Permissions/);
   assert.deepEqual(result.rolesRemoved, ["officer"]);
+  assert.deepEqual(warnings, [['[ClanSync] Role update failed for partial-user in guild partial-update:', 'Missing Permissions']]);
 });
 
 test("cleanup across two guilds uses the same paced lane", async () => {

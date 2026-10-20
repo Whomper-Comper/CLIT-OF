@@ -81,7 +81,7 @@ After verification, inspect the actual changed files and report which commands r
 
 ## Test inventory
 
-There are **18 test files** under `test/` in the documented source tree. This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
+There are **39 test files** under `test/` in the documented source tree: the 18 existing suites below and 21 community suites in the [community inventory](#community-regression-inventory-and-performance-evidence). This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
 
 | File | Behaviors protected |
 | --- | --- |
@@ -139,3 +139,44 @@ The bot is single-process, but concurrent promises still create races. Use `Memb
 Keep persisted jobs restartable and retries bounded in delay/work. Preserve priority when coalescing cleanup, obsolete role IDs when replacing configurations, and progress when processing one role at a time. Route actual role writes through the same lane. The collector has its own request budget so background history does not hold up role cleanup. Inject clocks/API boundaries in focused tests rather than waiting real minutes or using live network calls.
 
 For changes that claim to fix a race, build a fixture that pauses the external request, mutates the identity/settings/access state, resumes it and asserts that no stale storage, role write or publication happens. Also test that unrelated valid work still progresses; rejecting everything is not a correct reconciliation strategy.
+
+## Community regression inventory and performance evidence
+
+Build before focused runs. The final integration group is:
+
+```sh
+npm run build
+node --test test/interaction-router.test.mjs test/bot.test.mjs test/community-integration.test.mjs
+```
+
+Choose affected feature suites while iterating; run `npm test` once when ready for the final full check. On restricted Windows executors, SQLite migration backup renames can fail with EPERM. Run the unchanged full suite with authorized filesystem access; do not skip backup tests, weaken snapshots or change production paths to hide the restriction. Expected injected worker/role warnings are captured and asserted, and the timezone measurement is asserted without printing benchmark JSON. Unexpected diagnostics remain visible.
+
+| File | Behaviors protected |
+| --- | --- |
+| `test/community-core.test.mjs` | Shared schema/savepoints, settings revisions, leases/retries, sessions, identity and cleanup callbacks, retention |
+| `test/community-access.test.mjs` | Fresh mapped officer/config authorization and saved interaction binding |
+| `test/community-delivery.test.mjs` | Eight requests/four sends, fairness, non-overlap/stop-drain, markers/nonces, ambiguous send recovery, final-delivery hook, lease/target/stop guards and serialized text budgets |
+| `test/community-import.test.mjs` | Domain imports avoid runtime singleton/schema side effects |
+| `test/community-time.test.mjs` | Gaps/folds/overnight/half-hour DST, full-duration overlap, distinct attendees, per-zone reuse under cache churn |
+| `test/availability.test.mjs` | Private recurring schedules, revisions/clear, fourteen-window pagination, public count-only suggestions and bounded evidence |
+| `test/events.test.mjs` | Atomic last-seat/squad/reserve behavior, revisions, membership promotion and indexed participant-page query plans |
+| `test/event-interactions.test.mjs` | Private drafts/moves, canonical public controls, ownership/permission races, serialization and opt-in choices |
+| `test/event-delivery.test.mjs` | Durable publication/reminders, current opted-in membership, missed deadlines, cancellation/recovery and bounded cleanup |
+| `test/onboarding.test.mjs` | Approved-to-join versus actual membership, unknown evidence, signup versus attendance, async identity/role/enrollment checks and bounded ten-person queue |
+| `test/wheel.test.mjs` | Complete valid packages, supported catalog, random bounds, private explicit save/removal, copied event settings and safe output |
+| `test/milestones.test.mjs` | Exact huge counters, thresholds/baselines/crossings, partial data, revisions, cleanup and deduplicated awards |
+| `test/milestone-interactions.test.mjs` | Private view/settings/thresholds/destination and deliberate retry, stale identity/access/session checks and exact-value output limits |
+| `test/milestone-delivery.test.mjs` | Globally paced/fair profiles, shared raw proof and budgets, deletion gate, disable/stop/reconciliation, one-query settings list |
+| `test/bingo.test.mjs` | Frozen objectives, free center/lines, unique evidence, current progress/correction, notification namespace and atomic generation creation |
+| `test/bingo-evidence.test.mjs` | Retained canonical post-board games/availability, cleanup/privacy, indexed pages, bounded dirty refresh/staging/finalization and maintained aggregate proof |
+| `test/bingo-interactions.test.mjs` | Private draft/reset/claims/review, revisions/permissions, pending state, public serialization and recovery controls |
+| `test/bingo-worker.test.mjs` | Actual staged worker, fresh inventory masking/mixed-line deferral, membership outages, shared recovery budgets and stopped continuation disposal |
+| `test/duels.test.mjs` | Consent/state/cooldowns/slots, cryptographic draw ownership, saved ties/results, expiry, restart, cleanup and indexed bounded retention |
+| `test/duel-interactions.test.mjs` | Canonical consent/bindings, activation cadence/deadlines, enabling failures, shared final hook, expiry/departure lease/timeout marker recovery and no fresh closed publication |
+| `test/community-integration.test.mjs` | Actual runtime signup/checklist/availability evidence, deletion across guilds/account isolation, milestone disable, maximum cards/lists and indexed mixed-history diagnostics with real private pagination |
+
+`test/bot.test.mjs` also asserts exactly 15 unique commands, the unchanged `sides`/`count` dice interface and all seven Guild contexts. `test/interaction-router.test.mjs` exercises the actual central dispatcher and InteractionCreate listener across every community public/private prefix, malformed/forged bindings, valid bingo/milestones/duel controls and legacy fallthrough. The fixture substitutes only Discord/API boundaries; state transitions and query plans use real SQLite.
+
+Retain count/plan evidence for optimizations rather than adding wall-clock thresholds. Committed [architecture measurements](architecture.md#local-performance-evidence) preserve earlier local observations: availability Intl calls 93,810 → 46,905 for 129 zones/258 members (1.2649s → 0.5511s representative); event participant rows 10,001 → 20 + two aggregate rows; 1,000 settings queries 1,001 → 1 (12-iteration median 8.9947ms → 1.7075ms, p95 30.0878ms → 2.4469ms). The final diagnostics fixture seeds 12,000 mixed rows, returns 11 instead of 10,000 guild rows, and proves indexed order without a temporary sort. Later-page OFFSET cost is proportional to preceding matching diagnostics.
+
+Bingo's measured production source pages are 200/200/51/1 for 451 games plus availability, with one game parse each and zero history payload reads/game parses/evidence-row loads during finalization. Keep this distinct from the synchronous compatibility replacement's proportional canonical reads and the older clean-refresh-only zero-read test. Cleanup/dirty refresh are bounded at 200. One-off timing scripts and scratch handoffs remain local; assertions protect correctness and operation bounds without claiming a machine-independent duration.

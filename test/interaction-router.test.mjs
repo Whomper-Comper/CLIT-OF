@@ -55,6 +55,50 @@ function interaction(overrides = {}) {
   };
 }
 
+test('every community prefix reaches its actual handler and forged saved bindings leave SQLite unchanged', async () => {
+  const guildId = 'router-all-prefixes';
+  const now = Date.now();
+  const event = db.community.events.createDraft({ guildId, channelId: 'saved-channel', creatorId: 'owner',
+    title: 'private integration title', description: '', startAt: now + 3600000,
+    durationMinutes: 60, capacity: 20, squads: [], reminderMinutes: 0 }, now);
+  db.community.events.publish(guildId, event.id, event.revision, 'saved-message');
+  const draft = db.community.bingo.createDraft(guildId, 'saved-channel', defaultBingoObjectives(), null, now);
+  const board = db.community.bingo.publish(guildId, draft.id, draft.revision, 'saved-message');
+  const duel = db.community.duels.invite({ guildId, channelId: 'saved-channel', messageId: null }, 'a', 'b', now);
+  db.community.duels.bindMessage(guildId, duel.id, duel.revision, 'saved-message');
+  const sessions = [];
+  const ids = [`event:${event.id}:join:${event.revision}`, `bingo:${board.id}:claim:${board.revision}`,
+    `clit-duel:${duel.id}:accept`];
+  for (const prefix of ['evtmenu', 'availability', 'onboarding', 'wheel', 'milestones', 'bingomenu']) {
+    const s = communitySessions.create({ kind: `${prefix}-integration`, ownerId: 'owner', guildId,
+      channelId: 'saved-channel', messageId: 'saved-message', data: {} }, now);
+    sessions.push(s.id);
+    ids.push(`${prefix}:${s.id}:refresh`);
+  }
+  const snapshot = () => db.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'community_%' ORDER BY name")
+    .all().map(({ name }) => [name, db.db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all()]);
+  try {
+    const before = snapshot();
+    for (const customId of ids) {
+      for (const forged of [{ channelId: 'forged-channel' }, { guildId: 'forged-guild', guild: { id: 'forged-guild' } }]) {
+        const i = interaction({ guildId, guild: { id: guildId }, channelId: 'saved-channel',
+          user: { id: 'owner' }, message: { id: 'saved-message' }, customId,
+          isStringSelectMenu: () => false, isChannelSelectMenu: () => false, ...forged });
+        await assert.rejects(handleCommunityInteraction(i), /reopen|belong|changed|unavailable|board|binding/i, customId);
+        await route(i);
+        const response = [...i.replies, ...i.followups, ...i.edits];
+        assert.equal(response.length, 1, customId);
+        assert.equal(response[0].flags, MessageFlags.Ephemeral, customId);
+        assert.doesNotMatch(JSON.stringify(response), /private integration title/);
+        assert.deepEqual(snapshot(), before, customId);
+      }
+    }
+  } finally {
+    for (const id of sessions) communitySessions.delete(id);
+    db.community.purgeGuild(guildId);
+  }
+});
+
 test("expired component reply failures cannot escape the interaction event", async (t) => {
   t.mock.method(console, "error", () => {});
   const i = interaction({ reply: async () => { throw Object.assign(new Error("expired"), { code: 10062 }); } });

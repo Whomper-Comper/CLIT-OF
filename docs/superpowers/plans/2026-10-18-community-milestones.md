@@ -1,6 +1,8 @@
 # Milestone Cards Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+Status (2026-10-20): Implemented and independently reviewed on `codex/clan-community`; final release integration/review remains tracked in the main plan. Checkboxes record completed implementation verification, not live deployment.
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Award exact-statistic milestone cards once per threshold, with quiet initial baselines and optional public announcements.
 
@@ -34,7 +36,7 @@
 
 `readMilestoneCounters(stats: unknown): MilestoneCounters | null` uses public Team mode and rejects partial or inconsistent counters. `validateMilestoneThresholds(input: MilestoneThresholds): MilestoneThresholds` accepts at most10 ascending unique positive decimal integer strings per metric. `evaluateMilestones(state: MilestoneState, current: MilestoneCounters, thresholds: MilestoneThresholds): MilestoneEvaluation` is pure. `MilestoneStore.observe(binding: IdentityBinding, counters: MilestoneCounters, thresholds: MilestoneThresholds, now: number): MilestoneEvaluation`, `.getState(guildId: string, publicId: string): MilestoneState`, `.listAwards(guildId: string, publicId: string): { metric: 'games' | 'wins'; threshold: string; total: string; observedAt: number }[]`, `.dueMembers(guildId: string, now: number, limit: number): string[]`. Expose `.milestones`; use decimal-text columns.
 
-- [ ] **Step 1: Add pure/store regressions.** Include:
+- [x] **Step 1: Add pure/store regressions.** Include:
 
 ```js
 test('large thresholds stay exact and first observations stay quiet', () => {
@@ -47,10 +49,10 @@ test('large thresholds stay exact and first observations stay quiet', () => {
 ```
 
 Also test a previously initialized10/50 threshold crossing from9 to51 queues both once; newly configured thresholds initialize silently; count decreases/repeats never award again; inconsistent `wins+losses > games`, missing/partial data and sparse unrelated scopes are unavailable; rereading an on-disk test DB preserves baselines. Same-account verification preserves awards, a changed account initializes separately, unlink/deletion purges personal records, and another guild/account is unaffected.
-- [ ] **Step 2: Build and run `node --test test/milestones.test.mjs`.** Expected red for the new exports/store property.
-- [ ] **Step 3: Implement these interfaces with per-account threshold initialization and unique award keys.** Defaults are games10/50/100/250/500 and wins1/10/25/50/100. Keep thresholds and counters as BigInt/decimal text. Write observations, earned awards and notification intents atomically; group announcements later by one account/check. Add member/account/guild cleanup and same-account re-verification preservation. Store last successful observation/next eligible attempt for fair polling without spinning on failing profiles.
-- [ ] **Step 4: Build and run milestone, player-stat correctness, history-collection, and foundation core suites.** Expected all pass, including existing deletion/identity tests.
-- [ ] **Step 5: Commit `feat: persist exact statistic milestones and silent baselines`.**
+- [x] **Step 2: Build and run `node --test test/milestones.test.mjs`.** Expected red for the new exports/store property.
+- [x] **Step 3: Implement these interfaces with per-account threshold initialization and unique award keys.** Defaults are games10/50/100/250/500 and wins1/10/25/50/100. Keep thresholds and counters as BigInt/decimal text. Write observations, earned awards and notification intents atomically; group announcements later by one account/check. Add member/account/guild cleanup and same-account re-verification preservation. Store last successful observation/next eligible attempt for fair polling without spinning on failing profiles.
+- [x] **Step 4: Build and run milestone, player-stat correctness, history-collection, and foundation core suites.** Expected all pass, including existing deletion/identity tests.
+- [x] **Step 5: Commit `feat: persist exact statistic milestones and silent baselines`.**
 
 ### Task 2: Private settings/views and opt-in public cards
 
@@ -58,7 +60,7 @@ Also test a previously initialized10/50 threshold crossing from9 to51 queues bot
 
 **Interfaces:** `registerMilestoneWork(service: CommunityService, client: Client, db: BotDatabase, api: OpenFrontApi): void`; `prepareMilestoneDelivery(job: DeliveryJob, guild: Guild, db: BotDatabase, now: number): Promise<PreparedDelivery | null>`; `createMilestonesCommand(dependencies?: { db?: BotDatabase; api?: OpenFrontApi; now?: () => number })` returns the command object. Settings use foundation `CommunitySettingsStore` with `milestonesEnabled`, `milestoneChannelId`, `gameThresholds`, `winThresholds` and revision.
 
-- [ ] **Step 1: Add worker/configuration tests.** Start two enabled guilds with more than8 due members; count upstream calls across successive ticks and assert each eligible account eventually runs, no account runs twice inside900,000ms, and cards use the four-send shared budget. Defer a profile promise, change its effective link or disable announcements, then resolve it; assert no obsolete awards/jobs or sends. Include:
+- [x] **Step 1: Add worker/configuration tests.** Start two enabled guilds with more than8 due members; count upstream calls across successive ticks and assert each eligible account eventually runs, no account runs twice inside900,000ms, and cards use the four-send shared budget. Defer a profile promise, change its effective link or disable announcements, then resolve it; assert no obsolete awards/jobs or sends. Include:
 
 ```js
 test('announcement settings default to disabled with approved thresholds', () => {
@@ -73,7 +75,7 @@ test('announcement settings default to disabled with approved thresholds', () =>
 ```
 
 Assert channel validation and permission refresh before Save, revision-conflict rejection, no public leak from private views, first baseline emits no card, multiple crossings produce one card, missing data displays unavailable, paused delivery lists/reconciles through private configuration, and milestone-only servers trigger deletion sync without enabling history collection. A stale/failed deletion checkpoint suppresses automatic polling/sending.
-- [ ] **Step 2: Build and run both new milestone suites.** Expected red for command/worker wiring.
-- [ ] **Step 3: Implement `/milestones view|configure` and private ten-minute settings sessions.** Reuse configuration access for destination/threshold/enablement edits; view uses the caller's link. Register fair polling and milestone delivery preparation. Extend the history collector's existing `needsDeletionSync` condition to include enabled milestone servers, preserving its existing feed request budget and tombstones. Cards show observed values/time and public profile, not an invented achievement date. Refresh current link, clan eligibility, settings revision and deletion health before persisting/sending; cancellation on disable removes pending jobs. Expose deliberate retry/reconciliation and durable earned-card views.
-- [ ] **Step 4: Build and run all milestone, foundation-delivery, existing history-collection and access-config suites.** Expected pass, with collection remaining off when only milestones are enabled.
-- [ ] **Step 5: Commit `feat: add milestone cards and opt-in announcement controls`.**
+- [x] **Step 2: Build and run both new milestone suites.** Expected red for command/worker wiring.
+- [x] **Step 3: Implement `/milestones view|configure` and private ten-minute settings sessions.** Reuse configuration access for destination/threshold/enablement edits; view uses the caller's link. Register fair polling and milestone delivery preparation. Extend the history collector's existing `needsDeletionSync` condition to include enabled milestone servers, preserving its existing feed request budget and tombstones. Cards show observed values/time and public profile, not an invented achievement date. Refresh current link, clan eligibility, settings revision and deletion health before persisting/sending; cancellation on disable removes pending jobs. Expose deliberate retry/reconciliation and durable earned-card views.
+- [x] **Step 4: Build and run all milestone, foundation-delivery, existing history-collection and access-config suites.** Expected pass, with collection remaining off when only milestones are enabled.
+- [x] **Step 5: Commit `feat: add milestone cards and opt-in announcement controls`.**

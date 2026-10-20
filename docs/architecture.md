@@ -13,6 +13,9 @@ This describes the checked-in implementation, not the state of a deployed bot or
 - [History worker, coverage and delivery](#history-worker-coverage-and-delivery)
 - [Event scheduling and delivery](#event-scheduling-and-delivery)
 - [Reporting, arithmetic and graphs](#reporting-arithmetic-and-graphs)
+- [Community foundation and delivery](#community-foundation-and-delivery)
+- [Community source and table map](#community-source-and-table-map)
+- [Local performance evidence](#local-performance-evidence)
 
 ## Runtime and source map
 
@@ -213,7 +216,7 @@ Retention is an application deletion policy, not a guarantee that backups no lon
 
 ## Community foundation and delivery
 
-`BotDatabase.community` initializes inside the same backed-up migration transaction as the existing schema. Focused settings and delivery stores share that SQLite connection. Community mutations use unique savepoints so they compose with identity changes and outer transactions. Database transactions are synchronous and never enclose an awaited Discord/API request. The initial foundation adds no commands; feature modules extend `community/runtime.ts` and `community/interactions.ts` as their stores and command handlers are introduced.
+`BotDatabase.community` initializes inside the same backed-up migration transaction as the existing schema. Focused feature, settings and delivery stores share that SQLite connection. Community mutations use unique savepoints so they compose with identity changes and outer transactions. Database transactions are synchronous and never enclose an awaited Discord/API request. The final registry exposes all 15 commands; `community/runtime.ts` registers event, milestone, bingo and duel work on one service, and `community/interactions.ts` awaits every feature handler before legacy fallthrough.
 
 Community settings synthesize revision 0 before the first save and increment revisions on successful writes. Milestone announcements default off with no channel; game thresholds default to 10/50/100/250/500 and win thresholds to 1/10/25/50/100. Thresholds remain exact decimal strings, validated using BigInt. Private menus share a 200-session in-memory cache, expire after ten minutes, and check owner and guild/channel/message binding. Public persistent controls use saved records instead of private sessions. Community officer actions force-fetch membership before rereading the manager and configured officer/leader role mappings. Announcement configuration uses the existing `requireConfigAccess`; `/clan` and `/debug` retain their existing, independent permission checks.
 
@@ -301,3 +304,59 @@ Member departure removes that member's pending invitation and both participant s
 Invitation creation and every terminal transition create stable delivery jobs atomically. `duel_publish` starts disabled, completion/reconciliation binds once and queues its `duel_update`. The optional synchronous final-delivery hook runs after all awaited lookups and returns a newly saved-state-derived payload for the same canonical target. Its duel activation stores `activated_at` once and moves the acceptance deadline to activation + two minutes; creation + two minutes remains the hard unactivated wait bound. Existing direct synchronous store operations keep their original unbound two-minute semantics. Activation leaves the invitation revision unchanged so the current leased update remains valid. Failed requests/retries preserve activation and saved rolls.
 
 Member deletion creates a minimal transport-only closure before removing pending personal data. A send already in flight can bind to that closure and close the canonical card without restoring participant IDs. Indexed, bounded expiry/retention and the shared four-send/eight-request limits remain in force. Published messages and database records retain separate lifetimes.
+
+## Community source and table map
+
+Paths below are relative to `src/`. Feature builders all use Guild context. `commandError.ts` supplies the same error constructor re-exported by `commands/support.ts`, keeping domain validation independent of database singleton imports.
+
+| Sources | Ownership |
+| --- | --- |
+| `community/store.ts`, `transactions.ts`, `types.ts`, `settings.ts` | Shared SQLite initialization, composable synchronous savepoints, contracts, exact thresholds and settings revisions |
+| `community/access.ts`, `sessions.ts`, `interactions.ts`, `lifecycle.ts` | Fresh officer authorization, bounded private menus, awaited central dispatch, identity/member/account/guild cleanup |
+| `community/service.ts`, `runtime.ts`, `deliveries.ts` | One bounded worker, feature registration, saved leases/markers/nonces, reconciliation, synchronous final-delivery and stop callbacks |
+| `community/time.ts`, `availability.ts`; `commands/availability.ts` | Local timezone/DST projection, recurring windows, private editing and public count-only suggestions |
+| `community/events.ts`, `eventDelivery.ts`; `commands/event.ts`, `eventViews.ts` | Atomic capacity/reserves/squad moves, opt-in reminders, durable publication and bounded participant views |
+| `community/onboarding.ts`; `commands/onboarding.ts` | Enrollment tokens, fresh derived checklist and ten-member private officer queue |
+| `community/wheel.ts`, `wheelPresets.ts`; `commands/wheel.ts`, `wheelForms.ts` | Validated hosting packages, cryptographic draw, explicit private saves and copied event settings |
+| `community/milestones.ts`, `milestoneCounters.ts`, `milestoneWorker.ts`; `commands/milestones.ts` | Exact counters, quiet baselines, revision-bound awards, globally paced account polling and bounded diagnostics |
+| `community/bingo.ts`, `bingoEvidence.ts`, `bingoGenerations.ts`, `bingoClaims.ts`, `bingoLifecycle.ts`, `bingoWorker.ts`; `commands/bingo.ts`, `bingoViews.ts` | Frozen objectives, canonical retained evidence, staged aggregates, private claims/audit, membership freshness and deduplicated progress |
+| `community/duels.ts`, `duelTransport.ts`, `duelWorker.ts`; `commands/duel.ts`, `duelViews.ts` | Consent/slot/cooldown state, saved rolls, canonical activation and transport/closure recovery |
+
+The schema catalog's three foundation tables are extended by every table below. IDs are text; community instants are epoch-ms integers. Lifetime counters/thresholds are exact decimal text and BigInt. Bingo evidence cardinalities use SQLite INTEGER aggregates and numeric target/progress interfaces, independently of lifetime statistics.
+
+| Tables | Keys and purpose |
+| --- | --- |
+| `community_availability`, `community_availability_changes` | Guild/member keys; local timezone/windows JSON and monotonic revision, plus latest submission instant; indexed change-time paging |
+| `community_events` | ID; guild/channel/message, revision/status, UTC schedule, due/retire columns and JSON including squads/settings; indexed due work, guild/start and retirement |
+| `community_event_signups`, `community_event_reminder_parts` | Event/member uniqueness with sequence, state, squad and opt-in preference; member/capacity/count/page indexes; saved bounded reminder parts |
+| `community_onboarding` | Guild/member key; clan, enrollment/completion/account and invalidation token; page, identity and account indexes |
+| `community_wheel_presets`, `community_wheel_initialized` | Guild/ID revision and validated JSON; guild marker prevents reseeding deliberately removed starters |
+| `community_milestone_observations`, `community_milestone_thresholds` | Guild/account exact counters/current identity and guild/account/metric/threshold baseline/award; identity/account indexes |
+| `community_milestone_candidates`, `community_milestone_account_attempts` | Guild/member generation and due/backoff; public-account global polling gate, indexed due and cleanup |
+| `community_milestone_intents` | ID; captured identity/generation/settings revision and combined award payload; guild/account/identity/retention indexes |
+| `community_bingo_boards` | ID; unique active board per guild, immutable cells JSON, revision/binding, generation pointer, lines/source/expiry/draft owner; guild/status/page/retention indexes |
+| `community_bingo_sources`, `community_bingo_generations` | Guild source version/eligible inventory; staged generation snapshots/cursors/status, indexed by board/guild/cleanup |
+| `community_bingo_evidence`, `community_bingo_totals`, `community_bingo_groups` | Generation/evidence uniqueness and identity/account/guild/time indexes; maintained generation counts and contributor/shared-game groups, indexed largest group |
+| `community_bingo_approvals`, `community_bingo_audit`, `community_bingo_notifications` | Board/cell approval, ordered private audit, board/line notification key independent of current progress |
+| `community_bingo_claims`, `community_bingo_public_state` | Claim ID and unique pending board/cell/actor; scoped page/member/archive indexes; public payload signature/sequence |
+| `community_duels`, `community_duel_participants`, `community_duel_cooldowns`, `community_duel_closures` | Saved rolls/deadlines, unique guild/member pending slot and cooldown, minimal closure transport; indexed expiry/retention/guild lookups |
+
+Milestone diagnostics use `community_delivery_diagnostics`, a partial `(guild_id,kind,due_at)` index restricted to failed/paused/needs_review status. The private menu requests `LIMIT 11 OFFSET page*10`, decodes ten jobs, and uses the extra row for Next. Ordering remains `due_at,rowid`; later pages traverse preceding matching diagnostics, without materializing unrelated retained history. Retry still validates the selected job's kind/guild/revision/destination/current settings and fresh access.
+
+The wheel catalog was deliberately checked against sibling `OpenFrontIO-main`: `packages/engine-api/src/game/Maps.gen.ts` supplies four supported maps; `packages/engine-api/src/game/GameTypes.ts` supplies difficulty, teams, modes, map sizes and all sixteen unit strings; `packages/engine-api/src/Schemas.ts` supplies hosting field types and bot/nation bounds. Future catalog changes should review those sources and validation/tests together. This records provenance for the checked catalog, not automatic or ongoing upstream parity.
+
+## Local performance evidence
+
+These are representative local observations and operation/query-plan proofs, not timing guarantees or ordinary test thresholds. See the covering [development tests](development.md#community-regression-inventory-and-performance-evidence).
+
+| Path and workload | Observed improvement / boundary |
+| --- | --- |
+| Availability, 129 zones / 258 interleaved members | Per-invocation zone projection reuse reduced Intl calls 93,810 → 46,905; representative elapsed 1.2649s → 0.5511s. Cache-churn correctness remains tested. |
+| Event card, 10,001 participants | Full return of 10,001 signup rows → 20 displayed rows plus two aggregate rows with indexed plans; totals/paging preserved. |
+| Settings list, 1,000 rows | Queries 1,001 → 1. Twelve-iteration median 8.9947ms → 1.7075ms; p95 30.0878ms → 2.4469ms. |
+| Milestone diagnostics, 12,000 mixed rows / 10,000 guild rows | Legacy list decoded 10,000 rows; new page returns 11 and decodes ten. SQLite EXPLAIN searches the partial index by guild/kind, with no table scan or temporary sort. |
+| Bingo production stage, 451 games + availability | Actual source path stages 200/200/51/1 rows across turns, parses each game once, then finalizes with zero history payload reads, zero game parses and zero evidence-row loads using maintained aggregates. Dirty refresh, retention and abandoned-generation cleanup drain batches of at most 200. |
+
+Bingo's zero-read finalization applies to the bounded production generation path. Synchronous compatibility `replaceEvidence` still validates a supplied full array with proportional canonical reads; an older clean-refresh zero-read test alone does not prove dirty-refresh/finalization bounds. Inventory changes mask stale automatic cells and mixed lines until fresh finalization; wholly manual completion remains available with collection off. Request/send budgets, identity guards, cleanup and notification uniqueness remain correctness constraints on every optimization.
+
+The 12,000-row diagnostics fixture was also timed locally on Windows / Node v26.4.0, after one warmup and over twelve iterations: legacy list/filter median 26.1317ms, p95 30.6652ms; indexed page median 0.0469ms, p95 0.1358ms. These values describe that fixture and machine only. Correctness tests assert returned rows, exact ordering and EXPLAIN output, never these durations.

@@ -202,14 +202,17 @@ test('post-send binding failure rolls back finish and requires review instead of
     f.advance(300000); await s.runOnce(); assert.equal(f.calls.sends.length,1);
   } finally { await f.close(); }
 });
-test('cancelled work after a Discord lookup never posts and one broken task does not starve other work', async () => {
+test('cancelled work after a Discord lookup never posts and one broken task does not starve other work', async (t) => {
   const f=communityFixture();
+  const warnings = [];
+  t.mock.method(console, 'warn', (...args) => warnings.push(args));
   try {
     const s=service(f),d=f.db.community.deliveries;
     s.registerTask('bad',async()=>{throw new Error('upstream failed');});
     s.registerTask('good',async()=>{d.enqueue(jobInput(f));});
     f.client.channels.fetch=async()=>{d.cancelSubject('g','test','s');return f.channel;};
     await s.runOnce(); assert.equal(f.calls.sends.length,0); assert.equal(d.list('g')[0].status,'cancelled');
+    assert.deepEqual(warnings, [['[Community] Task failed:', 'upstream failed']]);
   } finally { await f.close(); }
 });
 

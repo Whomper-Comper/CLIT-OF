@@ -17,6 +17,7 @@ This guide covers configuration and routine clan management inside Discord. For 
 - [Change or remove clan configurations](#change-or-remove-clan-configurations)
 - [Permission and role troubleshooting](#permission-and-role-troubleshooting)
 - [Source map](#source-map)
+- [Community release setup](#community-release-setup)
 
 ## Bootstrap access
 
@@ -254,7 +255,7 @@ Suggestions are planning aids and do not create events or enroll participants. I
 
 | Symptom | Checks and recovery |
 | --- | --- |
-| Owner/administrator cannot use clan actions | Hold the configured config role; Manage Server only grants configuration access |
+| Owner/administrator cannot use clan actions | Hold the configured manager role; Manage Server only grants configuration access |
 | `/debug` denied | Check selected debug role and actual role assignment; owners/admins have no bypass |
 | Config role deleted/no holders | A Manage Server member selects a replacement in `/config` and assigns it |
 | Save rejected for role permissions | Give bot Manage Roles and move its highest role above all member/officer/leader mappings |
@@ -302,7 +303,7 @@ A preset is a complete compatible hosting package. Free For All must leave teams
 Each guild starts with six editable presets once. Removing all of them intentionally leaves an empty wheel; disabled/empty wheels give actionable officer guidance. Server removal clears presets and their initialization marker. Existing public spins have their own message lifetime. An officer's private draft button snapshots the chosen map/settings/instructions and cannot publish or enroll members automatically.
 ## Milestone announcements
 
-Open `/milestones configure` with Manage Server or the configured config role. Announcements default to off. Choose a server text or announcement channel where the bot has View Channel, Send Messages, Embed Links and Read Message History, review the games/wins thresholds, enable announcements and Save. Channel selection and toggles are drafts until saved. Each privileged action freshly checks membership and configuration access, including after destination validation.
+Open `/milestones configure` with Manage Server or the configured manager role. Announcements default to off. Choose a server text or announcement channel where the bot has View Channel, Send Messages, Embed Links and Read Message History, review the games/wins thresholds, enable announcements and Save. Channel selection and toggles are drafts until saved. Each privileged action freshly checks membership and configuration access, including after destination validation.
 
 The default public Team lifetime thresholds are games 10/50/100/250/500 and wins 1/10/25/50/100. Each metric accepts zero to ten ascending, unique positive integers; blank disables that metric. Existing earned cards remain privately visible when thresholds or announcements are disabled. Baselines and newly introduced thresholds initialize quietly; later crossings combine into one card per observed member check. An approval role alone is not current OpenFront clan membership.
 
@@ -327,3 +328,14 @@ The public destination needs View Channel, Send Messages, Embed Links and Read M
 The shared worker retains its four-send/eight-request budget each minute. A disabled publication and an enabling edit each consume one outbound slot. Publication/activation waits at most two minutes from creation; the two-minute acceptance clock starts once at durable canonical activation immediately before the enabling request. The request's duration reduces the usable window. Queue waiting plus acceptance can approach four minutes; an invitation still waiting at its original deadline expires with retry guidance. Failed/ambiguous edits and retries retain the original activation deadline.
 
 Member departure removes pending consent and participant slots, retaining only minimal canonical transport references to close the old card. Completed public outcomes retain their 30-day record lifetime; removing an OpenFront identity does not affect these account-independent duels. Server removal clears the server's duel data and closure references.
+
+## Community release setup
+
+1. Configure manager and clan rank mappings. Community officers may manage events, wheel presets, onboarding queues and bingo; milestone destination/enablement requires Manage Server or manager role. Verify both kinds of access with the intended member roles.
+2. Use server text/announcement destinations with View Channel, Send Messages, Embed Links and Read Message History. Event and bingo drafts use their command channel; inspect the draft and explicitly publish. A wheel draw only suggests settings for a human to host.
+3. Members save their own local weekly availability and open `/onboarding status` to enroll. Suggestions show counts, and event signup remains separate from attendance. Reminders default off; officers choose a lead and each confirmed member opts in on the public card.
+4. Announcements start disabled. Save a destination and thresholds in `/milestones configure` to opt in. Initial counters and newly configured thresholds baseline silently; polling uses current public Team profile totals and its own deletion-health gate, independently of match collection.
+5. For automatic bingo game cells, enable player history and collection in `/config` and ensure the deletion feed is healthy. Only retained post-board observations count. Manual claims and current-human availability submissions work with collection off. Partial scans hide automatic progress until a fresh generation completes.
+6. Review event management, milestone configuration, or bingo draft/review delivery status after permission failures. Correct access, reopen expired menus and deliberately **Retry / reconcile**. Preserve bot recovery markers. Needs review means an accepted send may exist; do not create another post to guess its outcome. Existing duel **Refresh** recovers a saved result without rerolling.
+
+Unlink/replacement deletes account-derived milestone/bingo evidence and resets onboarding completion, while recurring availability, signups and account-independent duels survive. Departure removes availability/enrollment/active signups/pending claims and duel consent, and queues reserve promotion. Account deletion purges derived account evidence in every guild; disabling player-history collection clears automatic game evidence. Guild removal clears all community records. Saved Discord messages have their own lifetime and are not a substitute for current database/access checks.

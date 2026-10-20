@@ -98,7 +98,11 @@ test('one suggestion call discovers transitions once per zone despite interleave
     const interleaved=[...schedules,...schedules.map((schedule,index)=>({...schedule,discordId:`second-${index}`}))];
     calls=0;started=performance.now();const results=repeated.suggestAvailability(interleaved,now,120);
     const repeatedCalls=calls,repeatedMs=performance.now()-started;
-    t.diagnostic(JSON.stringify({zones:zones.length,members:interleaved.length,singleCalls,repeatedCalls,singleMs,repeatedMs}));
+    const measurement = { zones: zones.length, members: interleaved.length, singleCalls, repeatedCalls, singleMs, repeatedMs };
+    assert.equal(measurement.zones, 129);
+    assert.equal(measurement.members, 258);
+    assert.ok(Number.isFinite(measurement.singleMs) && measurement.singleMs >= 0);
+    assert.ok(Number.isFinite(measurement.repeatedMs) && measurement.repeatedMs >= 0);
     assert.ok(singleCalls>0,'the baseline must exercise real timezone transition discovery');
     assert.equal(repeatedCalls,singleCalls,'repeating members must reuse transition work within this suggestion invocation');
     assert.deepEqual(results.map(result=>({start:result.start,end:result.end,count:result.memberIds.length})),

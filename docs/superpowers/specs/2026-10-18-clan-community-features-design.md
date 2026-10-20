@@ -2,7 +2,7 @@
 
 Date: 2026-10-18
 
-Status: Written design approved by the user on 2026-10-18; implementation has not started.
+Status: Design approved on 2026-10-18. All seven features implemented and independently reviewed on `codex/clan-community`; final integration locally verified (490/490 tests), with controller-owned release review pending as of 2026-10-20. Command registration and deployment remain separate.
 
 ## Intent and approved scope
 

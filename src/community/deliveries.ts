@@ -91,6 +91,16 @@ export class DeliveryStore {
   list(guildId: string): DeliveryJob[] {
     return this.sql.prepare("SELECT * FROM community_deliveries WHERE guild_id=? ORDER BY due_at,rowid").all(guildId).map(decode);
   }
+  /** One extra row answers Next without decoding the guild's retained delivery history. */
+  diagnosticsPage(guildId: string, kind: string, page: number): { jobs: DeliveryJob[]; hasNext: boolean } {
+    if (!Number.isSafeInteger(page) || page < 0 || !Number.isSafeInteger(page * 10)) {
+      throw new CommandError("Choose a valid delivery diagnostics page.");
+    }
+    const rows = this.sql.prepare(`SELECT * FROM community_deliveries
+      WHERE guild_id=? AND kind=? AND status IN ('failed','paused','needs_review')
+      ORDER BY due_at,rowid LIMIT 11 OFFSET ?`).all(guildId, kind, page * 10);
+    return { jobs: rows.slice(0, 10).map(decode), hasNext: rows.length > 10 };
+  }
   retry(guildId: string, jobId: string, expectedRevision: number, now: number): void {
     if (!this.sql.prepare(`UPDATE community_deliveries SET status='pending',attempts=0,next_attempt=?,updated_at=?,last_error=NULL
       WHERE guild_id=? AND id=? AND revision=? AND status IN ('failed','paused','needs_review')`).run(now,now,guildId,jobId,expectedRevision).changes) {

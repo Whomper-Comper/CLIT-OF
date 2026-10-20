@@ -19,6 +19,10 @@ This reference describes the commands registered by `src/commands/index.ts` and 
 - [Statistic milestones](#statistic-milestones)
 - [Shared server bingo](#shared-server-bingo)
 - [Common command problems](#common-command-problems)
+- [Team events](#team-events)
+- [Newcomer onboarding](#newcomer-onboarding)
+- [Community command option schema](#community-command-option-schema)
+- [Curated challenge wheel](#curated-challenge-wheel)
 
 ## Entering commands
 
@@ -42,8 +46,8 @@ For `/whois` and `/stats`, `openfront_id` additionally accepts a Discord user ID
 | `/unlink` | Your own links | Private by default; server setting can make public |
 | `/whois`, `/stats`, valid `/dice` | No selected management role required | Public |
 | `/duel` | Current human server members; the opponent alone accepts/declines, the challenger cancels | Private acknowledgment; public invitation and result |
-| `/config`, `/clan action:config` | Manage Server permission **or** configured config role | Always private |
-| All other `/clan` actions | Must hold configured config role | Private by default, except roster and whole-clan sync are public |
+| `/config`, `/clan action:config` | Manage Server permission **or** configured manager role | Always private |
+| All other `/clan` actions | Must hold configured manager role | Private by default, except roster and whole-clan sync are public |
 | `/debug` | Must hold configured debug role | Always private |
 
 Manage Server allows recovery and configuration, but does not bypass the selected role for other clan actions. Owners and administrators also need the selected clan/debug role for those respective commands. No debug role means `/debug` is disabled.
@@ -175,7 +179,7 @@ Acceptance freshly checks both memberships and saves two independent cryptograph
 /config
 ```
 
-No options. Opens a private, invoker-only server menu for 10 minutes. Manage Server permission or the configured config role is required. The menu shows access roles, debug/private-reply settings, configured clan count and pending/retrying role jobs.
+No options. Opens a private, invoker-only server menu for 10 minutes. Manage Server permission or the configured manager role is required. The menu shows access roles, debug/private-reply settings, configured clan count and pending/retrying role jobs.
 
 | Home control | Behavior |
 | --- | --- |
@@ -331,7 +335,7 @@ Officers use `/event edit id:…` for private detail editing, squad configuratio
 
 An officer running `/availability suggest` receives private **Draft session** buttons alongside the public count/timestamp suggestions. These create unpublished, empty event drafts; they never sign up members or expose their private schedules. Private menus belong to their opener and expire after ten minutes.
 
-Reminder preferences are opt-in and default off. This implementation stores the chosen 15/30/60-minute lead and each member's preference; automatic reminder delivery and event housekeeping are implemented in the following scheduling work.
+Reminder preferences are opt-in and default off. Choose a 15/30/60-minute lead (default 0/off); only opted-in, currently confirmed members receive a mention. The worker skips reminders discovered after the start, revalidates membership and promotes eligible reserves when seats open. Cancelled/finished events and signups retire after 90 days. Discord timestamps render in each reader's local time.
 
 ## Newcomer onboarding
 
@@ -345,7 +349,7 @@ Community officers can use `/onboarding status user:@Member clan:MARS` for priva
 
 `/milestones view` privately shows your linked account's earned and upcoming public Team lifetime milestones. Initial observations and newly added thresholds earn quietly. Refresh retries unavailable statistics; saved earned cards remain visible during an upstream outage or when announcements are off. Current OpenFront clan membership is required to save a new observation; a Discord approval role alone does not qualify.
 
-`/milestones configure` is private and requires Manage Server or the configured config role. Select a text or announcement channel, optionally edit up to ten ascending unique positive integer thresholds for each metric, enable announcements, and press **Save**. Either threshold list may be empty; both empty pauses automatic profile polling. Draft changes do not apply until saved. Private menus expire after ten minutes and bind their owner, server, channel and message. Every configuration action refreshes access; a changed saved revision requires Refresh or reopening the menu.
+`/milestones configure` is private and requires Manage Server or the configured manager role. Select a text or announcement channel, optionally edit up to ten ascending unique positive integer thresholds for each metric, enable announcements, and press **Save**. Either threshold list may be empty; both empty pauses automatic profile polling. Draft changes do not apply until saved. Private menus expire after ten minutes and bind their owner, server, channel and message. Every configuration action refreshes access; a changed saved revision requires Refresh or reopening the menu.
 
 The configuration menu lists failed, paused and uncertain deliveries ten at a time. Choose a delivery and use **Retry / reconcile** after correcting permissions. Uncertain sends search for the original bot message before completing; an unproven outcome remains available for review instead of automatically posting a duplicate. Saving any milestone setting cancels unsent jobs from the previous settings revision. Earned milestones remain available in your private view.
 
@@ -368,6 +372,32 @@ The configuration menu lists failed, paused and uncertain deliveries ten at a ti
 
 For bot installation, command registration and service failures, continue with [operations](operations.md).
 
+## Community command option schema
+
+All seven community commands are server-only. The complete option schema below supplements the flows in this reference; `required` is explicit and every other option is optional.
+
+| Action | Options and defaults |
+| --- | --- |
+| `/availability set` | `day` required (Monday–Sunday / 0–6), `start`/`end` required (`HH:mm`), `timezone` required on first save then reused, `window` to replace an existing ID |
+| `/availability view` | `user` defaults to self (other members require community officer access); `page` 1–2, default 1 |
+| `/availability clear` | `window` optional; omission clears all own windows |
+| `/availability suggest` | `duration` 30–240 minutes, default 120 |
+| `/event create` | `title` required (100 chars), `start` required (`YYYY-MM-DD HH:mm`), `timezone` required (IANA); `offset` for folds; `description` default empty (1000 chars); `capacity` 1–100 default 20; `duration` 15–720 default 120; `reminder` 0/15/30/60 default 0 |
+| `/event list` | `page` 1–10, default 1; published records only |
+| `/event view`, `/event edit`, `/event cancel` | `id` required; edit/cancel/create require community officer access |
+| `/onboarding status` | `clan` (32 chars) required when several configured clans exist; `user` defaults to self, another member requires officer access |
+| `/onboarding queue` | Officer-only; `page` starts at 1, default 1, ten enrolled current members per page |
+| `/wheel spin`, `/wheel presets`, `/wheel add` | No slash options; presets/add require officer access |
+| `/wheel edit`, `/wheel remove` | Officer-only; `id` optional (100 chars), omission opens chooser |
+| `/milestones view`, `/milestones configure` | No slash options; configure requires Manage Server or configured manager role |
+| `/bingo view` | `cell` 1–25 optional; omission shows whole board privately |
+| `/bingo create`, `/bingo reset` | Officer-only, no slash options; draft destination is the channel where create runs, reset uses the active board's destination |
+| `/bingo claim` | `cell` required 1–25, `explanation` required (1000 chars), `evidence` optional (HTTPS, 500 chars) |
+| `/bingo review` | Officer-only; `page` 1–10000, default 1 |
+| `/duel` | `opponent` required, a different current human member; no OpenFront link required |
+
+Community officers hold the configured manager role or a configured clan officer/leader role. This does not grant legacy clan/debug access. Configuration permission is Manage Server or manager role. Public outputs are event cards, count-only overlap suggestions, wheel spins, opted-in milestone announcements, published bingo boards and duels. Availability details, onboarding, drafts/settings, bingo claims/review and access errors are private. All private community menus share a 200-session, ten-minute bound and validate their owner and saved context.
+
 ## Curated challenge wheel
 
 `/wheel spin` publicly draws one enabled complete hosting package and then one map from that package. Settings are never randomized separately. The card includes the selected map, mode/teams, difficulty, bots/nations, map size, disabled units, gold/troop donations, spawn, infinite resources, instant build and hosting instructions. These are compatible suggested settings for a human OpenFront host; competitive balance is not guaranteed. Each member may spin once per five seconds.
@@ -382,7 +412,7 @@ Officer spinners receive a separate private **Create event draft** button. It co
 
 `/bingo view` privately shows the current shared 5×5 board and links to its canonical public message. The public card shows five numbered rows, current completion/progress and completed lines, with **Refresh** and **Claim a cell**. Long labels are shortened on the card; `/bingo view cell:14` reads the full immutable challenge. The center (13) is free.
 
-Officers use `/bingo create` to create or resume their own private draft in the chosen destination channel. **Edit challenges** opens two groups of twelve definitions, in `kind | target | description` format, and an optional closing instant in `YYYY-MM-DDTHH:mm:ssZ` UTC format (`-` means no closing date). Supported kinds are `appearances`, `wins`, `contributors`, `shared_game`, `availability`, and `manual`. Targets are 1–1,000,000; manual targets must be 1, descriptions at most 160 characters. Edit all 24 definitions before explicitly pressing **Publish board**. Publication is queued and definitions freeze once published. Boards never reset automatically. `/bingo reset` previews a replacement and requires **Confirm reset**, which archives the old board and queues the replacement.
+Officers use `/bingo create` to create or resume their own private draft in the command's channel. **Edit challenges** opens two groups of twelve definitions, in `kind | target | description` format, and an optional closing instant in `YYYY-MM-DDTHH:mm:ssZ` UTC format (`-` means no closing date). Supported kinds are `appearances`, `wins`, `contributors`, `shared_game`, `availability`, and `manual`. Targets are 1–1,000,000; manual targets must be 1, descriptions at most 160 characters. Edit all 24 definitions before explicitly pressing **Publish board**. Publication is queued and definitions freeze once published. Boards never reset automatically. `/bingo reset` previews a replacement and requires **Confirm reset**, which archives the old board and queues the replacement.
 
 `/bingo claim cell:14 explanation:… [evidence:https://…]` submits a private manual claim. The public **Claim a cell** button opens the same private form. A repeated pending claim from the same person for the same cell returns the existing claim. Automatic cells and the center reject manual claims. Explanations allow 1000 characters and evidence URLs 500; evidence must use HTTPS and is stored as text without being fetched. Claims close at the optional board closing instant.
 

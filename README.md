@@ -118,12 +118,22 @@ Discord commands below use named options. `/clan` is one command with an `action
 | `/whois` | Look up exactly one Discord user or public OpenFront account |
 | `/stats` | Browse one account's statistics, lifetime buildings, recorded games, and observed ranked ratings |
 | `/dice` | Roll 1–25 dice with 1–1000 sides; defaults to one six-sided die |
+| `/event` | Publish sessions, choose squads, join confirmed/reserve places and opt into reminders |
+| `/availability` | Privately save weekly local windows and publicly suggest overlap counts |
+| `/onboarding` | Follow a private newcomer checklist or review the officer follow-up queue |
+| `/wheel` | Spin curated map/settings packages for a human host; officers edit presets |
+| `/milestones` | View exact public Team milestones privately; configure opt-in announcements |
+| `/bingo` | Share a persistent board using retained observations and private manual claims |
 | `/duel opponent:@member` | Invite a current server member to a public, consent-based D6 duel |
 | `/config` | Open private server configuration |
 | `/clan` | Set up clans, sync, inspect pending approvals/rosters/audits/coverage/health, manage server links, or view history/recaps |
 | `/debug` | Inspect status, export current member links, or change verbose/private-reply settings using a separate debug role |
 
 See the [complete command reference](docs/commands.md) for every input and action.
+
+The registry contains 15 commands: the original eight and seven server-only community commands. Community officers use the manager role or configured clan officer/leader roles; milestone announcement settings require configuration access (Manage Server or manager role). Existing clan/debug access stays independent.
+
+For community setup, configure clan mappings, check destination permissions, then create an event or bingo draft in its intended channel. Availability, onboarding, wheel and duels need no collection toggle. Milestone announcements start disabled; enable and Save in `/milestones configure`. Automatic bingo game cells require enabled player-history collection and healthy deletion synchronization; manual claims and availability evidence remain usable independently. Events display Discord timestamps in each reader's local time, reminders are opt-in, and duels save their rolls before displaying results. See [community setup and recovery](docs/server-administration.md#community-release-setup).
 
 ### Identity examples
 
