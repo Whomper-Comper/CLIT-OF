@@ -69,4 +69,3 @@ export function evaluateMilestones(state: MilestoneState, current: MilestoneCoun
   }
   return result;
 }
-
