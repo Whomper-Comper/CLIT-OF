@@ -1,6 +1,6 @@
 # Clan Community Implementation Plan
 
-Status (2026-10-20): Foundation and all seven feature implementations independently reviewed. Final integration and final-review fixes are locally verified (510/510 tests); controller-owned scoped release re-review is pending. No live registration/deployment performed.
+Status (2026-10-20): Foundation and all seven feature implementations independently reviewed. Final integration and final-review fixes are locally verified (510/510 tests); final independent scoped release re-review passed. Local implementation and release review are complete. Command registration and deployment remain separate; neither was performed.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
@@ -94,7 +94,7 @@ Also assert: reopening an on-disk test DB preserves a pending job and existing c
 - [x] **Step 2: Run `npm run build`, then `node --test test/interaction-router.test.mjs test/bot.test.mjs test/community-integration.test.mjs`.** Create `test/community-integration.test.mjs` for the cross-feature cases. Expected red for uncovered integration behavior, or green if existing feature coverage already implements it; do not break correct code merely to force red.
 - [x] **Step 3: Resolve concrete integration gaps and finish documentation.** Every command, subcommand, option/default, officer/config permission, private/public flow, enablement step, collection dependency, cleanup rule, and delivery recovery action must be documented. Explain that times render locally, presets suggest human-hosted games, milestones baseline old awards silently, bingo uses retained observations, reminders are opt-in, and duels persist rolls. Update test inventories and source/table maps. No live operation is needed.
 - [x] **Step 4: Run `npm test` and `git diff --check`.** Expected build succeeds; all existing/new individual tests pass with zero failures. Record the actual test count and any platform limitation. Do not rerun passing suites without a subsequent change or unresolved concern. Review source/serialization evidence for privacy, capacity, and deduplication before claiming completion.
-- [ ] **Step 5: Obtain final independent code review using the execution method chosen by the user; fix valid findings and rerun affected verification.** Use the applicable review/verification/branch-finishing skills at execution time. Stage exact changed files and commit `feat: complete clan community feature integration`. Preserve local-only handoff/report files and runtime secrets/data. Summarize implemented behavior, verification and remaining live registration/deployment steps.
+- [x] **Step 5: Obtain final independent code review using the execution method chosen by the user; fix valid findings and rerun affected verification.** Use the applicable review/verification/branch-finishing skills at execution time. Stage exact changed files and commit `feat: complete clan community feature integration`. Preserve local-only handoff/report files and runtime secrets/data. Summarize implemented behavior, verification and remaining live registration/deployment steps.
 
 ## Execution choice
 
