@@ -10,6 +10,7 @@ Start with the guide for your role. The detailed references describe the impleme
 
 | Guide | What it covers |
 |---|---|
+| [Community playbook](docs/community-playbook.md) | Set up the seven community features, run a first clan night, help newcomers, and recover failed updates |
 | [Command reference](docs/commands.md) | Every command and clan action, options, defaults, examples, permissions, visibility, and cooldowns |
 | [Server administration](docs/server-administration.md) | First configuration, access roles, clan role mappings, approvals, synchronization, diagnostics, and configuration drafts |
 | [Statistics and history](docs/statistics-and-history.md) | Filters, lifetime counters, buildings, partial coverage, observed Elo, collection, weekly recaps, and retention |
@@ -29,6 +30,8 @@ Start with the guide for your role. The detailed references describe the impleme
 - Optionally collects history and sends scheduled weekly summaries of recorded public Team activity.
 - Provides private role-restricted debug status and JSON link exports.
 - Rolls secure independent dice with animation, totals, and critical min/max results for dice with at least three sides.
+- Coordinates clan nights with local availability, squad signups, reserves, opt-in reminders and newcomer checklists.
+- Adds curated hosting challenges, optional milestone announcements, shared bingo with officer-reviewed claims and consent-based dice duels.
 
 ## Quick start for hosting
 
