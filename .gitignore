@@ -3,6 +3,7 @@ node_modules/
 
 # Build artifacts
 dist/
+/.superpowers/
 .deploy/
 
 # Local handoff, review report, and comparison benchmark

@@ -7,6 +7,7 @@ import { statsCommand } from "./stats.js";
 import { clanCommand } from "./clan.js";
 import { configCommand } from "./config.js";
 import { debugCommand } from "./debug.js";
+import { lobbyCommand } from "./lobby.js";
 import { diceCommand } from "./dice.js";
 import { availabilityCommand } from "./availability.js";
 import { eventCommand } from "./event.js";
@@ -21,4 +22,5 @@ interface BotCommand {
   execute(interaction: ChatInputCommandInteraction, sync: ClanSyncService): Promise<void>;
 }
 export const commands: BotCommand[] = [linkCommand, unlinkCommand, whoisCommand, statsCommand, clanCommand, configCommand, debugCommand, diceCommand, availabilityCommand, eventCommand, onboardingCommand, wheelCommand, milestonesCommand, bingoCommand, duelCommand];
+commands.push(lobbyCommand);
 export const commandsByName = new Map(commands.map((command) => [command.data.name, command]));

@@ -339,3 +339,17 @@ Member departure removes pending consent and participant slots, retaining only m
 6. Review event management, milestone configuration, or bingo draft/review delivery status after permission failures. Correct access, reopen expired menus and deliberately **Retry / reconcile**. Preserve bot recovery markers. Needs review means an accepted send may exist; do not create another post to guess its outcome. Existing duel **Refresh** recovers a saved result without rerolling.
 
 Unlink/replacement deletes account-derived milestone/bingo evidence and resets onboarding completion, while recurring availability, signups and account-independent duels survive. Departure removes availability/enrollment/active signups/pending claims and duel consent, and queues reserve promotion. Account deletion purges derived account evidence in every guild; disabling player-history collection clears automatic game evidence. Guild removal clears all community records. Saved Discord messages have their own lifetime and are not a substitute for current database/access checks.
+
+## Lobby alert setup
+
+A member with Manage Server or the configured manager role runs:
+
+```text
+/lobby configure enabled:true channel:#lobby-alerts
+```
+
+The bot needs View Channel, Send Messages, Embed Links and Read Message History in that ordinary server text channel. Members must be able to view it to receive fallback pings. Alerts start disabled, and watches require a configured enabled server. Changing settings stops existing searches; members explicitly restart with `/lobby resume`.
+
+Members save their own filters with `/lobby watch name:World-teams map:World mode:Team min_players:20`. Results go to DMs first. If DMs are blocked, the bot mentions only that member in the fallback channel and tells them to enable DMs from server members. No role-wide pings or extra Message Content/Reaction intents are needed; continuation uses a button.
+
+Every alert pauses searching until its owner clicks Continue searching within 180 seconds after delivery. Silence stops the search and keeps filters. `/lobby configure` without inputs privately shows delivery diagnostics and feed status. Fix channel/DM permissions, then ask the affected member to resume; a review-held lobby is not automatically resent.

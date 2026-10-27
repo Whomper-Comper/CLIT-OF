@@ -81,7 +81,7 @@ After verification, inspect the actual changed files and report which commands r
 
 ## Test inventory
 
-There are **40 test files** under `test/` in the documented source tree: the 18 existing suites below and 22 community suites in the [community inventory](#community-regression-inventory-and-performance-evidence). This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
+There are **46 test files** under `test/` in the documented source tree: the 18 existing suites below, 22 community suites, and six lobby suites in the [community inventory](#community-regression-inventory-and-performance-evidence). This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
 
 | File | Behaviors protected |
 | --- | --- |
@@ -176,8 +176,19 @@ Choose affected feature suites while iterating; run `npm test` once when ready f
 | `test/community-integration.test.mjs` | Actual runtime signup/checklist/availability evidence, deletion across guilds/account isolation, milestone disable, maximum cards/lists and indexed mixed-history diagnostics with real private pagination |
 | `test/final-review-regressions.test.mjs` | Event final-roster permission and private-session revocation/expiry, availability draft source validation, published list cap, bounded milestone cooldown/in-flight sharing across menus, members and accounts |
 
-`test/bot.test.mjs` also asserts exactly 15 unique commands, the unchanged `sides`/`count` dice interface and all seven Guild contexts. `test/interaction-router.test.mjs` exercises the actual central dispatcher and InteractionCreate listener across every community public/private prefix, malformed/forged bindings, valid bingo/milestones/duel controls and legacy fallthrough. The fixture substitutes only Discord/API boundaries; state transitions and query plans use real SQLite.
+`test/bot.test.mjs` also asserts exactly 16 unique commands, the unchanged `sides`/`count` dice interface and all seven Guild contexts. `test/interaction-router.test.mjs` exercises the actual central dispatcher and InteractionCreate listener across every community public/private prefix, malformed/forged bindings, valid bingo/milestones/duel controls and legacy fallthrough. The fixture substitutes only Discord/API boundaries; state transitions and query plans use real SQLite.
 
 Retain count/plan evidence for optimizations rather than adding wall-clock thresholds. Committed [architecture measurements](architecture.md#local-performance-evidence) preserve earlier local observations: availability Intl calls 93,810 → 46,905 for 129 zones/258 members (1.2649s → 0.5511s representative); event participant rows 10,001 → 20 + two aggregate rows; 1,000 settings queries 1,001 → 1 (12-iteration median 8.9947ms → 1.7075ms, p95 30.0878ms → 2.4469ms). The final diagnostics fixture seeds 12,000 mixed rows, returns 11 instead of 10,000 guild rows, and proves indexed order without a temporary sort. Later-page OFFSET cost is proportional to preceding matching diagnostics.
 
 Bingo's measured production source pages are 200/200/51/1 for 451 games plus availability, with one game parse each and zero history payload reads/game parses/evidence-row loads during finalization. Keep this distinct from the synchronous compatibility replacement's proportional canonical reads and the older clean-refresh-only zero-read test. Cleanup/dirty refresh are bounded at 200. One-off timing scripts and scratch handoffs remain local; assertions protect correctness and operation bounds without claiming a machine-independent duration.
+
+## Lobby alert verification
+
+The six lobby suites add behavioral coverage for source fixtures/full/count frames, filter combinations, reconnection, durable rules/deduplication, exact 180-second boundaries, DM success, blocked-DM fallback/guidance, fresh channel visibility, ambiguous/interrupted sends, retry of unsent candidates, lookup races, stop/drain and private command/button bindings. Matching tests also bound database selection calls for nonmatching lobbies. The actual central router suite exercises continuation from a DM. Build before focused tests:
+
+```sh
+npm run build
+node --test test/lobby-*.test.mjs test/interaction-router.test.mjs
+```
+
+`tools/vendor-lobby-codec.mjs` regenerates the checked-in standalone decoder and binary fixtures from a pinned official upstream revision. Regeneration is a deliberate maintenance operation requiring network access; ordinary builds/tests work offline and need no neighboring game checkout. Verify build compatibility before changing the supported SHA. The registry now has 16 unique commands.

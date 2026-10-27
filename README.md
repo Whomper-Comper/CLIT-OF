@@ -17,6 +17,7 @@ Start with the guide for your role. The detailed references describe the impleme
 | [Installation and operations](docs/operations.md) | Discord application setup, environment variables, Windows/Linux installation, PM2, deployment, backups, recovery, and troubleshooting |
 | [Architecture](docs/architecture.md) | Runtime flows, source map, database tables, queues, identity rules, caching, sessions, and reliability boundaries |
 | [Development](docs/development.md) | Local workflow, test inventory, targeted checks, and extending commands, settings, and data collection |
+| [Agent guidance](AGENTS.md) | Shared instructions for AI agents working locally or from GitHub |
 
 ## What the bot does
 
@@ -31,6 +32,7 @@ Start with the guide for your role. The detailed references describe the impleme
 - Provides private role-restricted debug status and JSON link exports.
 - Rolls secure independent dice with animation, totals, and critical min/max results for dice with at least three sides.
 - Coordinates clan nights with local availability, squad signups, reserves, opt-in reminders and newcomer checklists.
+- Watches live OpenFront lobbies with saved filters, sends DMs with a server-ping fallback, and stops unless the player continues within three minutes.
 - Adds curated hosting challenges, optional milestone announcements, shared bingo with officer-reviewed claims and consent-based dice duels.
 
 ## Quick start for hosting
@@ -128,13 +130,14 @@ Discord commands below use named options. `/clan` is one command with an `action
 | `/milestones` | View exact public Team milestones privately; configure opt-in announcements |
 | `/bingo` | Share a persistent board using retained observations and private manual claims |
 | `/duel opponent:@member` | Invite a current server member to a public, consent-based D6 duel |
+| `/lobby` | Save lobby filters and receive DM alerts with fallback pings and three-minute continuation |
 | `/config` | Open private server configuration |
 | `/clan` | Set up clans, sync, inspect pending approvals/rosters/audits/coverage/health, manage server links, or view history/recaps |
 | `/debug` | Inspect status, export current member links, or change verbose/private-reply settings using a separate debug role |
 
 See the [complete command reference](docs/commands.md) for every input and action.
 
-The registry contains 15 commands: the original eight and seven server-only community commands. Community officers use the manager role or configured clan officer/leader roles; milestone announcement settings require configuration access (Manage Server or manager role). Existing clan/debug access stays independent.
+The registry contains 16 commands: the original eight, seven community commands, and the server-only lobby command. Community officers use the manager role or configured clan officer/leader roles; milestone announcement settings require configuration access (Manage Server or manager role). Existing clan/debug access stays independent.
 
 For community setup, configure clan mappings, check destination permissions, then create an event or bingo draft in its intended channel. Availability, onboarding, wheel and duels need no collection toggle. Milestone announcements start disabled; enable and Save in `/milestones configure`. Automatic bingo game cells require enabled player-history collection and healthy deletion synchronization; manual claims and availability evidence remain usable independently. Events display Discord timestamps in each reader's local time, reminders are opt-in, and duels save their rolls before displaying results. See [community setup and recovery](docs/server-administration.md#community-release-setup).
 

@@ -84,3 +84,9 @@ See [statistics and history](statistics-and-history.md) for coverage/retention d
 Before registration or deployment, run `npm test` locally and follow the [operations runbook](operations.md) for the intended environment. Local tests do not establish live Discord rendering, permissions or upstream availability.
 
 In a test server, check the member and officer views separately: save availability, publish and join an event, opt into a reminder, open onboarding, spin a package, review milestone settings, publish a bingo board and review a manual claim, then accept a duel and refresh its saved result. Confirm that private details remain private and that the public controls work after restarting the bot.
+
+## Find a live lobby
+
+A manager enables `/lobby configure enabled:true channel:#lobby-alerts`. Members save preferences with `/lobby watch`, using map, mode, category and/or current player-count bounds. The bot sends a DM when all selected conditions match. If Discord blocks the DM, it pings the member in the fallback channel with instructions to enable DMs.
+
+Click **Continue searching** within three minutes of each delivered alert to keep watching. Without a click, searching stops while saved filters remain. `/lobby resume` restarts and `/lobby stop` stops immediately. `/lobby list` shows saved filters, current state and feed availability. See [lobby commands](commands.md#live-openfront-lobby-alerts) and [feed maintenance](operations.md#lobby-feed-operations).

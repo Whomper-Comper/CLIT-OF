@@ -467,7 +467,7 @@ Use `/bingo create` to recover unpublished drafts and `/bingo review` for active
 
 ## Dice duel delivery and recovery
 
-The final release registers 15 commands from one registry. Local build/tests do not update Discord registration; registration, bot startup and deployment are separate deliberate operational steps. Community features add no dependency or service process and retain Node.js >=22.13.0 and the existing backed-up database initialization.
+The registry exposes 16 commands, including lobby alerts. Local build/tests do not update Discord registration; registration, bot startup and deployment are separate deliberate operational steps. Community features add no dependency or service process and retain Node.js >=22.13.0 and the existing backed-up database initialization.
 
 `duel_publish` persists with invitation creation before any public request. The shared worker publishes disabled controls, atomically binds the accepted/reconciled canonical message with delivery completion, then queues `duel_update`. Each publication/edit counts against the existing four outbound operations per minute. No duel background member/API fetches are added; command actions fetch both members together once, then check live state/binding and consent synchronously after that await. Departure invalidates matching in-flight membership snapshots, including commands that have not created an invitation yet.
 
@@ -478,3 +478,22 @@ Resolve/decline/cancel, sweep expiry, lazy expiry during new invitation/actions,
 Uncertain initial publications remain eligible for marker reconciliation after their two-minute wait expires or a participant departs, including when a five-minute Sending lease is reclaimed. Normal preparation retains only a recovery payload; the final delivery boundary forbids a fresh send for an unbound terminal invitation or closure. A proven bot-authored marker binds the original message and queues its expired/retry or generic closed edit. Missing or non-bot markers leave Needs review across deliberate retries without publishing another card or reviving consent.
 
 Departure deletes pending personal invitation data and slots while retaining only duel ID, guild/channel/message, revision and closure time in `community_duel_closures`. A departure during an already-started publication can bind that accepted message to the generic closure and queue its closing edit. Pending snapshots cannot recreate removed consent. Closure and terminal retention drain at most 200 each per prune pass using indexed timestamps; guild removal clears both and its delivery jobs. OpenFront unlink/account/history cleanup preserves account-independent duels. Already published Discord messages have a separate lifetime.
+
+## Lobby feed operations
+
+Lobby alerts use OpenFront's public `https://api.openfront.io/cluster.json?site=openfront.io` discovery and a single compatible server's `/w0/lobbies?platform=web` WebSocket. The adjacent game checkout is not a runtime dependency. The feed has a 30-second freshness limit, reconnect backoff of 3–60 seconds, and rejects unsupported builds or draining deployments. Cloudflare/access failures appear as unavailable discovery in `/lobby list` and `/lobby configure`; they do not generate fabricated matches. This implementation's live HTTP verification encountered a Cloudflare challenge; binary interoperability is covered by pinned official-source fixtures, not a claimed successful production connection.
+
+The lobby wire protocol is positional binary and changes with the game build. The checked-in decoder supports the exact upstream revision in [vendor provenance](../src/lobby/vendor/NOTICE.md). After an upstream deployment, maintainers must verify and regenerate the codec/fixtures against its full commit SHA:
+
+```sh
+node tools/vendor-lobby-codec.mjs FULL_OPENFRONT_COMMIT_SHA
+npm test
+```
+
+The generator needs public GitHub access, the pinned Zod dependency, and esbuild supplied by the locked tsx toolchain. Review schema extraction if upstream declarations change. Include the generated codec, upstream license/provenance and binary fixtures in the release; do not merely relax the build check. Runtime needs outbound HTTPS discovery, WSS lobby access and Discord access. No game account token or authenticated game API is used.
+
+After installing this bot update, register the updated command definitions deliberately using the existing registration workflow. No Message Content or Reaction intent is required. Startup starts the feed and a separate paced durable delivery worker; shutdown disconnects it and drains sends before SQLite closes.
+
+A blocked DM produces one fallback ping with DM-enablement guidance. An uncertain send or exhausted retry stops that member's search and appears privately in `/lobby configure`. Diagnose the original message/permissions before the member resumes. Repeated frames, restarts and new searches do not resend the same member/lobby notification. Three-minute continuation deadlines use persisted message creation timestamps; old controls cannot revive a stopped or replaced search. Bot-sent messages and backups retain their independent lifetimes.
+
+Candidates cancelled before a send may be selected again if they return and still match; uncertain or completed sends retain their deduplication records. The fallback channel's visibility is checked again against freshly fetched membership immediately before sending. The worker prefilters lobby snapshots in memory and rechecks matching candidates transactionally before selecting them.

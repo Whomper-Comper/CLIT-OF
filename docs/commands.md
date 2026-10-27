@@ -421,3 +421,26 @@ Officers use `/bingo review [page:1]` to inspect ten claims at a time. Choose a 
 Automatic progress uses retained observed public Team sessions and current linked humans/configured clan tags, plus current humans' availability submissions after board creation. A full fresh scan may take several ticks; automatic cells and mixed lines show refreshing until it completes. Cards label disabled/unavailable collection, incomplete coverage and the retention horizon. Existing progress can decrease after corrections, retention, unlink or departure. A lost/regained line announces only once per board. Refresh queues a card update; it does not fetch OpenFront profiles.
 
 Paused/failed/uncertain deliveries appear in `/bingo create` for unpublished drafts and `/bingo review` for active boards. **Retry / reconcile** rechecks officer access and deliberately retries after permissions are corrected. An uncertain accepted post is reconciled using its existing bot recovery marker; an unproven outcome stays reviewable without an automatic duplicate publication.
+
+## Live OpenFront lobby alerts
+
+`/lobby` slash commands are server-only. Alert buttons also work in DMs. No OpenFront account link is required.
+
+| Action | Inputs and behavior |
+| --- | --- |
+| `/lobby configure` | Managers inspect enabled state, fallback destination, feed status, and up to five delivery diagnostics. Optional `enabled` and `channel` update settings; channel must be an ordinary server text channel. Changes stop existing searches. |
+| `/lobby watch` | Required `name` (1–60 characters); optional `map` (autocomplete), `mode`, `category`, `min_players`, `max_players`. At least one filter is required. Save at most ten rules. Saving starts/restarts your search. |
+| `/lobby list [page:1]` | Private search state, feed status, and saved rules/IDs; five rules per page. |
+| `/lobby remove id:…` | Remove your rule without restarting a stopped search or bypassing a pending response. Removing the last rule stops searching. |
+| `/lobby stop` | Stop your search while retaining filters. |
+| `/lobby resume` | Restart with saved filters. |
+
+All selected fields in a rule must match; different rules are alternatives. Map matching is exact after trimming/case normalization. Counts are **currently connected players**, not capacity, bots, or team size, and must be integers from 0 to 1000. Modes include Free For All, Team, and Humans Vs Nations. Categories are ffa, team, special, and hosted. Full, restricted, started, queued without a start window, stale, or insufficiently described lobbies are excluded.
+
+The bot tries a DM first. Discord's confirmed blocked-DM rejection triggers a ping in the configured server channel, including instructions to enable direct messages from server members. Saving/resuming opts into that fallback. Only the affected player is mentioned. Network failures with an uncertain send outcome stop the search for manager review rather than risking a duplicate public ping.
+
+Each delivered alert has a **Continue searching** button. Searching pauses while delivery/your answer is pending. Click within **three minutes after successful delivery** to continue; otherwise searching stops. The deadline survives restarts and cannot be extended by repeat clicks. Only the intended player can use the button, even in a public fallback. A started/vanished lobby does not remove your ability to continue searching. Saved rules survive timeout; use `/lobby resume`. The same lobby does not alert you again after resuming.
+
+A candidate that becomes unavailable before any send can be selected again if it later matches. Confirmed or uncertain sends retain duplicate protection. Before a fallback ping, the bot checks the member's current access to the channel; if access has been lost, delivery stops for review.
+
+Live monitoring requires a compatible pinned OpenFront lobby build and access to public discovery/WebSockets. `/lobby list` shows feed availability; it does not claim that an unavailable feed is searching successfully. See [operations](operations.md#lobby-feed-operations).

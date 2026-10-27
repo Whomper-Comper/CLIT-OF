@@ -246,3 +246,14 @@ test('milestones controls still resolve true and unrelated legacy prefixes fall 
     db.community.purgeGuild(guildId);
   }
 });
+
+test('actual central event routes a saved lobby continuation from a DM',async()=>{
+ const guildId='router-lobby-dm',now=Date.now(),s=db.community.lobbies;
+ s.configure(guildId,true,'fallback',now);s.watch(guildId,'owner',{name:'World',map:'World'},now);
+ const n=s.select(guildId,'owner',{source:'https://blue.openfront.io',id:'a1234567',map:'World',mode:'Team',category:'team',players:12,capacity:100,startsAt:now+60000,restricted:false},now);s.delivered(n.id,'dm','lobby-message',now);
+ client.guilds.cache.set(guildId,{id:guildId,members:{fetch:async()=>({id:'owner',user:{bot:false}})}});
+ try{
+  const i=interaction({client,guildId:null,channelId:'dm',user:{id:'owner'},customId:`lobby:continue:${n.id}`,message:{id:'lobby-message',edit:async()=>{}},deferReply:async function(p){this.deferred=true;this.deferPayload=p;}});
+  await route(i);assert.equal(s.search(guildId,'owner').state,'searching');assert.equal(i.edits.length,1);assert.equal(i.deferPayload.flags,MessageFlags.Ephemeral);
+ }finally{client.guilds.cache.delete(guildId);db.community.purgeGuild(guildId);}
+});

@@ -20,6 +20,9 @@ import { commandErrorMessage } from "./commands/errorMessages.js";
 import { clearDeploymentHealth, writeDeploymentHealth } from "./deploymentHealth.js";
 import { createCommunityService } from "./community/runtime.js";
 import { handleCommunityInteraction } from "./community/interactions.js";
+import { lobbyCommand } from "./commands/lobby.js";
+import { lobbyFeed } from "./lobby/feed.js";
+import { LobbyWorker } from "./lobby/worker.js";
 
 validateConfig();
 
@@ -33,6 +36,7 @@ const client = new Client({
 
 const clanSyncService = new ClanSyncService(client);
 const communityService = createCommunityService(client, db, openfrontApi);
+const lobbyWorker = new LobbyWorker(client, db.community.lobbies, lobbyFeed);
 const historyCollector = new HistoryCollector(client, db, openfrontApi, {
   buildWeeklyReport: async (guildId, start, end) => {
     const guild = client.guilds.cache.get(guildId);
@@ -50,6 +54,8 @@ client.once(Events.ClientReady, (c) => {
   clanSyncService.startScheduler();
   historyCollector.start();
   communityService.start();
+  lobbyFeed.start();
+  lobbyWorker.start();
   writeDeploymentHealth();
 });
 
@@ -87,6 +93,10 @@ client.on(Events.GuildMemberUpdate, async (oldMember, newMember) => {
 // Keep command and component failures inside the Discord event boundary.
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    if (interaction.isAutocomplete?.() && interaction.commandName === "lobby") {
+      await lobbyCommand.autocomplete(interaction);
+      return;
+    }
     if (await handleCommunityInteraction(interaction)) return;
     if (await handleConfigInteraction(interaction)) return;
     if (await handleStatsInteraction(interaction)) return;
@@ -124,6 +134,8 @@ async function shutdown() {
   console.log("[Bot] Shutting down gracefully...");
   clearDeploymentHealth();
   clanSyncService.stopScheduler();
+  lobbyFeed.stop();
+  await lobbyWorker.stop();
   await historyCollector.stop();
   await communityService.stop();
   await client.destroy();
@@ -138,6 +150,8 @@ client.login(CONFIG.DISCORD_TOKEN).catch(async (err) => {
   console.error("[Bot] Login failed:", err);
   clearDeploymentHealth();
   clanSyncService.stopScheduler();
+  lobbyFeed.stop();
+  await lobbyWorker.stop();
   await historyCollector.stop();
   await communityService.stop();
   await client.destroy();

@@ -21,6 +21,9 @@ export function clearGameEvidence(sql: DatabaseSync, guildId?: string): void {
   clearBingoEvidence(sql, 'games', undefined, guildId);
 }
 export function purgeMember(sql: DatabaseSync, guildId: string, discordId: string): void {
+  for (const table of ['lobby_rules', 'lobby_searches', 'lobby_notifications']) {
+    sql.prepare(`DELETE FROM ${table} WHERE guild=? AND user=?`).run(guildId, discordId);
+  }
   purgeDuelMember(sql, guildId, discordId);
   sql.prepare("DELETE FROM community_bingo_claims WHERE guild_id=? AND actor_id=? AND status='pending'").run(guildId,discordId);
   clearBingoEvidence(sql, 'member', discordId, guildId);
@@ -34,6 +37,9 @@ export function purgeMember(sql: DatabaseSync, guildId: string, discordId: strin
   purgeIdentity(sql,discordId,guildId); communitySessions.purgeMember(guildId,discordId);
 }
 export function purgeGuild(sql: DatabaseSync, guildId: string): void {
+  for (const table of ['lobby_settings', 'lobby_rules', 'lobby_searches', 'lobby_notifications']) {
+    sql.prepare(`DELETE FROM ${table} WHERE guild=?`).run(guildId);
+  }
   invalidateDuelMembership(sql, guildId);
   for (const table of ['community_duel_participants', 'community_duel_cooldowns', 'community_duels', 'community_duel_closures']) {
     sql.prepare(`DELETE FROM ${table} WHERE guild_id=?`).run(guildId);
