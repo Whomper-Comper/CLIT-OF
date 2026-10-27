@@ -104,6 +104,20 @@ test("malformed or forbidden leaderboards fail rather than becoming empty rankin
   assert.equal(recovered.complete, true);
 });
 
+test("a leaderboard page-bound error only signals exhaustion beyond the stated maximum", async (t) => {
+  let message = "Page must be between 1 and 3";
+  t.mock.method(globalThis, "fetch", async () => response({ message }, 400));
+  const api = new OpenFrontApi("https://example.invalid");
+  await assert.rejects(api.getRankedLeaderboardPage(2), error => error instanceof OpenFrontApiError && error.reason === "http" && error.status === 400);
+  const exhausted = await api.getRankedLeaderboardPage(4);
+  assert.deepEqual(exhausted.ratings, []);
+  assert.equal(exhausted.hasMore, false);
+  for (const malformed of ["Page must be between 2 and 3", "Page must be between 1 and 0", "Page must be between 1 and 99999999999999999"]) {
+    message = malformed;
+    await assert.rejects(api.getRankedLeaderboardPage(5, { fresh: true }), error => error instanceof OpenFrontApiError && error.reason === "http" && error.status === 400);
+  }
+});
+
 test("player history preserves opaque cursors, separates filters, and coalesces cached pages", async (t) => {
   const urls = [];
   t.mock.method(globalThis, "fetch", async (url, options) => {

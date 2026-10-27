@@ -191,7 +191,7 @@ export class OpenFrontApi {
     return this.publicRead(endpoint, async () => {
       const response = await this.request(endpoint);
       if (response.status === 400) {
-        const data = await this.jsonForPageBounds(response);
+        const data = await this.jsonForPageBounds(response, page);
         if (data) return { ratings: [], hasMore: false, observedAt: new Date(this.now()).toISOString() };
       }
       const data = await this.json(response);
@@ -214,10 +214,14 @@ export class OpenFrontApi {
     }, options);
   }
 
-  private async jsonForPageBounds(response: Response): Promise<boolean> {
+  private async jsonForPageBounds(response: Response, requestedPage: number): Promise<boolean> {
     let data: unknown;
     try { data = await response.clone().json(); } catch { return false; }
-    return object(data) && typeof data.message === "string" && /^Page must be between \d+ and \d+$/.test(data.message);
+    if (!object(data) || typeof data.message !== "string") return false;
+    const bounds = /^Page must be between (\d+) and (\d+)$/.exec(data.message);
+    if (!bounds) return false;
+    const lower = Number(bounds[1]), upper = Number(bounds[2]);
+    return Number.isSafeInteger(lower) && Number.isSafeInteger(upper) && lower === 1 && upper >= lower && requestedPage > upper;
   }
 
   /** Exact public-ID matches only. A missing bounded-search result is not zero Elo. */

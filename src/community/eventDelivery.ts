@@ -75,6 +75,21 @@ export function registerEventWork(service: CommunityService, client: Client, db:
         return prepareEventDelivery(job, guild, db, now, tick);
       },
 
+      beforeDeliver: kind === 'event_reminder' ? (job, now, prepared) => {
+        const event = db.community.events.get(job.guildId, job.subjectId);
+        if (!event || event.channelId !== job.channelId || event.revision !== job.revision ||
+            event.status !== 'scheduled' || !event.messageId || !event.reminderMinutes || event.startAt <= now) return null;
+        const eligible = new Set(db.community.events.reminderRecipients(job));
+        // Preserve the last fresh membership proof; do not add newly eligible users here.
+        const users = (prepared.payload.allowedMentions?.users ?? []).filter(id => eligible.has(id));
+        if (!users.length) return null;
+        return { payload: {
+          ...prepared.payload,
+          content: `**${safe(event.title)}** starts <t:${Math.floor(event.startAt / 1000)}:R>.\n${users.map(id => `<@${id}>`).join(' ')}`,
+          allowedMentions: { parse: [], users, roles: [], repliedUser: false },
+        } };
+      } : undefined,
+
       delivered(job, messageId) {
         if (job.kind === 'event_publish') {
           db.community.events.publish(job.guildId, job.subjectId, job.revision, messageId);

@@ -20,7 +20,7 @@ export interface CommunityDeliveryHandler {
   requestBudget?: number;
   prepare(job: DeliveryJob, now?: number, tick?: CommunityTick): Promise<PreparedDelivery | null>;
   /** Optional synchronous final state transition, after all lookups and immediately before the request. */
-  beforeDeliver?(job: DeliveryJob, now: number): PreparedDelivery | null;
+  beforeDeliver?(job: DeliveryJob, now: number, prepared: PreparedDelivery): PreparedDelivery | null;
   /** Synchronous binding only: runs in the same savepoint as delivery completion. */
   delivered?(job: DeliveryJob, messageId: string): void;
 }

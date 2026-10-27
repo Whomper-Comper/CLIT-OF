@@ -67,6 +67,82 @@ test('reminder send boundary removes withdrawn, reserve, departed and disabled r
   } finally { await f.close(); }
 });
 
+test('reminder opt-out after the final membership lookup prevents a stale mention', async () => {
+  const f = communityFixture();
+  try {
+    const e = await published(f, { reminderMinutes: 30 });
+    const id = '100000000000000001';
+    optIn(f, e, id);
+    const service = worker(f);
+    const handler = service.handlers.get('event_reminder');
+    const prepare = handler.prepare;
+    let calls = 0;
+    handler.prepare = async (...args) => {
+      const prepared = await prepare(...args);
+      if (++calls === 2) queueMicrotask(() => f.db.community.events.setReminder('g', e.id, id, false, f.now()));
+      return prepared;
+    };
+    f.advance(1800000);
+    await service.runOnce();
+    assert.equal(reminders(f).length, 0);
+    assert.equal(reminderJobs(f)[0].status, 'cancelled');
+  } finally { await f.close(); }
+});
+
+test('final reminder keeps verified recipients, excludes new arrivals and removes late opt-outs', async () => {
+  const f = communityFixture();
+  try {
+    const e = await published(f, { reminderMinutes: 30 });
+    const [leaving, staying, arriving] = ['100000000000000001', '100000000000000002', '100000000000000003'];
+    optIn(f, e, leaving); optIn(f, e, staying); optIn(f, e, arriving, false);
+    const service = worker(f);
+    const handler = service.handlers.get('event_reminder');
+    const prepare = handler.prepare;
+    let calls = 0;
+    handler.prepare = async (...args) => {
+      const prepared = await prepare(...args);
+      if (++calls === 2) queueMicrotask(() => {
+        f.db.community.events.setReminder('g', e.id, leaving, false, f.now());
+        f.addMember(arriving);
+      });
+      return prepared;
+    };
+    f.advance(1800000);
+    await service.runOnce();
+    assert.equal(reminders(f).length, 1);
+    assert.deepEqual(reminders(f)[0].allowedMentions.users, [staying]);
+    assert.doesNotMatch(reminders(f)[0].content, new RegExp(`${leaving}|${arriving}`));
+    assert.equal(reminderJobs(f)[0].status, 'sent');
+  } finally { await f.close(); }
+});
+
+test('withdrawal or the exact start after the final lookup prevents reminder delivery', async () => {
+  for (const change of ['withdraw', 'start']) {
+    const f = communityFixture();
+    try {
+      const e = await published(f, { reminderMinutes: 30 });
+      const id = '100000000000000001';
+      optIn(f, e, id);
+      const service = worker(f);
+      const handler = service.handlers.get('event_reminder');
+      const prepare = handler.prepare;
+      let calls = 0;
+      handler.prepare = async (...args) => {
+        const prepared = await prepare(...args);
+        if (++calls === 2) queueMicrotask(() => {
+          if (change === 'withdraw') f.db.community.events.withdraw('g', e.id, id, new Set([id]), f.now());
+          else f.advance(1800000);
+        });
+        return prepared;
+      };
+      f.advance(1800000);
+      await service.runOnce();
+      assert.equal(reminders(f).length, 0, change);
+      assert.equal(reminderJobs(f)[0].status, 'cancelled', change);
+    } finally { await f.close(); }
+  }
+});
+
 test('time edits, cancellation and the exact start instant cancel queued reminder revisions', async () => {
   for (const action of ['edit', 'cancel', 'start']) {
     const f = communityFixture();

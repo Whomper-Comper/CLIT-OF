@@ -170,7 +170,8 @@ export class CommunityService {
         accepted = true; this.complete(job,recovered,handler); return;
       }
       const finalPreparation = (expectedMessageId: string | undefined): PreparedDelivery | null => {
-        const final = handler.beforeDeliver ? handler.beforeDeliver(job, this.now()) : prepared;
+        if (!prepared) return null;
+        const final = handler.beforeDeliver ? handler.beforeDeliver(job, this.now(), prepared) : prepared;
         if (!store.owns(job)) return null;
         if (!final) { store.cancel(job.id, job.leaseId!, this.now()); return null; }
         if (this.stopped) { fail('transient', new Error('Community service stopped before delivery.')); return null; }

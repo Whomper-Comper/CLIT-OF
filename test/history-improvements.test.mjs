@@ -29,6 +29,31 @@ test("listing history settings reads all guilds in one query without changing th
   } finally { raw.close(); }
 });
 
+test("Elo pruning reads retention settings once and respects each guild's cutoff", () => {
+  const raw = new DatabaseSync(":memory:");
+  try {
+    HistoryStore.initialize(raw);
+    const captured = Date.parse("2026-10-27T12:00:00.000Z");
+    const specs = [["short",14,14],["long",120,120],["missing",null,90],
+      ["dm",null,90],["low",0,1],["high",999,365],["invalid","invalid",90]];
+    const settings = raw.prepare("INSERT INTO history_settings(guild_id,revision,retention_days) VALUES(?,1,?)");
+    const insert = raw.prepare(`INSERT INTO history_observed_elo
+      (guild_id,public_id,discord_id,ladder,hour_bucket,observed_at,rating) VALUES(?,?,NULL,'1v1',?,?,1000)`);
+    for (const [guild, configured, days] of specs) {
+      if (configured !== null) settings.run(guild, configured);
+      const boundary = captured - days * 86400000;
+      insert.run(guild, "old", Math.floor((boundary-1)/3600000), new Date(boundary-1).toISOString());
+      insert.run(guild, "kept", Math.floor(boundary/3600000), new Date(boundary).toISOString());
+    }
+    let prepares = 0;
+    const history = new HistoryStore({ prepare(sql) { prepares++; return raw.prepare(sql); } });
+    history.pruneEloObservations(captured);
+    assert.equal(prepares, 2);
+    const rows = raw.prepare("SELECT guild_id,public_id FROM history_observed_elo ORDER BY guild_id").all();
+    assert.deepEqual(rows.map(row => [row.guild_id, row.public_id]), specs.map(([guild]) => [guild,"kept"]).sort((a,b)=>a[0].localeCompare(b[0])));
+  } finally { raw.close(); }
+});
+
 for (const kind of ["clan", "player"]) for (const outerTransaction of [false,true]) test(`${kind} page failure rolls back corrections and additions ${outerTransaction ? "inside its caller transaction" : "without a caller transaction"}`, () => {
   const raw = new DatabaseSync(":memory:");
   try {

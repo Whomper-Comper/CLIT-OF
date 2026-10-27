@@ -191,11 +191,13 @@ export class HistoryStore {
   }
   pruneEloObservations(now = Date.now()): void {
     if (!Number.isFinite(now) || !Number.isFinite(new Date(now).getTime())) return;
-    const guilds = this.db.prepare("SELECT DISTINCT guild_id FROM history_observed_elo").all();
+    const guilds = this.db.prepare(`SELECT g.guild_id,s.retention_days
+      FROM (SELECT DISTINCT guild_id FROM history_observed_elo) g
+      LEFT JOIN history_settings s ON s.guild_id=g.guild_id`).all();
     const remove = this.db.prepare("DELETE FROM history_observed_elo WHERE guild_id=? AND observed_at<?");
     for (const row of guilds) {
-      const guild = String(row.guild_id), settings = this.getSettings(guild);
-      const days = Number.isFinite(settings.retention_days) ? Math.max(1,Math.min(365,settings.retention_days)) : 90;
+      const guild = String(row.guild_id), retention = row.retention_days as number;
+      const days = Number.isFinite(retention) ? Math.max(1,Math.min(365,retention)) : 90;
       remove.run(guild,iso(now-days*DAY));
     }
   }
