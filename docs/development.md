@@ -81,7 +81,7 @@ After verification, inspect the actual changed files and report which commands r
 
 ## Test inventory
 
-There are **49 test files** under `test/` in the documented source tree: the 20 existing suites below, 22 community suites, and seven lobby suites in the [community inventory](#community-regression-inventory-and-performance-evidence). This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
+There are **52 test files** under `test/` in the documented source tree: the 22 existing suites below, 22 community suites, and eight lobby suites in the [community inventory](#community-regression-inventory-and-performance-evidence). This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
 
 | File | Behaviors protected |
 | --- | --- |
@@ -90,6 +90,8 @@ There are **49 test files** under `test/` in the documented source tree: the 20 
 | `test/backups.test.mjs` | Consistent WAL-inclusive snapshots; pre-migration contents; per-database rotation; invalid/new/in-memory database handling; process-owned deployment readiness |
 | `test/bot.test.mjs` | Command definitions and config validation; clan authorization/setup/removal/pagination; identity ownership and audit scoping; legacy migrations; role union/removal/stale-write checks; pacing, API failures and reply behavior |
 | `test/clan-sync-cross-config.test.mjs` | Cross-clan configuration changes and same-account re-verification invalidate stale role updates |
+| `test/clan-sync-log-race.test.mjs` | Role-change logs do not publish stale destinations or identities after a write |
+| `test/clan-sync-mismatch-race.test.mjs` | Pending-invite summaries recheck identities, membership and approval roles before publication |
 | `test/clan-sync-schedule-race.test.mjs` | An empty sync cannot mark an edited clan mapping as already synchronized |
 | `test/debug.test.mjs` | Explicit debug-role access; scoped exports; no credential leakage; revoked access and unavailable membership; oversized/empty exports; private diagnostic status/toggles and controlled error wording |
 | `test/dice.test.mjs` | Dice definition bounds/defaults; inclusive random boundaries; public animation/final result; invalid inputs and animation throttling |
@@ -186,7 +188,7 @@ Bingo's measured production source pages are 200/200/51/1 for 451 games plus ava
 
 ## Lobby alert verification
 
-The seven lobby suites add behavioral coverage for source fixtures/full/count frames, filter combinations, reconnection, durable rules/deduplication, exact 180-second boundaries, DM success, blocked-DM fallback/guidance, fresh channel visibility, ambiguous/interrupted sends, retry of unsent candidates, lookup races, stop/drain and private command/button bindings. Matching tests bound database selection calls; retention tests check indexed and fair bounded cleanup. The actual central router suite exercises continuation from a DM. Build before focused tests:
+The eight lobby suites add behavioral coverage for source fixtures/full/count frames, filter combinations, reconnection, durable rules/deduplication, exact 180-second boundaries, DM success, blocked-DM fallback/guidance, fresh channel visibility, ambiguous/interrupted sends, retry of unsent candidates, lookup races, stop/drain and private command/button bindings. Matching and candidate rotation tests bound database operations; retention tests check indexed and fair bounded cleanup. The actual central router suite exercises continuation from a DM. Build before focused tests:
 
 ```sh
 npm run build

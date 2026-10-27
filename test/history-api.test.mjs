@@ -14,6 +14,20 @@ const clanSession = (overrides = {}) => ({ gameId: "game", clanTag: "MARS", clan
   playerTeams: "2", totalPlayerCount: 20, gameStart: start, score: -0.2, ...overrides });
 const rankedRow = (public_id, elo = 1000, rank = 1) => ({ public_id, elo, rank });
 
+test("timeouts while reading the response body remain timeouts and do not poison retries", async (t) => {
+  let attempts = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    if (++attempts === 1) return { ok: true, status: 200, json: async () => {
+      throw Object.assign(new Error("body timed out"), { name: "AbortError" });
+    } };
+    return response({ username: "Player", clans: [] });
+  });
+  const api = new OpenFrontApi("https://example.invalid");
+  await assert.rejects(api.getPlayerProfile("player"), error => error instanceof OpenFrontApiError && error.reason === "timeout");
+  assert.equal((await api.getPlayerProfile("player")).username, "Player");
+  assert.equal(attempts, 2);
+});
+
 test("ratings use exact public IDs and independent ladders while preserving cached observation times", async (t) => {
   let now = Date.parse(start), calls = 0;
   t.mock.method(globalThis, "fetch", async (url) => {

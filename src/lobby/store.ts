@@ -17,6 +17,14 @@ export interface Search {
   pending: string | null;
   deadline: number | null;
 }
+const decodeSearch = (r: Record<string, unknown>): Search => ({
+  guild: String(r.guild),
+  user: String(r.user),
+  generation: String(r.generation),
+  state: String(r.state),
+  pending: r.pending as string | null,
+  deadline: r.deadline === null ? null : Number(r.deadline),
+});
 export interface Notification {
   id: string;
   guild: string;
@@ -160,16 +168,7 @@ export class LobbyStore {
     const r = this.sql
       .prepare("SELECT * FROM lobby_searches WHERE guild=? AND user=?")
       .get(guild, user);
-    return r
-      ? {
-          guild,
-          user,
-          generation: String(r.generation),
-          state: String(r.state),
-          pending: r.pending as string | null,
-          deadline: r.deadline === null ? null : Number(r.deadline),
-        }
-      : null;
+    return r ? decodeSearch(r) : null;
   }
   stop(guild: string, user: string, now: number): void {
     this.transaction(() => {
@@ -228,16 +227,17 @@ export class LobbyStore {
   candidates(limit: number, now: number): Search[] {
     const rows = this.sql
       .prepare(
-        `SELECT guild,user FROM lobby_searches WHERE state='searching' ORDER BY last_work,guild,user LIMIT ?`,
+        `SELECT * FROM lobby_searches WHERE state='searching' ORDER BY last_work,guild,user LIMIT ?`,
       )
       .all(limit);
-    for (const r of rows)
+    if (rows.length)
       this.sql
         .prepare(
-          "UPDATE lobby_searches SET last_work=? WHERE guild=? AND user=?",
+          `UPDATE lobby_searches SET last_work=? WHERE (guild,user) IN
+           (SELECT json_extract(value,'$[0]'),json_extract(value,'$[1]') FROM json_each(?))`,
         )
-        .run(now, r.guild!, r.user!);
-    return rows.map((r) => this.search(String(r.guild), String(r.user))!);
+        .run(now, JSON.stringify(rows.map((r) => [r.guild, r.user])));
+    return rows.map(decodeSearch);
   }
   handledLobbies(guild: string, user: string, lobbies: Lobby[]): Set<string> {
     if (!lobbies.length) return new Set();

@@ -8,6 +8,7 @@ import { configSnapshot } from "./setupConfig.js";
 export interface SyncResult {
   discordId: string;
   openfrontId: string;
+  linkedAt: string;
   clanTag: string;
   inClan: boolean;
   clanRole?: string;
@@ -20,6 +21,7 @@ export interface JoinRoleMismatch {
   discordId: string;
   openfrontId: string;
   openfrontUsername: string | null;
+  linkedAt: string | null;
   clanTag: string;
 }
 
@@ -155,7 +157,7 @@ export class ClanSyncService {
                 const config = configs.find((config) => managedRoles([config]).includes(roleId));
                 if (config) {
                   const membership = clans.find((clan) => clan.tag.toUpperCase() === config.clan_tag);
-                  await this.logRoleChange(guild, config, member, { discordId: member.id, openfrontId: currentLink.openfront_id,
+                  await this.logRoleChange(guild, config, member, { discordId: member.id, openfrontId: currentLink.openfront_id, linkedAt: currentLink.linked_at,
                     clanTag: config.clan_tag, inClan: !!membership, clanRole: membership?.role,
                     rolesAdded: add ? [roleId] : [], rolesRemoved: add ? [] : [roleId] });
                 }
@@ -239,6 +241,7 @@ export class ClanSyncService {
             discordId: memberId,
             openfrontId: "(not linked)",
             openfrontUsername: null,
+            linkedAt: null,
             clanTag: config.clan_tag,
           });
         }
@@ -258,6 +261,7 @@ export class ClanSyncService {
           discordId: memberId,
           openfrontId: link.openfront_id,
           openfrontUsername: link.openfront_username,
+          linkedAt: link.linked_at,
           clanTag: config.clan_tag,
         });
       }
@@ -269,8 +273,22 @@ export class ClanSyncService {
         configSnapshot(latest) === configSnapshot(config);
     };
     // The member fetch and role syncs can outlive an edit to the mapping.
-    if (mismatches.length > 0 && isCurrentConfig()) {
-      await this.logJoinRoleMismatches(guild, config, mismatches);
+    if (mismatches.length > 0 && config.log_channel_id && isCurrentConfig()) {
+      // Earlier entries can become stale while other members' profiles are fetched.
+      // Refresh the roster once, then validate every identity and role without another await.
+      const latestMembers = await guild.members.fetch();
+      if (isCurrentConfig()) {
+        const currentMismatches: JoinRoleMismatch[] = [];
+        for (const mismatch of mismatches) {
+          const member = latestMembers.get(mismatch.discordId);
+          const link = db.getEffectiveLink(guild.id, mismatch.discordId);
+          if (!member || member.user.bot || !config.join_role_id || !member.roles.cache.has(config.join_role_id)) continue;
+          if (mismatch.linkedAt === null ? !!link :
+              !link || link.openfront_id !== mismatch.openfrontId || link.linked_at !== mismatch.linkedAt) continue;
+          currentMismatches.push({ ...mismatch, openfrontUsername: link?.openfront_username ?? null });
+        }
+        if (currentMismatches.length) await this.logJoinRoleMismatches(guild, config, currentMismatches);
+      }
     }
 
     // Fetching members and processing their roles can outlive a configuration edit.
@@ -323,6 +341,7 @@ export class ClanSyncService {
     const result: SyncResult = {
       discordId: member.id,
       openfrontId: link.openfront_id,
+      linkedAt: link.linked_at,
       clanTag: config.clan_tag,
       inClan: false,
       rolesAdded: [],
@@ -472,6 +491,8 @@ export class ClanSyncService {
         if (!link) {
           // Alert in log channel that they need to link
           if (config.log_channel_id) {
+            const currentMember = await newMember.guild.members.fetch({ user: newMember.id, force: true }).catch(() => null);
+            if (!currentMember || !this.currentApprovalNotice(currentMember, config, null)) continue;
             const channel = newMember.guild.channels.cache.get(config.log_channel_id) as TextChannel | undefined;
             if (channel?.isTextBased()) {
               const embed = new EmbedBuilder()
@@ -497,6 +518,8 @@ export class ClanSyncService {
           } else if (!result.error) {
             // Needs in-game invite!
             if (config.log_channel_id) {
+              const currentMember = await newMember.guild.members.fetch({ user: newMember.id, force: true }).catch(() => null);
+              if (!currentMember || !this.currentApprovalNotice(currentMember, config, link)) continue;
               const channel = newMember.guild.channels.cache.get(config.log_channel_id) as TextChannel | undefined;
               if (channel?.isTextBased()) {
                 const name = link.openfront_username || link.openfront_id;
@@ -518,6 +541,15 @@ export class ClanSyncService {
     }
   }
 
+  private currentApprovalNotice(member: GuildMember, config: GuildClanConfig, link: LinkedUser | null): boolean {
+    if (!config.join_role_id || member.guild.id !== config.guild_id) return false;
+    const latestConfig = db.getGuildClanConfig(member.guild.id, config.clan_tag);
+    const latestLink = db.getEffectiveLink(member.guild.id, member.id);
+    return member.roles.cache.has(config.join_role_id) && !!latestConfig &&
+      configSnapshot(latestConfig) === configSnapshot(config) &&
+      (link ? !!latestLink && latestLink.openfront_id === link.openfront_id && latestLink.linked_at === link.linked_at : !latestLink);
+  }
+
   public async logRoleChange(
     guild: Guild,
     config: GuildClanConfig,
@@ -525,6 +557,14 @@ export class ClanSyncService {
     result: SyncResult
   ) {
     if (!config.log_channel_id) return;
+
+    // A role write can finish after the mapping or member's identity changes.
+    // Do not publish stale identity details to the old destination.
+    const latestConfig = db.getGuildClanConfig(guild.id, config.clan_tag);
+    const latestLink = db.getEffectiveLink(guild.id, member.id);
+    if (guild.id !== config.guild_id || result.discordId !== member.id || !latestConfig ||
+        configSnapshot(latestConfig) !== configSnapshot(config) || !latestLink ||
+        latestLink.openfront_id !== result.openfrontId || latestLink.linked_at !== result.linkedAt) return;
 
     try {
       const channel = guild.channels.cache.get(config.log_channel_id) as TextChannel | undefined;

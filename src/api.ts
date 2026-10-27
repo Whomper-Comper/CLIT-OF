@@ -29,6 +29,7 @@ export class OpenFrontApiError extends Error {
 }
 const object = (data: unknown): data is Record<string, unknown> => typeof data === "object" && data !== null && !Array.isArray(data);
 const nonnegativeInteger = (data: unknown): data is number => typeof data === "number" && Number.isSafeInteger(data) && data >= 0;
+const isTimeout = (error: unknown): boolean => error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name);
 const timestamp = (data: unknown): data is string => typeof data === "string" &&
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(data) && Number.isFinite(Date.parse(data));
 const nullableString = (data: unknown): data is string | null => data === null || typeof data === "string";
@@ -136,14 +137,13 @@ export class OpenFrontApi {
       return await fetch(`${this.base}${endpoint}`, { ...options,
         headers: { Accept: "application/json", ...options.headers }, signal: AbortSignal.timeout(15_000) });
     } catch (error) {
-      const timeout = error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name);
-      throw new OpenFrontApiError(timeout ? "timeout" : "network");
+      throw new OpenFrontApiError(isTimeout(error) ? "timeout" : "network");
     }
   }
   private async json(response: Response): Promise<unknown> {
     if (!response.ok) throw new OpenFrontApiError("http", response.status);
     try { return await response.json(); }
-    catch { throw new OpenFrontApiError(); }
+    catch (error) { throw new OpenFrontApiError(isTimeout(error) ? "timeout" : "invalid_response"); }
   }
 
   async getPlayerProfile(publicId: string, options: PublicReadOptions = {}): Promise<OpenFrontPlayerProfile | null> {
