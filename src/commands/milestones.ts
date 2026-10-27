@@ -87,7 +87,7 @@ export function createMilestonesCommand(dependencies: Dependencies = {}) {
     const readKeys = [`member:${i.user.id}`, `account:${binding.publicId}`];
     if (refresh && milestoneHealth(db, now()) && readsInFlight.size <= 398 &&
       readKeys.every(key => !readsInFlight.has(key)) &&
-      readKeys.every(key => readLimits.take(key, 10_000, now()))) {
+      readLimits.takeAll(readKeys, 10_000, now())) {
       for (const key of readKeys) readsInFlight.add(key);
       try {
         const before = await i.guild!.members.fetch({ user: i.user.id, force: true });

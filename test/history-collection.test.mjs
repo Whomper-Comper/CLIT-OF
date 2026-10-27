@@ -119,6 +119,67 @@ test("an API failure retains its exact window while other jobs still progress",a
     assert.ok(successful.window_start>failed.window_start);
   } finally {await f.close();}
 });
+test("a failed stale player request cannot back off a replacement identity job",async()=> {
+  const f=fixture({budget:3});
+  try {
+    f.link();
+    let requested=0;
+    f.api.getPlayerSessions=async()=> {
+      requested++;
+      f.db.unlinkGuildUser("guild","manager","discord");
+      f.link();
+      const link=f.db.getEffectiveLink("guild","discord");
+      f.db.history.ensureJob("guild","player","public",f.now(),"discord",link.linked_at);
+      throw new Error("old request failed");
+    };
+    await f.collector.collectOnce();
+    const replacement=f.db.history.getJob("guild","player","public");
+    assert.equal(requested,1);
+    assert.equal(replacement.identity_version,f.db.getEffectiveLink("guild","discord").linked_at);
+    assert.equal(replacement.attempts,0);
+    assert.equal(replacement.next_attempt,0);
+    assert.equal(replacement.last_error,null);
+  } finally {await f.close();}
+});
+test("an old unknown-member lookup cannot purge a replacement identity's history",async()=> {
+  const f=fixture({budget:3});
+  try {
+    f.link();
+    f.api.getPlayerSessions=async(_id,q)=>({results:[playerRow(q.start)],nextCursor:null});
+    const originalFetch=f.guild.members.fetch;
+    f.guild.members.fetch=async request=> {
+      if (!request?.user) return originalFetch(request);
+      f.db.unlinkGuildUser("guild","manager","discord");
+      f.link("discord","replacement");
+      const link=f.db.getEffectiveLink("guild","discord");
+      f.db.history.ensureJob("guild","player","replacement",f.now(),"discord",link.linked_at);
+      f.db.history.upsertPlayerMatches("guild","replacement","discord",[playerRow("2026-10-15T00:00:00.000Z","replacement-game")]);
+      throw Object.assign(new Error("Unknown member"),{code:10007});
+    };
+    await f.collector.collectOnce();
+    const replacement=f.db.history.getJob("guild","player","replacement");
+    assert.ok(replacement,"replacement job should survive the old lookup");
+    assert.equal(replacement.identity_version,f.db.getEffectiveLink("guild","discord").linked_at);
+    assert.deepEqual(f.db.history.getPlayerMatches("guild","2000","2099").map(row=>row.gameId),["replacement-game"]);
+  } finally {await f.close();}
+});
+test("a current unknown-member lookup purges the departed member's history",async()=> {
+  const f=fixture({budget:3});
+  try {
+    f.link();
+    f.db.history.upsertPlayerMatches("guild","public","discord",[playerRow("2026-10-15T00:00:00.000Z")]);
+    f.api.getPlayerSessions=async(_id,q)=>({results:[playerRow(q.start)],nextCursor:null});
+    const originalFetch=f.guild.members.fetch;
+    f.guild.members.fetch=async request=> {
+      if (!request?.user) return originalFetch(request);
+      f.members.delete("discord");
+      throw Object.assign(new Error("Unknown member"),{code:10007});
+    };
+    await f.collector.collectOnce();
+    assert.equal(f.db.history.getJob("guild","player","public"),null);
+    assert.deepEqual(f.db.history.getPlayerMatches("guild","2000","2099"),[]);
+  } finally {await f.close();}
+});
 test("unlink during a player request prevents storage and immediately purges historical identity rows",async()=> {
   const f=fixture({budget:4});
   try {

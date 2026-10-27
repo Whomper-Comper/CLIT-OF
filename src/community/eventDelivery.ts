@@ -4,7 +4,22 @@ import type { CommunityTick, DeliveryJob, PreparedDelivery } from "./types.js";
 import { CommunityBudgetExhaustedError } from "./types.js";
 import type { CommunityService } from "./service.js";
 import { renderEvent, safe } from "../commands/eventViews.js";
+
+function prepareEventCard(job: DeliveryJob, db: BotDatabase, now: number): PreparedDelivery | null {
+  const store = db.community.events;
+  const event = store.get(job.guildId, job.subjectId);
+  if (!event || event.guildId !== job.guildId || event.channelId !== job.channelId || event.revision !== job.revision) return null;
+  if (job.kind === 'event_publish') {
+    if (event.status !== 'draft' || event.messageId || event.startAt <= now) return null;
+    return { payload: renderEvent({ ...event, status: 'scheduled' }, store.participants(job.guildId, event.id), 1, now) };
+  }
+  if (job.kind !== 'event_update' || !event.messageId) return null;
+  return { messageId: event.messageId, payload: renderEvent(event, store.participants(job.guildId, event.id), 1, now) };
+}
+
 export async function prepareEventDelivery(job: DeliveryJob, guild: Guild, db: BotDatabase, now: number, tick?: CommunityTick): Promise<PreparedDelivery | null> {
+  if (guild.id !== job.guildId) return null;
+  if (job.kind !== 'event_reminder') return prepareEventCard(job, db, now);
   const store = db.community.events;
   const current = () => {
     const event = store.get(job.guildId, job.subjectId);
@@ -51,16 +66,7 @@ export async function prepareEventDelivery(job: DeliveryJob, guild: Guild, db: B
       }
     };
   }
-  if (job.kind === 'event_publish') {
-    if (event.status !== 'draft' || event.messageId || event.startAt <= now) {
-      return null;
-    }
-    return { payload: renderEvent({ ...event, status: 'scheduled' }, store.participants(job.guildId, event.id), 1, now) };
-  }
-  if (job.kind !== 'event_update' || !event.messageId) {
-    return null;
-  }
-  return { messageId: event.messageId, payload: renderEvent(event, store.participants(job.guildId, event.id), 1, now) };
+  return null;
 }
 export function registerEventWork(service: CommunityService, client: Client, db: BotDatabase): void {
   for (const kind of ['event_publish', 'event_update', 'event_reminder']) {
@@ -75,7 +81,8 @@ export function registerEventWork(service: CommunityService, client: Client, db:
         return prepareEventDelivery(job, guild, db, now, tick);
       },
 
-      beforeDeliver: kind === 'event_reminder' ? (job, now, prepared) => {
+      beforeDeliver: (job, now, prepared) => {
+        if (job.kind !== 'event_reminder') return prepareEventCard(job, db, now);
         const event = db.community.events.get(job.guildId, job.subjectId);
         if (!event || event.channelId !== job.channelId || event.revision !== job.revision ||
             event.status !== 'scheduled' || !event.messageId || !event.reminderMinutes || event.startAt <= now) return null;
@@ -88,7 +95,7 @@ export function registerEventWork(service: CommunityService, client: Client, db:
           content: `**${safe(event.title)}** starts <t:${Math.floor(event.startAt / 1000)}:R>.\n${users.map(id => `<@${id}>`).join(' ')}`,
           allowedMentions: { parse: [], users, roles: [], repliedUser: false },
         } };
-      } : undefined,
+      },
 
       delivered(job, messageId) {
         if (job.kind === 'event_publish') {

@@ -205,6 +205,30 @@ test("membership removal during DM creation prevents delivery", async () => {
   assert.equal(f.s.search("g", "u").state, "stopped");
   f.sql.close();
 });
+for (const staleResult of ["unknown member", "bot member"]) {
+  test(`a stale ${staleResult} lookup cannot stop a resumed search`, async () => {
+    const f = fixture();
+    let entered, release;
+    const waiting = new Promise((resolve) => { entered = resolve; });
+    const resumed = new Promise((resolve) => { release = resolve; });
+    f.setMemberHook(async () => {
+      entered();
+      await resumed;
+      if (staleResult === "unknown member") throw Object.assign(new Error("gone"), { code: 10007 });
+      return { ...f.member, user: { bot: true } };
+    });
+    const tick = f.worker.tick();
+    await waiting;
+    f.s.resume("g", "u", f.now());
+    const generation = f.s.search("g", "u").generation;
+    release();
+    await tick;
+    assert.equal(f.s.search("g", "u").generation, generation);
+    assert.equal(f.s.search("g", "u").state, "searching");
+    assert.equal(f.calls.dm.length, 0);
+    f.sql.close();
+  });
+}
 test("stop drains an in-flight DM without allowing another candidate to send", async () => {
   const f = fixture();
   let release, entered;

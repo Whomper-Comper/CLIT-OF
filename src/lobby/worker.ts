@@ -151,7 +151,7 @@ export class LobbyWorker {
         request();
         const member = await guild.members.fetch({ user: n.user, force: true });
         if (member.user.bot) {
-          this.store.stop(n.guild, n.user, this.now());
+          if (this.store.valid(n)) this.store.stop(n.guild, n.user, this.now());
           continue;
         }
         if (!this.current(n)) {
@@ -255,7 +255,7 @@ export class LobbyWorker {
       } catch (e) {
         if (e instanceof BudgetExhausted) continue;
         if (errorCode(e) === 10007) {
-          this.store.stop(n.guild, n.user, this.now());
+          if (this.store.valid(n)) this.store.stop(n.guild, n.user, this.now());
           this.store.obsolete(n.id, this.now());
           continue;
         }

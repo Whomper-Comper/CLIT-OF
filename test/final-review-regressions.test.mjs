@@ -153,6 +153,17 @@ test('bounded command limits refuse new keys at capacity without evicting active
   assert.equal(limits.take('c', 10000, 11000), true);
 });
 
+test('multi-key command limits reserve all keys together or leave them unchanged', () => {
+  const limits = new CommandLimits(3);
+  assert.equal(limits.take('account:busy', 10000, 1000), true);
+  assert.equal(limits.takeAll(['member:other', 'account:busy'], 10000, 1001), false);
+  assert.equal(limits.take('member:other', 10000, 1001), true);
+  assert.equal(limits.takeAll(['member:new', 'account:new'], 10000, 1001), false);
+  assert.equal(limits.take('member:new', 10000, 1001), true);
+  assert.equal(limits.takeAll(['member:fresh', 'account:fresh'], 10000, 11001), true);
+  assert.equal(limits.take('member:fresh', 10000, 11001), false);
+});
+
 test('milestone opens and different valid menus share foreground cooldown and in-flight work', async () => {
   const f = milestoneFixture();
   try {
@@ -214,6 +225,24 @@ test('milestone foreground gate follows both members and accounts across guild m
     await command.execute(open());
     assert.equal(f.calls.requests.length, 1);
     assert.deepEqual(snapshot(f), replaced);
+  } finally { await f.close(); }
+});
+
+test('a blocked shared-account refresh does not consume another member cooldown', async () => {
+  const f = milestoneFixture();
+  try {
+    const command = createMilestonesCommand({ db: f.db, api: f.api, now: f.now, sessions: new CommunitySessions() });
+    const open = extra => interaction(f, { options: { getSubcommand: () => 'view' }, ...extra });
+    await command.execute(open());
+    f.addMember('v');
+    f.db.linkGuildUser('h', 'admin', 'v', 'player', null);
+    const other = { guildId: 'h', guild: { ...f.guild, id: 'h' }, user: { id: 'v' } };
+    await command.execute(open(other));
+    assert.equal(f.calls.requests.length, 1);
+    f.db.linkGuildUser('h', 'admin', 'v', 'replacement', null);
+    await command.execute(open(other));
+    assert.equal(f.calls.requests.length, 2);
+    assert.equal(f.calls.requests[1][0], 'replacement');
   } finally { await f.close(); }
 });
 

@@ -54,10 +54,14 @@ export class CommandLimits {
   private until = new Map<string, number>();
   constructor(private readonly maximumEntries = Infinity) {}
   take(key: string, milliseconds: number, now = Date.now()): boolean {
+    return this.takeAll([key], milliseconds, now);
+  }
+  takeAll(keys: readonly string[], milliseconds: number, now = Date.now()): boolean {
     for (const [id, expiry] of this.until) if (expiry <= now) this.until.delete(id);
-    if ((this.until.get(key) ?? 0) > now) return false;
-    if (this.until.size >= this.maximumEntries) return false;
-    this.until.set(key, now + milliseconds);
+    const unique = [...new Set(keys)];
+    if (unique.some(key => (this.until.get(key) ?? 0) > now)) return false;
+    if (this.until.size + unique.filter(key => !this.until.has(key)).length > this.maximumEntries) return false;
+    for (const key of unique) this.until.set(key, now + milliseconds);
     return true;
   }
 }

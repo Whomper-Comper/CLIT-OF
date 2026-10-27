@@ -31,6 +31,48 @@ function optIn(f, e, id, present = true) {
   f.db.community.events.setReminder('g', e.id, id, true, f.now());
 }
 
+test('an event draft is not published after its start time passes during final preparation', async () => {
+  const f = communityFixture();
+  try {
+    const store = f.db.community.events;
+    const event = store.createDraft(draft(f, { startAt: f.now() + 60000 }), f.now());
+    store.requestPublish('g', event.id, event.revision, f.now());
+    const service = worker(f);
+    const handler = service.handlers.get('event_publish');
+    const prepare = handler.prepare;
+    let calls = 0;
+    handler.prepare = async (...args) => {
+      const prepared = await prepare(...args);
+      if (++calls === 2) queueMicrotask(() => f.advance(60000));
+      return prepared;
+    };
+    await service.runOnce();
+    assert.equal(f.calls.sends.length, 0);
+    assert.equal(store.get('g', event.id).messageId, null);
+    assert.equal(f.db.community.deliveries.list('g').find(job => job.kind === 'event_publish').status, 'cancelled');
+  } finally { await f.close(); }
+});
+
+test('event card updates disable controls if the start passes during final preparation', async () => {
+  const f = communityFixture();
+  try {
+    const event = await published(f, { startAt: f.now() + 60000 });
+    f.db.community.events.queueUpdate('g', event.id, f.now());
+    const service = worker(f);
+    const handler = service.handlers.get('event_update');
+    const prepare = handler.prepare;
+    let calls = 0;
+    handler.prepare = async (...args) => {
+      const prepared = await prepare(...args);
+      if (++calls === 3) queueMicrotask(() => f.advance(60000));
+      return prepared;
+    };
+    await service.runOnce();
+    assert.equal(f.calls.edits.length, 1);
+    assert.ok(f.calls.edits[0].components[0].components.every(button => button.data.disabled));
+  } finally { await f.close(); }
+});
+
 test('default events never enqueue reminders; opted-in 30 minute reminders use the exact due instant', async () => {
   const f = communityFixture();
   try {

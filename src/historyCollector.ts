@@ -110,7 +110,7 @@ export class HistoryCollector {
       this.db.history.touchJob(job);
       const snapshot = snapshots.get(job.guild_id)!;
       try { await this.collectPage(job,snapshot); }
-      catch (error) { if (!this.stopping) this.db.history.retryJob(job,errorText(error),this.now()); }
+      catch (error) { if (this.current(job,snapshot)) this.db.history.retryJob(job,errorText(error),this.now()); }
     }
     if (this.stopping || !deletion.healthy || !this.options.buildWeeklyReport) return;
     // Discord sends are bounded too, and rotate across servers independently of collection pagination.
@@ -180,7 +180,7 @@ export class HistoryCollector {
       return !member.user.bot;
     } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === 10007) {
-        if (!this.stopping) this.db.history.purgeMember(job.guild_id,job.discord_id!);
+        if (this.current(job,snapshot)) this.db.history.purgeMember(job.guild_id,job.discord_id!);
         return false;
       }
       throw error;
