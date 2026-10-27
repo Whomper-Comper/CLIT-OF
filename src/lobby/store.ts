@@ -33,6 +33,7 @@ export interface Notification {
   error: string | null;
 }
 export class LobbyStore {
+  private pruneCursor: { updated: number; id: string } | null = null;
   constructor(private readonly sql: DatabaseSync) {}
   static initialize(sql: DatabaseSync): void {
     sql.exec(`CREATE TABLE IF NOT EXISTS lobby_settings(guild TEXT PRIMARY KEY,enabled INTEGER NOT NULL,channel TEXT,revision INTEGER NOT NULL);
@@ -41,12 +42,14 @@ export class LobbyStore {
    CREATE TABLE IF NOT EXISTS lobby_searches(guild TEXT NOT NULL,user TEXT NOT NULL,generation TEXT NOT NULL,state TEXT NOT NULL,pending TEXT,deadline INTEGER,last_work INTEGER NOT NULL,PRIMARY KEY(guild,user));
    CREATE INDEX IF NOT EXISTS lobby_search_due ON lobby_searches(state,last_work,guild,user);
    CREATE INDEX IF NOT EXISTS lobby_search_expiry ON lobby_searches(state,deadline);
+   CREATE INDEX IF NOT EXISTS lobby_search_pending ON lobby_searches(pending) WHERE pending IS NOT NULL;
    CREATE TABLE IF NOT EXISTS lobby_notifications(id TEXT PRIMARY KEY,guild TEXT NOT NULL,user TEXT NOT NULL,generation TEXT NOT NULL,revision INTEGER NOT NULL,
     source TEXT NOT NULL,lobby_id TEXT NOT NULL,lobby TEXT NOT NULL,status TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next INTEGER NOT NULL,
     message TEXT,channel TEXT,deadline INTEGER,error TEXT,updated INTEGER NOT NULL,UNIQUE(guild,user,source,lobby_id));
    CREATE INDEX IF NOT EXISTS lobby_notification_due ON lobby_notifications(status,next,updated);
    CREATE INDEX IF NOT EXISTS lobby_notification_owner ON lobby_notifications(guild,user);
-   CREATE INDEX IF NOT EXISTS lobby_notification_retention ON lobby_notifications(updated);`);
+   CREATE INDEX IF NOT EXISTS lobby_notification_retention ON lobby_notifications(updated);
+   CREATE INDEX IF NOT EXISTS lobby_notification_terminal_retention ON lobby_notifications(updated,id) WHERE status IN ('sent','cancelled','review');`);
   }
   private transaction<T>(fn: () => T): T {
     return withCommunityTransaction(this.sql, fn);
@@ -493,20 +496,31 @@ export class LobbyStore {
       .map((r) => this.notification(String(r.id))!);
   }
   prune(now: number, live: Lobby[]): void {
-    const rows = this.sql
-      .prepare(
-        `SELECT id,source,lobby_id FROM lobby_notifications WHERE updated<? AND status IN ('sent','cancelled','review') ORDER BY updated LIMIT 200`,
-      )
-      .all(now - 30 * 86400000);
+    const select = this.sql.prepare(
+      `SELECT id,source,lobby_id,updated FROM lobby_notifications INDEXED BY lobby_notification_terminal_retention
+       WHERE updated<? AND status IN ('sent','cancelled','review') AND (updated,id)>(?,?)
+       ORDER BY updated,id LIMIT 200`,
+    );
+    const cutoff = now - 30 * 86400000;
+    const first = { updated: Number.MIN_SAFE_INTEGER, id: "" };
+    const cursor = this.pruneCursor ?? first;
+    let rows = select.all(cutoff, cursor.updated, cursor.id);
+    if (!rows.length && this.pruneCursor) {
+      this.pruneCursor = null;
+      rows = select.all(cutoff, first.updated, first.id);
+    }
+    if (rows.length) {
+      const last = rows[rows.length - 1];
+      this.pruneCursor = { updated: Number(last.updated), id: String(last.id) };
+    }
+    const liveKeys = new Set(live.map((l) => JSON.stringify([l.source, l.id])));
+    const pending = this.sql.prepare("SELECT 1 FROM lobby_searches WHERE pending=?");
+    const remove = this.sql.prepare("DELETE FROM lobby_notifications WHERE id=?");
     for (const r of rows)
       if (
-        !live.some((l) => l.source === r.source && l.id === r.lobby_id) &&
-        !this.sql
-          .prepare("SELECT 1 FROM lobby_searches WHERE pending=?")
-          .get(r.id!)
+        !liveKeys.has(JSON.stringify([r.source, r.lobby_id])) &&
+        !pending.get(r.id!)
       )
-        this.sql
-          .prepare("DELETE FROM lobby_notifications WHERE id=?")
-          .run(r.id!);
+        remove.run(r.id!);
   }
 }

@@ -81,7 +81,7 @@ After verification, inspect the actual changed files and report which commands r
 
 ## Test inventory
 
-There are **46 test files** under `test/` in the documented source tree: the 18 existing suites below, 22 community suites, and six lobby suites in the [community inventory](#community-regression-inventory-and-performance-evidence). This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
+There are **48 test files** under `test/` in the documented source tree: the 19 existing suites below, 22 community suites, and seven lobby suites in the [community inventory](#community-regression-inventory-and-performance-evidence). This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
 
 | File | Behaviors protected |
 | --- | --- |
@@ -89,6 +89,7 @@ There are **46 test files** under `test/` in the documented source tree: the 18 
 | `test/api-reporting.test.mjs` | Coalesced/cloned/expired/fresh caches and generation ordering; response validation; exact profile/building arithmetic; graph alignment; coverage and fresh doctor diagnostics; statistics modes |
 | `test/backups.test.mjs` | Consistent WAL-inclusive snapshots; pre-migration contents; per-database rotation; invalid/new/in-memory database handling; process-owned deployment readiness |
 | `test/bot.test.mjs` | Command definitions and config validation; clan authorization/setup/removal/pagination; identity ownership and audit scoping; legacy migrations; role union/removal/stale-write checks; pacing, API failures and reply behavior |
+| `test/clan-sync-cross-config.test.mjs` | Cross-clan configuration changes and same-account re-verification invalidate stale role updates |
 | `test/debug.test.mjs` | Explicit debug-role access; scoped exports; no credential leakage; revoked access and unavailable membership; oversized/empty exports; private diagnostic status/toggles and controlled error wording |
 | `test/dice.test.mjs` | Dice definition bounds/defaults; inclusive random boundaries; public animation/final result; invalid inputs and animation throttling |
 | `test/history-api.test.mjs` | Exact-ID ladder lookup and bounded absence; malformed/forbidden responses; cursor/filter cache isolation; known empty versus missing history; sessions/time bounds/clan schema; deletion feed and UTC normalization |
@@ -184,11 +185,11 @@ Bingo's measured production source pages are 200/200/51/1 for 451 games plus ava
 
 ## Lobby alert verification
 
-The six lobby suites add behavioral coverage for source fixtures/full/count frames, filter combinations, reconnection, durable rules/deduplication, exact 180-second boundaries, DM success, blocked-DM fallback/guidance, fresh channel visibility, ambiguous/interrupted sends, retry of unsent candidates, lookup races, stop/drain and private command/button bindings. Matching tests also bound database selection calls for nonmatching lobbies. The actual central router suite exercises continuation from a DM. Build before focused tests:
+The seven lobby suites add behavioral coverage for source fixtures/full/count frames, filter combinations, reconnection, durable rules/deduplication, exact 180-second boundaries, DM success, blocked-DM fallback/guidance, fresh channel visibility, ambiguous/interrupted sends, retry of unsent candidates, lookup races, stop/drain and private command/button bindings. Matching tests bound database selection calls; retention tests check indexed and fair bounded cleanup. The actual central router suite exercises continuation from a DM. Build before focused tests:
 
 ```sh
 npm run build
 node --test test/lobby-*.test.mjs test/interaction-router.test.mjs
 ```
 
-`tools/vendor-lobby-codec.mjs` regenerates the checked-in standalone decoder and binary fixtures from a pinned official upstream revision. Regeneration is a deliberate maintenance operation requiring network access; ordinary builds/tests work offline and need no neighboring game checkout. Verify build compatibility before changing the supported SHA. The registry now has 16 unique commands.
+`tools/vendor-lobby-codec.mjs` regenerates the checked-in standalone codec from a pinned upstream revision and encodes synthetic fixture messages with that same generated codec. The fixture tests check decoding those saved messages, but do not independently verify compatibility with an upstream encoder or live feed. Regeneration is a deliberate maintenance operation requiring network access; ordinary builds/tests work offline and need no neighboring game checkout. Verify build compatibility before changing the supported SHA. The registry now has 16 unique commands.

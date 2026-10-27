@@ -2,7 +2,7 @@
 
 Generated from [OpenFrontIO 817c12927c4ec34ec68c74c780a74a14fb776d09](https://github.com/openfrontio/OpenFrontIO/tree/817c12927c4ec34ec68c74c780a74a14fb776d09), licensed AGPL-3.0 (LICENSE alongside this file). Original authors: OpenFrontIO contributors.
 
-The generated codec contains upstream zbin and the exact ordered lobby/game configuration schemas. The generator extracts only the lobby schema and its dependencies; it does not change the wire layout. Zod is installed separately.
+The generated codec contains upstream zbin and selected lobby/game configuration schema definitions. The generator also supplies some definitions and constants itself, so compatibility with the upstream wire layout must be verified independently. Zod is installed separately. The saved binary fixtures are synthetic messages encoded by this generated codec, not independent upstream captures.
 
 Rebuild: `node tools/vendor-lobby-codec.mjs 817c12927c4ec34ec68c74c780a74a14fb776d09`. Builds require public GitHub access; runtime does not require a game checkout. Update the supported revision only alongside regenerated codec, binary fixtures and tests.
 

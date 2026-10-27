@@ -76,7 +76,7 @@ import { setImmediate as immediate } from "node:timers/promises";
 const vectors = JSON.parse(
   readFileSync(new URL("./fixtures/lobby-wire.json", import.meta.url)),
 );
-test("decodes a pinned official binary snapshot and count delta fixture", () => {
+test("decodes synthetic snapshot and count delta fixtures from the pinned codec", () => {
   const f = new LobbyFeed({ now: () => now });
   f.accept(
     decodeFrame(Buffer.from(vectors.full, "base64")),

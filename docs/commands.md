@@ -435,7 +435,7 @@ Paused/failed/uncertain deliveries appear in `/bingo create` for unpublished dra
 | `/lobby stop` | Stop your search while retaining filters. |
 | `/lobby resume` | Restart with saved filters. |
 
-All selected fields in a rule must match; different rules are alternatives. Map matching is exact after trimming/case normalization. Counts are **currently connected players**, not capacity, bots, or team size, and must be integers from 0 to 1000. Modes include Free For All, Team, and Humans Vs Nations. Categories are ffa, team, special, and hosted. Full, restricted, started, queued without a start window, stale, or insufficiently described lobbies are excluded.
+All selected fields in a rule must match; different rules are alternatives. Map matching is exact after trimming/case normalization. Counts are **currently connected players**, not capacity, bots, or team size, and must be integers from 0 to 1000. Modes include Free For All, Team, and Humans Vs Nations. Categories are ffa, team, special, and hosted. Full, restricted, started, stale, or lobbies without capacity or a start window are excluded. A missing map or mode fails a rule that requests that field; a rule that does not request it can still match.
 
 The bot tries a DM first. Discord's confirmed blocked-DM rejection triggers a ping in the configured server channel, including instructions to enable direct messages from server members. Saving/resuming opts into that fallback. Only the affected player is mentioned. Network failures with an uncertain send outcome stop the search for manager review rather than risking a duplicate public ping.
 

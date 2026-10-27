@@ -481,9 +481,9 @@ Departure deletes pending personal invitation data and slots while retaining onl
 
 ## Lobby feed operations
 
-Lobby alerts use OpenFront's public `https://api.openfront.io/cluster.json?site=openfront.io` discovery and a single compatible server's `/w0/lobbies?platform=web` WebSocket. The adjacent game checkout is not a runtime dependency. The feed has a 30-second freshness limit, reconnect backoff of 3–60 seconds, and rejects unsupported builds or draining deployments. Cloudflare/access failures appear as unavailable discovery in `/lobby list` and `/lobby configure`; they do not generate fabricated matches. This implementation's live HTTP verification encountered a Cloudflare challenge; binary interoperability is covered by pinned official-source fixtures, not a claimed successful production connection.
+Lobby alerts use OpenFront's public `https://api.openfront.io/cluster.json?site=openfront.io` discovery and a single compatible server's `/w0/lobbies?platform=web` WebSocket. The adjacent game checkout is not a runtime dependency. The feed has a 30-second freshness limit, reconnect backoff of 3–60 seconds, and rejects unsupported builds or draining deployments. Cloudflare/access failures appear as unavailable discovery in `/lobby list` and `/lobby configure`; they do not generate fabricated matches. Live HTTP verification encountered a Cloudflare challenge. The binary fixtures are synthetic messages encoded by the same source-derived codec that decodes them, so they exercise that codec but do not independently establish interoperability with an upstream encoder or a live server.
 
-The lobby wire protocol is positional binary and changes with the game build. The checked-in decoder supports the exact upstream revision in [vendor provenance](../src/lobby/vendor/NOTICE.md). After an upstream deployment, maintainers must verify and regenerate the codec/fixtures against its full commit SHA:
+The lobby wire protocol is positional binary and changes with the game build. The checked-in decoder is generated from the upstream revision in [vendor provenance](../src/lobby/vendor/NOTICE.md), with some definitions supplied by the generator. After an upstream deployment, maintainers must verify and regenerate the codec/fixtures against its full commit SHA:
 
 ```sh
 node tools/vendor-lobby-codec.mjs FULL_OPENFRONT_COMMIT_SHA

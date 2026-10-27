@@ -328,7 +328,7 @@ export class ClanSyncService {
       }
 
       const currentLink = db.getEffectiveLink(config.guild_id, member.id);
-      if (!currentLink || currentLink.openfront_id !== link.openfront_id) {
+      if (!currentLink || currentLink.openfront_id !== link.openfront_id || currentLink.linked_at !== link.linked_at) {
         result.error = "Link changed while sync was running; skipped stale role updates";
         return result;
       }
@@ -348,9 +348,12 @@ export class ClanSyncService {
       result.inClan = !!membership;
       result.clanRole = membership?.role;
       const wanted = desiredRoles([config], profile.clans);
-      const allWanted = desiredRoles(db.getGuildConfigs(config.guild_id), profile.clans);
+      const configs = db.getGuildConfigs(config.guild_id);
+      const configsSnapshot = JSON.stringify(configs.map(configSnapshot));
+      const allWanted = desiredRoles(configs, profile.clans);
+      const joinRoles = new Set(configs.map((current) => current.join_role_id).filter((role): role is string => !!role));
       const operations = [...wanted].map((role) => ({ role, add: true }));
-      operations.push(...managedRoles([config]).filter((role) => !allWanted.has(role)).map((role) => ({ role, add: false })));
+      operations.push(...managedRoles([config]).filter((role) => !allWanted.has(role) && !joinRoles.has(role)).map((role) => ({ role, add: false })));
       for (const operation of operations) {
         if (member.roles.cache.has(operation.role) === operation.add) continue;
         try {
@@ -358,7 +361,9 @@ export class ClanSyncService {
             const latest = db.getEffectiveLink(config.guild_id, member.id);
             const latestConfig = db.getGuildClanConfig(config.guild_id, config.clan_tag);
             if (!latest || latest.openfront_id !== link.openfront_id || latest.linked_at !== currentLink.linked_at ||
-                !latestConfig || configSnapshot(latestConfig) !== snapshot) throw new StaleSyncError("Link or configuration changed; skipped stale role update");
+                !latestConfig || configSnapshot(latestConfig) !== snapshot ||
+                JSON.stringify(db.getGuildConfigs(config.guild_id).map(configSnapshot)) !== configsSnapshot)
+              throw new StaleSyncError("Link or configuration changed; skipped stale role update");
             if (member.roles.cache.has(operation.role) === operation.add) return;
             if (operation.add) { await member.roles.add(operation.role); result.rolesAdded.push(operation.role); }
             else { await member.roles.remove(operation.role); result.rolesRemoved.push(operation.role); }
