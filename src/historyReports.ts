@@ -27,7 +27,11 @@ export async function loadRecentClanMatches(tag: string, days = 7, now = Date.no
       if (!data) throw new CommandError("That OpenFront clan was not found.");
       for (const row of data.results) {
         const timestamp = Date.parse(row.gameStart);
-        if (row.clanTag.toUpperCase() === tag.toUpperCase() && timestamp >= start && timestamp < end) rows.set(row.gameId, row);
+        if (row.clanTag.trim().toUpperCase() !== tag.trim().toUpperCase() || !Number.isFinite(timestamp) || timestamp < lower || timestamp > upper) {
+          complete = false;
+          continue;
+        }
+        if (timestamp < upper) rows.set(row.gameId, row);
       }
       if (page * data.limit >= data.total) break;
       if (!data.results.length) { complete = false; break outer; }
@@ -52,7 +56,7 @@ export function renderClanRecent(tag: string, sample: ClanHistorySample, page = 
   const stats = clanAnalysis(sample.rows), selected = pageOf(sample.rows, page, 5);
   const start = Math.floor(Date.parse(sample.start) / 1000), end = Math.floor(Date.parse(sample.end) / 1000);
   const embed = new EmbedBuilder().setColor(sample.complete ? 0x3b82f6 : 0xf59e0b).setTitle(`[${label(tag)}] Recent matches and analysis`)
-    .setDescription(`Recorded public Team appearances · <t:${start}:f> to <t:${end}:f>\n${sample.complete ? "Complete requested API window." : "Partial sample: request/time limits were reached; these totals cover only the records below."}`);
+    .setDescription(`Recorded public Team appearances · <t:${start}:f> to <t:${end}:f>\n${sample.complete ? "Complete requested API window." : "Partial sample: request/time limits or inconsistent API results prevented complete coverage; totals cover only matching records returned."}`);
   if (view !== "graphs") embed.addFields({ name: "Recorded results", value: `**${stats.games}** games · **${stats.wins}** wins · **${stats.losses}** losses · **${winRate(BigInt(stats.wins), BigInt(stats.games))}** win rate\nAverage tagged turnout: **${stats.averageTurnout.toFixed(1)}** · Peak: **${stats.peakTurnout}**\nRecorded API score sum: **${stats.score.toFixed(2)}**` });
   if (view !== "numbers") {
     embed.addFields({ name: "Results", value: alignedBarChart([{ name: "Wins", value: BigInt(stats.wins) }, { name: "Losses", value: BigInt(stats.losses) }]) },

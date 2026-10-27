@@ -263,12 +263,21 @@ export class ClanSyncService {
       }
     }
 
-    // Post join-role mismatch notification (if any)
-    if (mismatches.length > 0) {
+    const isCurrentConfig = () => {
+      const latest = db.getGuildClanConfig(guild.id, config.clan_tag);
+      return guild.id === config.guild_id && latest !== null &&
+        configSnapshot(latest) === configSnapshot(config);
+    };
+    // The member fetch and role syncs can outlive an edit to the mapping.
+    if (mismatches.length > 0 && isCurrentConfig()) {
       await this.logJoinRoleMismatches(guild, config, mismatches);
     }
 
-    if (!results.some((result) => result.error)) db.updateClanLastSync(guild.id, config.clan_tag);
+    // Fetching members and processing their roles can outlive a configuration edit.
+    // Do not postpone the replacement mapping's first sync with this stale pass.
+    if (!results.some((result) => result.error) && isCurrentConfig()) {
+      db.updateClanLastSync(guild.id, config.clan_tag);
+    }
     return results;
   }
 

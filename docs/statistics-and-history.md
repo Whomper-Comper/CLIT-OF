@@ -262,7 +262,7 @@ An explicitly looked-up public account can have observations even without a Disc
 
 These are action options on the single `/clan` command. Access requires the configured clan/config role. Clan history commands must also be enabled in server history settings.
 
-`days` accepts 1–14, defaulting to 7. The requested end is rounded down to the current minute. Requests walk backward through windows of at most one day, with up to 50 rows per API page. The default maximum is 24 API requests and a 60-second deadline checked before starting another request. The view marks a sample partial when it cannot finish the requested window.
+`days` accepts 1–14, defaulting to 7. The requested end is rounded down to the current minute. Requests walk backward through windows of at most one day, with up to 50 rows per API page. The default maximum is 24 API requests and a 60-second deadline checked before starting another request. The view marks a sample partial when it cannot finish the requested window, or when an API page contains a different clan or a timestamp outside the requested daily window. Those inconsistent rows are excluded; an exact upper-bound timestamp is excluded from that day's half-open window.
 
 The analysis deduplicates match IDs and reports recorded games, wins/losses, win rate, average and peak tagged turnout, and the sum of the API's score. Loss scores can be negative. Graphs show results and turnout bands of 1, 2–3, 4–7, or 8+ tagged players. Five individual matches appear per command page.
 

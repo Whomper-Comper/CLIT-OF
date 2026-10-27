@@ -23,6 +23,8 @@ export interface WeeklyDelivery {
 export const DAY = 86_400_000;
 const iso = (ms: number) => new Date(ms).toISOString();
 const dayFloor = (ms: number) => Math.floor(ms / DAY) * DAY;
+const SETTINGS_COLUMNS = `guild_id,revision,clan_history_enabled,player_history_enabled,collection_enabled,
+  weekly_enabled,channel_id,poll_minutes,retention_days,weekly_day,weekly_hour,timezone`;
 
 export class HistoryStore {
   constructor(private readonly db: DatabaseSync, private readonly cleanup?: {
@@ -84,14 +86,13 @@ export class HistoryStore {
     }
   }
   getSettings(guild: string): HistorySettings {
-    return this.db.prepare(`SELECT guild_id,revision,clan_history_enabled,player_history_enabled,collection_enabled,
-      weekly_enabled,channel_id,poll_minutes,retention_days,weekly_day,weekly_hour,timezone FROM history_settings WHERE guild_id=?`)
+    return this.db.prepare(`SELECT ${SETTINGS_COLUMNS} FROM history_settings WHERE guild_id=?`)
       .get(guild) as unknown as HistorySettings ?? { guild_id: guild, revision: 0, clan_history_enabled: 1,
         player_history_enabled: 1, collection_enabled: 0, weekly_enabled: 0, channel_id: null,
         poll_minutes: 15, retention_days: 90, weekly_day: 1, weekly_hour: 12, timezone: "UTC" };
   }
   listSettings(): HistorySettings[] {
-    return this.db.prepare("SELECT guild_id FROM history_settings").all().map(row => this.getSettings(String(row.guild_id)));
+    return this.db.prepare(`SELECT ${SETTINGS_COLUMNS} FROM history_settings`).all() as unknown as HistorySettings[];
   }
   saveSettings(guild: string, draft: HistorySettingsDraft, expectedRevision: number): HistorySettings {
     for (const value of [draft.clan_history_enabled,draft.player_history_enabled,draft.collection_enabled,draft.weekly_enabled])

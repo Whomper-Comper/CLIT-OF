@@ -13,7 +13,7 @@ test("recent clan loader uses at most one-day windows, deduplicates and labels r
   const queries = [];
   t.mock.method(openfrontApi,"getClanSessions", async (_tag,q) => {
     queries.push(q);
-    return { results:[row("same"),row("wrong-clan",{clanTag:"VENUS"}),row("at-end",{gameStart:"2026-10-16T12:00:00Z"}),row("before-start",{gameStart:"2026-10-14T11:59:59Z"})],total:4,page:q.page,limit:q.limit };
+    return { results:[row("same",{gameStart:q.start}),row("at-end",{gameStart:q.end})],total:2,page:q.page,limit:q.limit };
   });
   const sample = await loadRecentClanMatches("MARS",2,now,2);
   assert.deepEqual(sample.rows.map(row=>row.gameId),["same"]);
@@ -25,6 +25,30 @@ test("recent clan loader uses at most one-day windows, deduplicates and labels r
   const partial = await loadRecentClanMatches("MARS",2,now,1);
   assert.equal(partial.complete,false);
   assert.match(renderClanRecent("MARS",partial).toJSON().description,/Partial sample/);
+});
+test("recent clan loader marks mismatched clan or daily window responses as incomplete", async (t) => {
+  t.mock.method(openfrontApi,"getClanSessions", async (_tag,q) => q.start === "2026-10-15T12:00:00.000Z" ? {
+    results:[row("valid",{gameStart:q.start}),row("wrong-clan",{clanTag:"VENUS",gameStart:q.start}),
+      row("outside-day",{gameStart:"2026-10-14T13:00:00Z"})],total:3,page:q.page,limit:q.limit,
+  } : { results:[],total:0,page:q.page,limit:q.limit });
+  const sample = await loadRecentClanMatches("MARS",2,now,2);
+  assert.deepEqual(sample.rows.map(item=>item.gameId),["valid"]);
+  assert.equal(sample.complete,false);
+  assert.match(renderClanRecent("MARS",sample).toJSON().description,/inconsistent/i);
+});
+test("recent clan history includes the start and shared day boundary but excludes the overall end", async (t) => {
+  const start = "2026-10-14T12:00:00.000Z";
+  const boundary = "2026-10-15T12:00:00.000Z";
+  const end = "2026-10-16T12:00:00.000Z";
+  t.mock.method(openfrontApi,"getClanSessions", async (_tag,q) => ({
+    results: q.start === boundary
+      ? [row("boundary",{gameStart:boundary}),row("end",{gameStart:end})]
+      : [row("start",{gameStart:start}),row("boundary",{gameStart:boundary})],
+    total:2,page:q.page,limit:q.limit,
+  }));
+  const sample = await loadRecentClanMatches("MARS",2,now,2);
+  assert.equal(sample.complete,true);
+  assert.deepEqual(sample.rows.map(item=>item.gameId),["boundary","start"]);
 });
 test("clan analysis and display keep numeric and graph views consistent", () => {
   const rows = [row("one"),row("two",{hasWon:false,clanPlayerCount:8,score:-0.4})];

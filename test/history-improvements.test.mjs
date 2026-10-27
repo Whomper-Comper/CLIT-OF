@@ -12,6 +12,23 @@ const at = "2026-10-16T12:00:00.000Z", now = Date.parse(at);
 const clan = gameId => ({gameId,clanTag:"MARS",gameStart:at,clanPlayerCount:2,hasWon:true,numTeams:2,playerTeams:"2",totalPlayerCount:20,score:1});
 const player = gameId => ({gameId,gameStart:at,gameEnd:at,gameType:"Public",gameMode:"Team",gameRankedType:"Unranked",clientId:"client",username:"Player",clanTag:"MARS",hasWon:true});
 
+test("listing history settings reads all guilds in one query without changing their values", () => {
+  const raw = new DatabaseSync(":memory:");
+  try {
+    HistoryStore.initialize(raw);
+    const insert = raw.prepare(`INSERT INTO history_settings (guild_id,revision,collection_enabled,poll_minutes,weekly_since)
+      VALUES (?,?,?,?,?)`);
+    for (let i=0; i<100; i++) insert.run(`guild-${i}`,i+1,i%2,5+i,"2026-01-01T00:00:00.000Z");
+    let queries = 0;
+    const history = new HistoryStore({ prepare(sql) { queries++; return raw.prepare(sql); } });
+    const listed = history.listSettings();
+    assert.equal(queries,1);
+    const baseline = new HistoryStore(raw);
+    assert.deepEqual(listed.map(row=>row.guild_id).sort(),Array.from({length:100},(_,i)=>`guild-${i}`).sort());
+    for (const row of listed) assert.deepEqual(row,baseline.getSettings(row.guild_id));
+  } finally { raw.close(); }
+});
+
 for (const kind of ["clan", "player"]) for (const outerTransaction of [false,true]) test(`${kind} page failure rolls back corrections and additions ${outerTransaction ? "inside its caller transaction" : "without a caller transaction"}`, () => {
   const raw = new DatabaseSync(":memory:");
   try {

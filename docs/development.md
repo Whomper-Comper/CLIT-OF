@@ -81,7 +81,7 @@ After verification, inspect the actual changed files and report which commands r
 
 ## Test inventory
 
-There are **48 test files** under `test/` in the documented source tree: the 19 existing suites below, 22 community suites, and seven lobby suites in the [community inventory](#community-regression-inventory-and-performance-evidence). This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
+There are **49 test files** under `test/` in the documented source tree: the 20 existing suites below, 22 community suites, and seven lobby suites in the [community inventory](#community-regression-inventory-and-performance-evidence). This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
 
 | File | Behaviors protected |
 | --- | --- |
@@ -90,11 +90,12 @@ There are **48 test files** under `test/` in the documented source tree: the 19 
 | `test/backups.test.mjs` | Consistent WAL-inclusive snapshots; pre-migration contents; per-database rotation; invalid/new/in-memory database handling; process-owned deployment readiness |
 | `test/bot.test.mjs` | Command definitions and config validation; clan authorization/setup/removal/pagination; identity ownership and audit scoping; legacy migrations; role union/removal/stale-write checks; pacing, API failures and reply behavior |
 | `test/clan-sync-cross-config.test.mjs` | Cross-clan configuration changes and same-account re-verification invalidate stale role updates |
+| `test/clan-sync-schedule-race.test.mjs` | An empty sync cannot mark an edited clan mapping as already synchronized |
 | `test/debug.test.mjs` | Explicit debug-role access; scoped exports; no credential leakage; revoked access and unavailable membership; oversized/empty exports; private diagnostic status/toggles and controlled error wording |
 | `test/dice.test.mjs` | Dice definition bounds/defaults; inclusive random boundaries; public animation/final result; invalid inputs and animation throttling |
 | `test/history-api.test.mjs` | Exact-ID ladder lookup and bounded absence; malformed/forbidden responses; cursor/filter cache isolation; known empty versus missing history; sessions/time bounds/clan schema; deletion feed and UTC normalization |
 | `test/history-collection.test.mjs` | Opt-in settings validation; deduplication and coverage; restart checkpoints and failure isolation; bounded rotation; unlink/settings/shutdown races; recorded tags and boundaries; deletion gaps; weekly DST and interrupted-delivery reconciliation |
-| `test/history-improvements.test.mjs` | Atomic page rollback both inside/outside caller transactions; indexed cross-guild player deletion queries; captured-clock Elo retention; leaderboard matching avoids unnecessary identity checks |
+| `test/history-improvements.test.mjs` | Atomic page rollback both inside/outside caller transactions; indexed cross-guild player deletion queries; captured-clock Elo retention; leaderboard matching avoids unnecessary identity checks; one-query history settings listing |
 | `test/history-reports.test.mjs` | Bounded one-day recent-clan scans, deduplication and partial labels; numeric/graph agreement; current-link/historical-tag weekly rankings and incomplete coverage |
 | `test/interaction-router.test.mjs` | Interaction event contains expired reply/follow-up failures; acknowledged components preserve their original message; unknown slash commands and deferred errors receive controlled responses |
 | `test/player-analytics.test.mjs` | Inclusive period boundaries, future/incomplete games, map normalization and scope separation; duplicate/cursor loops; later API failure, bounded scans and early period-boundary exit |

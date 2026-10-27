@@ -169,20 +169,22 @@ export class LobbyFeed {
       }
       if (!current()) return;
       const servers = Object.values(list?.servers ?? {}) as any[];
-      const server = servers.find(
+      const supported = servers.filter(
         (s) => s?.state === "open" && compatible(s.version),
       );
-      if (!server)
+      if (!supported.length)
         throw new Error(
           "No supported OpenFront lobby build is available; update the pinned codec.",
         );
-      if (
-        !Number.isSafeInteger(server.numWorkers) ||
-        server.numWorkers < 1 ||
-        server.numWorkers > 100 ||
-        typeof server.host !== "string" ||
-        !/^[a-z0-9.-]+\.openfront\.io$/.test(server.host)
-      )
+      const server = supported.find(
+        (s) =>
+          Number.isSafeInteger(s.numWorkers) &&
+          s.numWorkers >= 1 &&
+          s.numWorkers <= 100 &&
+          typeof s.host === "string" &&
+          /^[a-z0-9.-]+\.openfront\.io$/.test(s.host),
+      );
+      if (!server)
         throw new Error("Invalid OpenFront discovery server.");
       const source = `https://${server.host}`;
       const ws = (this.options.socket ?? ((url) => new WebSocket(url)))(

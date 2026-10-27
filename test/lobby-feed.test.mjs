@@ -128,6 +128,53 @@ test("connection errors replace watchdog with reconnect instead of leaving the f
   f.stop();
 });
 
+test("discovery skips an invalid compatible server and connects to a valid one", async () => {
+  let connectedUrl;
+  class Socket extends EventTarget {
+    close() {}
+    binaryType = "";
+  }
+  const f = new LobbyFeed({
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({ servers: {
+        invalid: { state: "open", version: SUPPORTED_BUILD, host: "invalid.example", numWorkers: 1 },
+        valid: { state: "open", version: SUPPORTED_BUILD, host: "blue.openfront.io", numWorkers: 1 },
+      } }),
+    }),
+    socket: (url) => { connectedUrl = url; return new Socket(); },
+  });
+  try {
+    f.start();
+    await immediate();
+    assert.equal(connectedUrl, "wss://blue.openfront.io/w0/lobbies?platform=web");
+  } finally {
+    f.stop();
+  }
+});
+
+test("discovery never connects if all compatible servers are invalid", async () => {
+  let connections = 0;
+  const f = new LobbyFeed({
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({ servers: {
+        invalidHost: { state: "open", version: SUPPORTED_BUILD, host: "invalid.example", numWorkers: 1 },
+        invalidWorkers: { state: "open", version: SUPPORTED_BUILD, host: "blue.openfront.io", numWorkers: 0 },
+      } }),
+    }),
+    socket: () => { connections++; throw new Error("unexpected connection"); },
+  });
+  try {
+    f.start();
+    await immediate();
+    assert.equal(connections, 0);
+    assert.match(f.status, /invalid.*discovery/i);
+  } finally {
+    f.stop();
+  }
+});
+
 test("discovery timeout includes a stalled response body", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let signal;
