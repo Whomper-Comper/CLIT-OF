@@ -1,7 +1,7 @@
 import { EmbedBuilder, PermissionFlagsBits, type Client, type Guild, type GuildMember } from "discord.js";
 import type { OpenFrontApi } from "./api.js";
 import type { BotDatabase, LinkedUser } from "./db.js";
-import { DAY, type HistoryJob, type HistorySettings } from "./historyStore.js";
+import { DAY, type EloObservation, type HistoryJob, type HistoryJobInput, type HistorySettings } from "./historyStore.js";
 import { weeklyPeriod } from "./historySchedule.js";
 
 export interface HistoryCollectorOptions {
@@ -87,12 +87,14 @@ export class HistoryCollector {
         if (this.stopping || this.db.history.getSettings(guild.id).revision !== settings.revision) continue;
         const tags = new Set(this.db.getGuildConfigs(guild.id).map(config=>config.clan_tag));
         this.db.history.pruneClans(guild.id,tags);
-        if (settings.clan_history_enabled) for (const tag of tags) this.db.history.ensureJob(guild.id,"clan",tag,now);
+        const inventory: HistoryJobInput[] = [];
+        if (settings.clan_history_enabled) for (const tag of tags) inventory.push({kind:"clan",subject:tag});
         else this.db.history.removeJobs(guild.id,"clan");
         if (settings.player_history_enabled && tags.size && deletion.healthy) {
-          for (const link of links) this.db.history.ensureJob(guild.id,"player",link.openfront_id,now,link.discord_id,link.linked_at);
+          for (const link of links) inventory.push({kind:"player",subject:link.openfront_id,discordId:link.discord_id,identityVersion:link.linked_at});
         } else if (!settings.player_history_enabled) this.db.history.clearGuildPlayerHistory(guild.id);
         else if (!tags.size) this.db.history.removeJobs(guild.id,"player");
+        this.db.history.ensureJobs(guild.id,inventory,now);
         snapshots.set(guild.id,{guild,settings,links,tags});
         this.db.history.setMeta(`guild_error:${guild.id}`,"");
       } catch (error) {
@@ -140,6 +142,7 @@ export class HistoryCollector {
       for (const snapshot of snapshots.values()) {
         const settings = this.db.history.getSettings(snapshot.guild.id);
         if (!settings.player_history_enabled || !settings.collection_enabled || settings.revision !== snapshot.settings.revision) continue;
+        const observations: EloObservation[] = [];
         for (const link of snapshot.links) {
           const ratings = ratingsById.get(link.openfront_id);
           if (!ratings) continue;
@@ -149,9 +152,10 @@ export class HistoryCollector {
           const current = this.db.getEffectiveLink(snapshot.guild.id,link.discord_id);
           if (!current || current.openfront_id !== link.openfront_id || current.linked_at !== link.linked_at) continue;
           for (const rating of ratings) {
-            this.db.history.recordElo(snapshot.guild.id,link.openfront_id,link.discord_id,rating.ladder,rating.rating,Date.parse(page.observedAt));
+            observations.push({ publicId: link.openfront_id, discordId: link.discord_id, ladder: rating.ladder, rating: rating.rating });
           }
         }
+        this.db.history.recordEloBatch(snapshot.guild.id,observations,Date.parse(page.observedAt));
       }
       const continues = page.hasMore && pageNumber < 100;
       const interval = Math.min(...[...snapshots.values()].filter(s=>s.settings.player_history_enabled).map(s=>s.settings.poll_minutes));

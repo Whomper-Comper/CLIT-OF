@@ -81,7 +81,7 @@ After verification, inspect the actual changed files and report which commands r
 
 ## Test inventory
 
-There are **54 test files** under `test/` in the documented source tree: the 24 existing suites below, 22 community suites, and eight lobby suites in the [community inventory](#community-regression-inventory-and-performance-evidence). This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
+There are **55 test files** under `test/` in the documented source tree: the 24 existing suites below, 23 community suites, and eight lobby suites in the [community inventory](#community-regression-inventory-and-performance-evidence). This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
 
 | File | Behaviors protected |
 | --- | --- |
@@ -97,8 +97,8 @@ There are **54 test files** under `test/` in the documented source tree: the 24 
 | `test/debug.test.mjs` | Explicit debug-role access; scoped exports; no credential leakage; revoked access and unavailable membership; oversized/empty exports; private diagnostic status/toggles and controlled error wording |
 | `test/dice.test.mjs` | Dice definition bounds/defaults; inclusive random boundaries; public animation/final result; invalid inputs and animation throttling |
 | `test/history-api.test.mjs` | Exact-ID ladder lookup and bounded absence; malformed/forbidden responses; cursor/filter cache isolation; known empty versus missing history; sessions/time bounds/clan schema; deletion feed and UTC normalization |
-| `test/history-collection.test.mjs` | Opt-in settings validation; deduplication and coverage; restart checkpoints and failure isolation; bounded rotation; unlink/settings/shutdown races; recorded tags and boundaries; deletion safe-cutoff/future-checkpoint/failure gaps; weekly DST and interrupted-delivery reconciliation |
-| `test/history-improvements.test.mjs` | Atomic page rollback both inside/outside caller transactions; indexed account deletion and identity cleanup; repeatable index migration/data preservation; streamed batched coverage with overlap/gap/clipping/isolation; captured-clock Elo retention; leaderboard identity filtering; one-query settings listing |
+| `test/history-collection.test.mjs` | Opt-in settings; deduplication/coverage; batched job inventory counts/plans, preserved checkpoints/backoff, replacement/deletion/scope/rollback; bounded rotation; unlink/settings/shutdown races; deletion gaps; weekly DST and delivery reconciliation |
+| `test/history-improvements.test.mjs` | Atomic page and rating batches; indexed account/identity cleanup; repeatable index migration; streamed batched coverage; captured-clock Elo retention, latest-hour association rules and tombstones; leaderboard identity filtering and batch counts; one-query settings listing |
 | `test/history-reports.test.mjs` | Bounded one-day recent-clan scans, deduplication and partial labels; numeric/graph agreement; current-link/historical-tag weekly rankings and incomplete coverage; batched recap coverage and reuse of clan payloads |
 | `test/identity-lookup-race.test.mjs` | Whois and statistics reject changed identity bindings after profile/analytics requests and during later controls, while standalone public-ID lookups remain available |
 | `test/interaction-router.test.mjs` | Interaction event contains expired reply/follow-up failures; acknowledged components preserve their original message; unknown slash commands and deferred errors receive controlled responses |
@@ -167,6 +167,7 @@ Choose affected feature suites while iterating; run `npm test` once when ready f
 | `test/availability.test.mjs` | Private recurring schedules, revisions/clear, fourteen-window pagination, public count-only suggestions and bounded evidence |
 | `test/events.test.mjs` | Atomic last-seat/squad/reserve behavior, revisions, membership promotion and indexed participant-page query plans |
 | `test/event-interactions.test.mjs` | Private drafts/moves, canonical public controls, ownership/permission races, serialization and opt-in choices |
+| `test/event-list.test.mjs` | Ten-row published event pages, private replies, deterministic ordering, draft/guild isolation, 100-event cap, partial/empty/invalid pages and bounded payload reads/decoding |
 | `test/event-delivery.test.mjs` | Durable publication/reminders, current opted-in membership, missed deadlines, cancellation/recovery and bounded cleanup |
 | `test/onboarding.test.mjs` | Approved-to-join versus actual membership, unknown evidence, signup versus attendance, async identity/role/enrollment checks and bounded ten-person queue |
 | `test/wheel.test.mjs` | Complete valid packages, supported catalog, random bounds, private explicit save/removal, copied event settings and safe output |
@@ -180,7 +181,7 @@ Choose affected feature suites while iterating; run `npm test` once when ready f
 | `test/duels.test.mjs` | Consent/state/cooldowns/slots, cryptographic draw ownership, saved ties/results, expiry, restart, cleanup and indexed bounded retention |
 | `test/duel-interactions.test.mjs` | Canonical consent/bindings, activation cadence/deadlines, enabling failures, shared final hook, expiry/departure lease/timeout marker recovery and no fresh closed publication |
 | `test/community-integration.test.mjs` | Actual runtime signup/checklist/availability evidence, deletion across guilds/account isolation, milestone disable, maximum cards/lists and indexed mixed-history diagnostics with real private pagination |
-| `test/final-review-regressions.test.mjs` | Event final-roster permission and private-session revocation/expiry, availability draft source validation, published list cap, bounded milestone cooldown/in-flight sharing across menus, members and accounts |
+| `test/final-review-regressions.test.mjs` | Event final-roster permission/session guards, availability draft validation, event list cap, cooldown expiry-scan counts/exact boundaries/clock changes/atomic capacity, milestone cooldown and in-flight sharing |
 
 `test/bot.test.mjs` also asserts exactly 16 unique commands, the unchanged `sides`/`count` dice interface and all seven Guild contexts. `test/interaction-router.test.mjs` exercises the actual central dispatcher and InteractionCreate listener across every community public/private prefix, malformed/forged bindings, valid bingo/milestones/duel controls and legacy fallthrough. The fixture substitutes only Discord/API boundaries; state transitions and query plans use real SQLite.
 

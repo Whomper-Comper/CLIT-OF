@@ -15,6 +15,10 @@ export interface HistoryJob {
   next_attempt: number; attempts: number; last_error: string | null; last_work: number;
 }
 export interface HistoryCoverage { complete: boolean; coveredDays: number; totalDays: number }
+export interface HistoryJobInput {
+  kind: "clan" | "player"; subject: string; discordId?: string | null; identityVersion?: string | null;
+}
+export interface EloObservation { publicId: string; discordId: string | null; ladder: string; rating: number }
 export interface WeeklyDelivery {
   guild_id: string; period_start: string; period_end: string; channel_id: string; nonce: string;
   status: "pending" | "sending" | "sent" | "failed"; attempts: number; next_attempt: number;
@@ -166,19 +170,32 @@ export class HistoryStore {
     }
   }
   recordElo(guild: string, publicId: string, discordId: string | null, ladder: string, rating: number, now = Date.now()): void {
-    const settings = this.getSettings(guild);
-    if ((guild !== "dm" && !settings.player_history_enabled) || this.isDeleted(publicId)
-      || !["1v1","2v2","ffa"].includes(ladder) || !Number.isFinite(rating)
-      || Math.abs(rating) > Number.MAX_SAFE_INTEGER || !Number.isFinite(now) || !Number.isFinite(new Date(now).getTime())) return;
+    this.recordEloBatch(guild, [{ publicId, discordId, ladder, rating }], now);
+  }
+  /** One captured leaderboard instant; settings, tombstones and retention are shared by the batch. */
+  recordEloBatch(guild: string, observations: readonly EloObservation[], now = Date.now()): void {
+    if (!Number.isFinite(now) || !Number.isFinite(new Date(now).getTime())) return;
+    const valid = observations.filter(row => ["1v1","2v2","ffa"].includes(row.ladder) &&
+      Number.isFinite(row.rating) && Math.abs(row.rating) <= Number.MAX_SAFE_INTEGER);
+    if (!valid.length) return;
     const observedAt = iso(now), hourBucket = Math.floor(now / 3_600_000);
-    this.db.prepare(`INSERT INTO history_observed_elo(guild_id,public_id,discord_id,ladder,hour_bucket,observed_at,rating)
-      VALUES(?,?,?,?,?,?,?) ON CONFLICT(guild_id,public_id,ladder,hour_bucket) DO UPDATE SET
-      discord_id=COALESCE(excluded.discord_id,history_observed_elo.discord_id),
-      observed_at=excluded.observed_at,rating=excluded.rating
-      WHERE excluded.observed_at>=history_observed_elo.observed_at`)
-      .run(guild,publicId,discordId,ladder,hourBucket,observedAt,rating);
-    const days = Number.isFinite(settings.retention_days) ? Math.max(1,Math.min(365,settings.retention_days)) : 90;
-    this.db.prepare("DELETE FROM history_observed_elo WHERE guild_id=? AND observed_at<?").run(guild,iso(now-days*DAY));
+    this.savePage(() => {
+      const settings = this.getSettings(guild);
+      if (guild !== "dm" && !settings.player_history_enabled) return;
+      const deleted = new Set(this.db.prepare(`SELECT public_id FROM history_deleted_players
+        WHERE public_id IN (SELECT value FROM json_each(?))`)
+        .all(JSON.stringify([...new Set(valid.map(row => row.publicId))])).map(row => String(row.public_id)));
+      const eligible = valid.filter(row => !deleted.has(row.publicId));
+      if (!eligible.length) return;
+      const insert = this.db.prepare(`INSERT INTO history_observed_elo(guild_id,public_id,discord_id,ladder,hour_bucket,observed_at,rating)
+        VALUES(?,?,?,?,?,?,?) ON CONFLICT(guild_id,public_id,ladder,hour_bucket) DO UPDATE SET
+        discord_id=COALESCE(excluded.discord_id,history_observed_elo.discord_id),
+        observed_at=excluded.observed_at,rating=excluded.rating
+        WHERE excluded.observed_at>=history_observed_elo.observed_at`);
+      for (const row of eligible) insert.run(guild,row.publicId,row.discordId,row.ladder,hourBucket,observedAt,row.rating);
+      const days = Number.isFinite(settings.retention_days) ? Math.max(1,Math.min(365,settings.retention_days)) : 90;
+      this.db.prepare("DELETE FROM history_observed_elo WHERE guild_id=? AND observed_at<?").run(guild,iso(now-days*DAY));
+    });
   }
   getEloHistory(guild: string, publicId: string, ladder: string, startISO: string, endISO: string, now = Date.now()): {at:string;rating:number}[] {
     const start = Date.parse(startISO), end = Date.parse(endISO);
@@ -240,15 +257,42 @@ export class HistoryStore {
       .run(job.guild_id,job.kind,job.subject,job.window_start,job.window_end,iso(now));
   }
   ensureJob(guild: string, kind: "clan" | "player", subject: string, now: number, discordId: string | null = null, identityVersion: string | null = null) {
-    if (kind === "player" && this.isDeleted(subject)) return;
-    const start = dayFloor(now - 7*DAY);
-    const previous = this.getJob(guild,kind,subject);
-    if (previous && (previous.discord_id !== discordId || previous.identity_version !== identityVersion)) {
-      if (kind === "player") this.purgeGuildPlayer(guild,subject);
-      else this.db.prepare("DELETE FROM history_jobs WHERE guild_id=? AND kind=? AND subject=?").run(guild,kind,subject);
+    this.ensureJobs(guild,[{kind,subject,discordId,identityVersion}],now);
+  }
+  /** Refresh bindings without rewriting unchanged checkpoints or retry state. */
+  ensureJobs(guild: string, inputs: readonly HistoryJobInput[], now: number) {
+    if (!inputs.length) return;
+    type Binding = Pick<HistoryJob,"kind" | "subject" | "discord_id" | "identity_version">;
+    const stored = this.db.prepare(`SELECT kind,subject,discord_id,identity_version FROM history_jobs WHERE guild_id=?
+      AND (kind,subject) IN (SELECT json_extract(value,'$[0]'),json_extract(value,'$[1]') FROM json_each(?))`)
+      .all(guild,JSON.stringify(inputs.map(input=>[input.kind,input.subject]))) as unknown as Binding[];
+    const bindings = new Map(stored.map(job=>[`${job.kind}:${job.subject}`,job]));
+    const players = [...new Set(inputs.filter(input=>input.kind === "player").map(input=>input.subject))];
+    const deleted = new Set(players.length ? this.db.prepare(`SELECT public_id FROM history_deleted_players
+      WHERE public_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(players)).map(row=>String(row.public_id)) : []);
+    const changes: { binding: Binding; replace: boolean }[] = [];
+    // Advance the inventory for duplicate subjects in input order, just as individual ensures do.
+    for (const input of inputs) {
+      if (input.kind === "player" && deleted.has(input.subject)) continue;
+      const key = `${input.kind}:${input.subject}`, previous = bindings.get(key);
+      const binding: Binding = { kind: input.kind, subject: input.subject,
+        discord_id: input.discordId ?? null, identity_version: input.identityVersion ?? null };
+      if (previous && previous.discord_id === binding.discord_id && previous.identity_version === binding.identity_version) continue;
+      changes.push({binding,replace:!!previous});
+      bindings.set(key,binding);
     }
-    this.db.prepare(`INSERT OR IGNORE INTO history_jobs(guild_id,kind,subject,discord_id,identity_version,window_start,window_end) VALUES(?,?,?,?,?,?,?)`)
-      .run(guild,kind,subject,discordId,identityVersion,iso(start),iso(Math.min(start+DAY,now)));
+    if (!changes.length) return;
+    const start = dayFloor(now - 7*DAY), windowStart = iso(start), windowEnd = iso(Math.min(start+DAY,now));
+    const insert = this.db.prepare(`INSERT OR IGNORE INTO history_jobs(guild_id,kind,subject,discord_id,identity_version,window_start,window_end) VALUES(?,?,?,?,?,?,?)`);
+    this.savePage(() => {
+      for (const {binding,replace} of changes) {
+        if (replace) {
+          if (binding.kind === "player") this.purgeGuildPlayer(guild,binding.subject);
+          else this.db.prepare("DELETE FROM history_jobs WHERE guild_id=? AND kind=? AND subject=?").run(guild,binding.kind,binding.subject);
+        }
+        insert.run(guild,binding.kind,binding.subject,binding.discord_id,binding.identity_version,windowStart,windowEnd);
+      }
+    });
   }
   getJob(guild: string, kind: string, subject: string): HistoryJob | null {
     return this.db.prepare("SELECT * FROM history_jobs WHERE guild_id=? AND kind=? AND subject=?").get(guild,kind,subject) as unknown as HistoryJob ?? null;

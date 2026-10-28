@@ -176,6 +176,18 @@ export class EventStore {
   listPublished(guildId: string): EventRecord[] {
     return this.sql.prepare("SELECT * FROM community_events WHERE guild_id=? AND status<>'draft' ORDER BY start_at DESC,id LIMIT 100").all(guildId).map(decode);
   }
+  publishedPage(guildId: string, page: number): { entries: EventRecord[]; pages: number } {
+    const total = Number(this.sql.prepare(`SELECT count(*) AS n FROM (
+      SELECT 1 FROM community_events WHERE guild_id=? AND status<>'draft' LIMIT 100
+    )`).get(guildId)!.n);
+    const pages = Math.max(1, Math.ceil(total / 10));
+    if (!Number.isInteger(page) || page < 1 || page > pages) {
+      throw new CommandError('Choose an existing event page.');
+    }
+    const entries = this.sql.prepare(`SELECT * FROM community_events WHERE guild_id=? AND status<>'draft'
+      ORDER BY start_at DESC,id LIMIT 10 OFFSET ?`).all(guildId, (page - 1) * 10).map(decode);
+    return { entries, pages };
+  }
   deliveryJobs(guildId: string, eventId: string): DeliveryJob[] {
     const rows = this.sql.prepare(`SELECT id FROM community_deliveries WHERE guild_id=? AND kind IN ('event_publish','event_update','event_reminder')
       AND subject_id=? AND status NOT IN ('sent','cancelled') ORDER BY updated_at DESC,id DESC LIMIT 5`).all(guildId, eventId);

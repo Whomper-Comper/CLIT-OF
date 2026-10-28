@@ -236,3 +236,118 @@ test("leaderboard collection checks current identities only for IDs present on i
     assert.equal(db.history.getStatus("g").eloObservations,2);
   } finally {await collector?.stop();db.close();}
 });
+
+test('leaderboard collection batches rating writes and retention once per guild', async t => {
+  const db = new BotDatabase(':memory:');
+  let collector;
+  try {
+    db.history.saveSettings('g', { ...db.history.getSettings('g'), collection_enabled: 1, clan_history_enabled: 0 }, 0);
+    db.history.setMeta('deletions_last_success', at);
+    const members = new Map(), ratings = [];
+    for (let i = 0; i < 30; i++) {
+      const discord = `member-${i}`, publicId = `account-${i}`;
+      db.linkGuildUser('g', 'manager', discord, publicId, 'Player');
+      members.set(discord, { id: discord, user: { bot: false } });
+      for (const [ladder, rating] of [['1v1', 1000], ['2v2', 1100], ['ffa', 1200]])
+        ratings.push({ publicId, ladder, rating, rank: i + 1 });
+    }
+    const counts = { preparedInserts: 0, ratingWrites: 0, retentionRuns: 0 };
+    const prepare = db.db.prepare.bind(db.db);
+    t.mock.method(db.db, 'prepare', query => {
+      const statement = prepare(query);
+      if (query.startsWith('INSERT INTO history_observed_elo')) {
+        counts.preparedInserts++;
+        return { run(...parameters) { counts.ratingWrites++; return statement.run(...parameters); } };
+      }
+      if (query.startsWith('DELETE FROM history_observed_elo WHERE guild_id=? AND observed_at<?'))
+        return { run(...parameters) { counts.retentionRuns++; return statement.run(...parameters); } };
+      return statement;
+    });
+    const guild = { id: 'g', members: { cache: members, fetch: async () => members } };
+    collector = new HistoryCollector({ guilds: { cache: new Map([['g', guild]]) } }, db, {
+      getRankedLeaderboardPage: async () => ({ ratings, hasMore: false, observedAt: at }),
+    }, { now: () => now, maxRequestsPerTick: 3 });
+    await collector.collectOnce();
+    assert.deepEqual(counts, { preparedInserts: 1, ratingWrites: 90, retentionRuns: 2 });
+    assert.equal(db.history.getStatus('g').eloObservations, 90);
+    for (const [ladder, rating] of [['1v1', 1000], ['2v2', 1100], ['ffa', 1200]])
+      assert.deepEqual(db.history.getEloHistory('g', 'account-0', ladder, '2026-10-01T00:00:00.000Z', '2026-11-01T00:00:00.000Z', now), [{ at, rating }]);
+  } finally { await collector?.stop(); db.close(); }
+});
+
+test('rating batches preserve ladder isolation, latest-hour values, associations, tombstones and retention boundaries', () => {
+  const raw = new DatabaseSync(':memory:');
+  try {
+    HistoryStore.initialize(raw);
+    const history = new HistoryStore(raw), cutoff = now - 90 * 86_400_000;
+    const insert = raw.prepare(`INSERT INTO history_observed_elo
+      (guild_id,public_id,discord_id,ladder,hour_bucket,observed_at,rating) VALUES(?,?,?,?,?,?,?)`);
+    for (const [guild, id, discord, time, rating] of [
+      ['g', 'expired', null, cutoff - 1, 1], ['g', 'boundary', null, cutoff, 2],
+      ['g', 'newer', 'owner', now + 30 * 60_000, 1600], ['other', 'expired', null, cutoff - 1, 3],
+    ]) insert.run(guild, id, discord, '1v1', Math.floor(time / 3_600_000), new Date(time).toISOString(), rating);
+    history.purgePlayer('deleted', at);
+    history.recordEloBatch('g', [
+      { publicId: 'player', discordId: 'member', ladder: '1v1', rating: 1000 },
+      { publicId: 'player', discordId: 'member', ladder: '2v2', rating: 1100 },
+      { publicId: 'player', discordId: null, ladder: '1v1', rating: 1200 },
+      { publicId: 'newer', discordId: null, ladder: '1v1', rating: 1900 },
+      { publicId: 'deleted', discordId: 'member', ladder: 'ffa', rating: 2000 },
+      { publicId: 'invalid-ladder', discordId: null, ladder: 'unknown', rating: 1000 },
+      ...[NaN, Infinity, Number.MAX_SAFE_INTEGER + 1].map((rating, i) => ({ publicId: `invalid-${i}`, discordId: null, ladder: '1v1', rating })),
+    ], now);
+    const rows = raw.prepare('SELECT guild_id,public_id,discord_id,ladder,observed_at,rating FROM history_observed_elo ORDER BY guild_id,public_id,ladder').all().map(row => ({ ...row }));
+    assert.deepEqual(rows, [
+      { guild_id: 'g', public_id: 'boundary', discord_id: null, ladder: '1v1', observed_at: new Date(cutoff).toISOString(), rating: 2 },
+      { guild_id: 'g', public_id: 'newer', discord_id: 'owner', ladder: '1v1', observed_at: '2026-10-16T12:30:00.000Z', rating: 1600 },
+      { guild_id: 'g', public_id: 'player', discord_id: 'member', ladder: '1v1', observed_at: at, rating: 1200 },
+      { guild_id: 'g', public_id: 'player', discord_id: 'member', ladder: '2v2', observed_at: at, rating: 1100 },
+      { guild_id: 'other', public_id: 'expired', discord_id: null, ladder: '1v1', observed_at: new Date(cutoff - 1).toISOString(), rating: 3 },
+    ]);
+    const settings = history.getSettings('disabled');
+    history.saveSettings('disabled', { ...settings, player_history_enabled: 0 }, 0);
+    history.recordEloBatch('disabled', [{ publicId: 'player', discordId: null, ladder: '1v1', rating: 1000 }], now);
+    history.recordEloBatch('g', [{ publicId: 'invalid-time', discordId: null, ladder: '1v1', rating: 1000 }], NaN);
+    assert.equal(raw.prepare("SELECT count(*) AS n FROM history_observed_elo WHERE guild_id='disabled' OR public_id='invalid-time'").get().n, 0);
+    const dmSettings = history.getSettings('dm');
+    history.saveSettings('dm', { ...dmSettings, player_history_enabled: 0 }, 0);
+    history.recordEloBatch('dm', [{ publicId: 'dm-profile', discordId: null, ladder: 'ffa', rating: -5 }], now);
+    assert.equal(raw.prepare("SELECT rating FROM history_observed_elo WHERE guild_id='dm'").get().rating, -5);
+  } finally { raw.close(); }
+});
+
+for (const outer of [false, true]) test(`rating batch failure rolls back observations and retention${outer ? ' inside an outer transaction' : ''}`, () => {
+  const raw = new DatabaseSync(':memory:');
+  try {
+    HistoryStore.initialize(raw);
+    const history = new HistoryStore(raw);
+    history.recordElo('g', 'retained', null, '1v1', 900, now - 100 * 86_400_000);
+    raw.exec(`CREATE TRIGGER fail_rating BEFORE INSERT ON history_observed_elo WHEN NEW.public_id='failure'
+      BEGIN SELECT RAISE(ABORT,'injected rating failure'); END;`);
+    const before = raw.prepare('SELECT * FROM history_observed_elo').all();
+    if (outer) { raw.exec('BEGIN'); history.setMeta('caller-owned', 'kept'); }
+    assert.throws(() => history.recordEloBatch('g', [
+      { publicId: 'first', discordId: null, ladder: '1v1', rating: 1000 },
+      { publicId: 'failure', discordId: null, ladder: '1v1', rating: 1100 },
+    ], now), /injected rating failure/);
+    assert.deepEqual(raw.prepare('SELECT * FROM history_observed_elo').all(), before);
+    if (outer) {
+      assert.equal(history.getMeta('caller-owned'), 'kept'); raw.exec('ROLLBACK');
+      assert.equal(history.getMeta('caller-owned'), null);
+    }
+  } finally { raw.close(); }
+});
+
+test('rating batch retention failure rolls back newly written observations', () => {
+  const raw = new DatabaseSync(':memory:');
+  try {
+    HistoryStore.initialize(raw);
+    const history = new HistoryStore(raw);
+    history.recordElo('g', 'expired', null, '1v1', 900, now - 100 * 86_400_000);
+    raw.exec(`CREATE TRIGGER fail_rating_retention BEFORE DELETE ON history_observed_elo WHEN OLD.public_id='expired'
+      BEGIN SELECT RAISE(ABORT,'retention rejected'); END;`);
+    const before = raw.prepare('SELECT * FROM history_observed_elo').all();
+    assert.throws(() => history.recordEloBatch('g', [{ publicId: 'new', discordId: null, ladder: '1v1', rating: 1000 }], now), /retention rejected/);
+    assert.deepEqual(raw.prepare('SELECT * FROM history_observed_elo').all(), before);
+  } finally { raw.close(); }
+});

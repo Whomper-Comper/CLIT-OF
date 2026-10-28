@@ -45,6 +45,134 @@ function fixture(options={}) {
   return {db,members,guild,client,api,collector,link,now:()=>now,setNow:(value)=>now=value,
     close:async()=>{await collector.stop();db.close();}};
 }
+
+test("unchanged collection job inventories use two SQL reads and no writes for 400 players",async(t)=> {
+  const f=fixture({budget:1});
+  try {
+    f.db.setGuildClanConfig(clanConfig("guild","VENUS"));
+    for(let i=0;i<400;i++) f.link(`member-${i}`,`player-${i}`);
+    for(const tag of ["MARS","VENUS"]) f.db.history.ensureJob("guild","clan",tag,f.now());
+    for(const link of f.db.getEffectiveLinks("guild")) {
+      f.db.history.ensureJob("guild","player",link.openfront_id,f.now(),link.discord_id,link.linked_at);
+    }
+    f.db.db.prepare("UPDATE history_jobs SET page=7,cursor='resume',attempts=2,last_error='retry',next_attempt=?,last_work=99")
+      .run(f.now()+DAY);
+    const before=f.db.db.prepare("SELECT * FROM history_jobs ORDER BY kind,subject").all();
+    f.db.history.setMeta("deletions_last_success",new Date(f.now()).toISOString());
+    let inventoryDepth=0;
+    for(const method of ["ensureJob","ensureJobs"]) if(typeof f.db.history[method]==="function") {
+      const original=f.db.history[method].bind(f.db.history);
+      t.mock.method(f.db.history,method,(...args)=> {
+        inventoryDepth++;
+        try {return original(...args);} finally {inventoryDepth--;}
+      });
+    }
+    const operations=[],plans=[],prepare=f.db.db.prepare.bind(f.db.db);
+    t.mock.method(f.db.db,"prepare",sql=> {
+      const statement=prepare(sql);
+      return new Proxy(statement,{get(target,key) {
+        const value=Reflect.get(target,key);
+        return typeof value!=="function" ? value : (...args)=> {
+          if(inventoryDepth) {
+            operations.push(sql);
+            if(/^SELECT\b/.test(sql)) plans.push(...prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args).map(row=>row.detail));
+          }
+          return value.apply(target,args);
+        };
+      }});
+    });
+    await f.collector.collectOnce();
+    assert.equal(operations.filter(sql=>/^SELECT\b/.test(sql)).length,2);
+    assert.equal(operations.filter(sql=>!/^(?:SELECT|EXPLAIN)\b/.test(sql)).length,0);
+    assert.ok(plans.some(detail=>/SEARCH history_jobs.*guild_id=\?.*kind=\?.*subject=\?/.test(detail)),JSON.stringify(plans));
+    assert.ok(plans.some(detail=>/SEARCH history_deleted_players.*public_id=\?/.test(detail)),JSON.stringify(plans));
+    assert.ok(plans.every(detail=>!/SCAN history_(jobs|deleted_players)/.test(detail)),JSON.stringify(plans));
+    assert.deepEqual(f.db.db.prepare("SELECT * FROM history_jobs ORDER BY kind,subject").all(),before);
+  } finally {await f.close();}
+});
+
+test("batched job inventory creates bounded windows and keeps guild, kind and deleted-player scope",()=> {
+  const db=new BotDatabase(":memory:"),now=Date.parse("2026-10-16T12:00:00.000Z");
+  try {
+    db.history.ensureJob("other","player","shared",now,"other-member","other-version");
+    db.history.purgePlayer("deleted");
+    db.history.ensureJobs("g",[
+      {kind:"clan",subject:"shared"},
+      {kind:"player",subject:"shared",discordId:"member",identityVersion:"version"},
+      {kind:"player",subject:"deleted",discordId:"deleted-member",identityVersion:"version"},
+      {kind:"clan",subject:"deleted"},
+    ],now);
+    const player=db.history.getJob("g","player","shared");
+    assert.equal(player.discord_id,"member");assert.equal(player.identity_version,"version");
+    assert.equal(player.window_start,"2026-10-09T00:00:00.000Z");
+    assert.equal(player.window_end,"2026-10-10T00:00:00.000Z");
+    assert.equal(player.page,1);assert.equal(player.cursor,null);assert.equal(player.attempts,0);
+    assert.equal(player.next_attempt,0);assert.equal(player.last_work,0);assert.equal(player.last_error,null);
+    assert.equal(db.history.getJob("g","clan","shared").discord_id,null);
+    assert.equal(db.history.getJob("g","player","deleted"),null);
+    assert.ok(db.history.getJob("g","clan","deleted"));
+    assert.equal(db.history.getJob("other","player","shared").identity_version,"other-version");
+  } finally {db.close();}
+});
+
+test("batched job inventory replaces changed bindings and preserves sequential duplicate semantics",()=> {
+  const db=new BotDatabase(":memory:"),now=Date.parse("2026-10-16T12:00:00.000Z");
+  try {
+    for(const guild of ["g","other"]) {
+      db.history.ensureJob(guild,"player","shared",now,"member","old-version");
+      db.history.upsertPlayerMatches(guild,"shared","member",[playerRow("2026-10-15T00:00:00.000Z")]);
+      const job=db.history.getJob(guild,"player","shared");
+      db.history.markCoverage(job,now);
+      db.history.recordElo(guild,"shared","member","1v1",1000,now);
+      db.history.advancePage(job,"old-cursor",9);db.history.retryJob(job,"old failure",now);
+    }
+    db.history.ensureJob("g","clan","shared",now,"old-clan-member","old-clan-version");
+    db.history.upsertClanMatches("g","shared",[clanRow("2026-10-15T00:00:00.000Z","clan",{clanTag:"shared"})]);
+    const clanJob=db.history.getJob("g","clan","shared");
+    db.history.markCoverage(clanJob,now);
+    db.history.ensureJobs("g",[
+      {kind:"player",subject:"shared",discordId:"member",identityVersion:"new-version"},
+      {kind:"player",subject:"shared",discordId:"member",identityVersion:"old-version"},
+      {kind:"clan",subject:"shared"},
+    ],now);
+    const replacement=db.history.getJob("g","player","shared");
+    assert.equal(replacement.identity_version,"old-version");assert.equal(replacement.page,1);
+    assert.equal(replacement.cursor,null);assert.equal(replacement.next_attempt,0);assert.equal(replacement.attempts,0);
+    assert.deepEqual(db.history.getPlayerMatches("g","2000","2099"),[]);
+    assert.equal(db.db.prepare("SELECT count(*) AS n FROM history_coverage WHERE guild_id='g' AND kind='player'").get().n,0);
+    assert.equal(db.db.prepare("SELECT count(*) AS n FROM history_observed_elo WHERE guild_id='g'").get().n,0);
+    assert.equal(db.history.getJob("other","player","shared").cursor,"old-cursor");
+    assert.equal(db.history.getPlayerMatches("other","2000","2099").length,1);
+    assert.equal(db.db.prepare("SELECT count(*) AS n FROM history_observed_elo WHERE guild_id='other'").get().n,1);
+    assert.equal(db.history.getClanMatches("g","shared","2000","2099").length,1);
+    assert.equal(db.db.prepare("SELECT count(*) AS n FROM history_coverage WHERE guild_id='g' AND kind='clan'").get().n,1);
+    assert.equal(db.history.getJob("g","clan","shared").discord_id,null);
+  } finally {db.close();}
+});
+
+for(const outerTransaction of [false,true]) test(`batched job inventory rolls back inserts and identity purges ${outerTransaction ? "inside a caller transaction" : "on its own"}`,()=> {
+  const db=new BotDatabase(":memory:"),now=Date.parse("2026-10-16T12:00:00.000Z");
+  try {
+    db.history.ensureJob("g","player","replace",now,"member","old-version");
+    db.history.upsertPlayerMatches("g","replace","member",[playerRow("2026-10-15T00:00:00.000Z")]);
+    db.history.markCoverage(db.history.getJob("g","player","replace"),now);
+    db.history.recordElo("g","replace","member","1v1",1000,now);
+    const tables=["history_jobs","history_player_matches","history_observed_elo","history_coverage"];
+    const snapshot=()=>tables.map(table=>db.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
+    const before=snapshot();
+    db.db.exec(`CREATE TRIGGER reject_inventory_job BEFORE INSERT ON history_jobs WHEN NEW.subject='fail'
+      BEGIN SELECT RAISE(ABORT,'inventory rejected'); END`);
+    if(outerTransaction) {db.db.exec("BEGIN IMMEDIATE");db.history.setMeta("outer","kept");}
+    assert.throws(()=>db.history.ensureJobs("g",[
+      {kind:"clan",subject:"created"},
+      {kind:"player",subject:"replace",discordId:"member",identityVersion:"new-version"},
+      {kind:"clan",subject:"fail"},
+    ],now),/inventory rejected/);
+    assert.deepEqual(snapshot(),before);
+    if(outerTransaction) {db.db.exec("COMMIT");assert.equal(db.history.getMeta("outer"),"kept");}
+  } finally {db.close();}
+});
+
 test("history settings default to opt-in collection and validate revisions, schedules and dependencies",()=> {
   const db=new BotDatabase(":memory:");
   try {

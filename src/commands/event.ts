@@ -170,12 +170,9 @@ export function createEventCommand(dependencies: Dependencies = {}) {
         return;
       }
       if (sub === 'list') {
-        const all = store.listPublished(i.guildId);
         const page = i.options.getInteger('page') ?? 1;
-        if (page > Math.max(1, Math.ceil(all.length / 10))) {
-          throw new CommandError('Choose an existing event page.');
-        }
-        await i.editReply({ embeds: [new EmbedBuilder().setTitle('Team events').setDescription(all.slice((page - 1) * 10, page * 10).map(e => `**${safe(e.title)}** · <t:${Math.floor(e.startAt / 1000)}:f> · ${e.status}\n/event view id:${e.id}`).join('\n\n') || 'No published events yet.').setFooter({ text: `Page ${page}/${Math.max(1, Math.ceil(all.length / 10))}` })], allowedMentions: { parse: [] } });
+        const { entries, pages } = store.publishedPage(i.guildId, page);
+        await i.editReply({ embeds: [new EmbedBuilder().setTitle('Team events').setDescription(entries.map(e => `**${safe(e.title)}** · <t:${Math.floor(e.startAt / 1000)}:f> · ${e.status}\n/event view id:${e.id}`).join('\n\n') || 'No published events yet.').setFooter({ text: `Page ${page}/${pages}` })], allowedMentions: { parse: [] } });
         return;
       }
       const e = requireEvent(i.guildId, i.options.getString('id', true));

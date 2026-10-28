@@ -164,6 +164,65 @@ test('multi-key command limits reserve all keys together or leave them unchanged
   assert.equal(limits.take('member:fresh', 10000, 11001), false);
 });
 
+function cooldownIterations(limits) {
+  const entries = limits.until, iterate = entries[Symbol.iterator];
+  const counts = { scans: 0, entries: 0 };
+  entries[Symbol.iterator] = function* () {
+    counts.scans++;
+    for (const entry of iterate.call(this)) { counts.entries++; yield entry; }
+  };
+  return counts;
+}
+
+test('command limits avoid scanning unexpired cooldowns for admissions and rejections', () => {
+  const limits = new CommandLimits(1001), counts = cooldownIterations(limits);
+  for (let n = 0; n < 1000; n++) assert.equal(limits.take(`member:${n}`, 10000, 1000), true);
+  for (let n = 0; n < 1000; n++) assert.equal(limits.takeAll(['unreserved', `member:${n}`], 10000, 1001), false);
+  assert.equal(limits.takeAll(['unreserved', 'unreserved'], 10000, 1001), true);
+  assert.equal(limits.take('at-capacity', 10000, 1001), false);
+  assert.deepEqual(counts, { scans: 0, entries: 0 });
+});
+
+test('command limits sweep mixed expirations at their exact boundaries before rejecting', () => {
+  const limits = new CommandLimits(2);
+  assert.equal(limits.take('long', 10000, 1000), true);
+  assert.equal(limits.take('short', 1000, 1000), true);
+  const counts = cooldownIterations(limits);
+  assert.equal(limits.take('replacement', 3000, 1999), false);
+  assert.equal(limits.take('long', 10000, 2000), false);
+  assert.deepEqual(counts, { scans: 1, entries: 2 });
+  assert.equal(limits.takeAll(['replacement', 'extra'], 3000, 2000), false);
+  assert.equal(limits.take('replacement', 3000, 2000), true);
+  assert.equal(limits.take('long', 10000, 2001), false);
+  assert.deepEqual(counts, { scans: 1, entries: 2 });
+  assert.equal(limits.take('next', 1000, 5000), true);
+  assert.deepEqual(counts, { scans: 2, entries: 4 });
+  assert.equal(limits.take('long', 10000, 5000), false);
+});
+
+for (const duration of [0, -10]) {
+  test(`command limits retain immediate expiry semantics for duration ${duration}`, () => {
+    const limits = new CommandLimits(1);
+    assert.equal(limits.take('old', duration, 1000), true);
+    assert.equal(limits.take('replacement', 1000, 1000), true);
+    assert.equal(limits.take('replacement', 1000, 1000), false);
+    assert.equal(limits.take('next', 1000, 2000), true);
+  });
+}
+
+test('command limits preserve expiry cleanup across backward and forward clock changes', () => {
+  const limits = new CommandLimits(2);
+  assert.equal(limits.take('long', 10000, 1000), true);
+  assert.equal(limits.take('short', 1000, 1000), true);
+  assert.equal(limits.take('long', 10000, 2000), false);
+  assert.equal(limits.take('short', 100, 1500), true, 'a rejection must not leave an expired key to revive after rollback');
+  assert.equal(limits.take('short', 100, 1550), false);
+  assert.equal(limits.take('short', 1, 1600), true, 'a new earlier expiry after rollback must trigger cleanup');
+  assert.equal(limits.take('new', 5000, 500), false);
+  assert.equal(limits.take('new', 5000, 1601), true);
+  assert.equal(limits.take('long', 10000, 11000), true);
+});
+
 test('milestone opens and different valid menus share foreground cooldown and in-flight work', async () => {
   const f = milestoneFixture();
   try {

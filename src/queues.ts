@@ -52,16 +52,25 @@ export class MemberLocks {
 /** Reject bursts before expensive API work; idle entries are discarded. */
 export class CommandLimits {
   private until = new Map<string, number>();
+  private nextExpiry = Infinity;
   constructor(private readonly maximumEntries = Infinity) {}
   take(key: string, milliseconds: number, now = Date.now()): boolean {
     return this.takeAll([key], milliseconds, now);
   }
   takeAll(keys: readonly string[], milliseconds: number, now = Date.now()): boolean {
-    for (const [id, expiry] of this.until) if (expiry <= now) this.until.delete(id);
+    if (now >= this.nextExpiry) {
+      this.nextExpiry = Infinity;
+      for (const [id, expiry] of this.until) {
+        if (expiry <= now) this.until.delete(id);
+        else if (expiry < this.nextExpiry) this.nextExpiry = expiry;
+      }
+    }
     const unique = [...new Set(keys)];
     if (unique.some(key => (this.until.get(key) ?? 0) > now)) return false;
     if (this.until.size + unique.filter(key => !this.until.has(key)).length > this.maximumEntries) return false;
-    for (const key of unique) this.until.set(key, now + milliseconds);
+    const expiry = now + milliseconds;
+    for (const key of unique) this.until.set(key, expiry);
+    if (unique.length && expiry < this.nextExpiry) this.nextExpiry = expiry;
     return true;
   }
 }
