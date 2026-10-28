@@ -2,7 +2,7 @@ import { ChatInputCommandInteraction, EmbedBuilder, SlashCommandBuilder } from "
 import { db, type LinkedUser } from "../db.js";
 import { openfrontApi, type OpenFrontPlayerProfile } from "../api.js";
 import { extractDiscordId, toEpochSeconds } from "../utils.js";
-import { CommandError, label, playerId, profileLink, shortText, throttle } from "./support.js";
+import { CommandError, identityBindingCurrent, label, playerId, profileLink, shortText, throttle } from "./support.js";
 
 /** Identity lookup stays small; match results and charts live in /stats. */
 export const whoisCommand = {
@@ -30,6 +30,7 @@ export const whoisCommand = {
     let unavailable = false;
     try { profile = await openfrontApi.getPlayerProfile(id); }
     catch (error) { if (!link) throw error; unavailable = true; }
+    if (!identityBindingCurrent(interaction.guildId, link)) throw new CommandError("The identity link changed while loading. Run `/whois` again.");
     if (!profile && !link) throw new CommandError("That OpenFront profile was not found, and no link is available here.");
     const name = profile?.username || link?.openfront_username || id;
     const connectedId = link?.discord_id ?? (profile?.user?.id ? extractDiscordId(profile.user.id) : null);

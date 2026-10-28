@@ -180,6 +180,36 @@ test("a current unknown-member lookup purges the departed member's history",asyn
     assert.deepEqual(f.db.history.getPlayerMatches("guild","2000","2099"),[]);
   } finally {await f.close();}
 });
+test("weekly rotation reads each server's work priority once and visits oldest first",async(t)=> {
+  const f=fixture({budget:1,collector:{buildWeeklyReport:async()=>new EmbedBuilder()}});
+  try {
+    const priorities=new Map([["guild",1000]]);
+    f.db.history.setMeta("deletions_last_success",new Date(f.now()).toISOString());
+    f.db.history.setMeta("weekly_work:guild","1000");
+    for(let i=0;i<100;i++) {
+      const id=`weekly-${String(i).padStart(3,"0")}`,priority=(i*37)%100+1;
+      priorities.set(id,priority);
+      const settings=f.db.history.getSettings(id);
+      f.db.history.saveSettings(id,{...settings,collection_enabled:1,player_history_enabled:0,weekly_enabled:1,channel_id:"123456789012345678"},0);
+      f.db.history.setMeta(`weekly_work:${id}`,String(priority));
+      f.client.guilds.cache.set(id,{id,members:{fetch:async()=>new Map()}});
+    }
+    const original=f.db.history.getMeta.bind(f.db.history);
+    let reads=0;
+    t.mock.method(f.db.history,"getMeta",key=> {if(key.startsWith("weekly_work:")) reads++;return original(key);});
+    const visited=[];
+    t.mock.method(f.collector,"deliverWeekly",async snapshot=>{visited.push(snapshot.guild.id);});
+    const expected=[...priorities].sort((a,b)=>a[1]-b[1]).map(([id])=>id);
+    await f.collector.collectOnce();
+    assert.equal(reads,priorities.size);
+    assert.deepEqual(visited,expected.slice(0,2));
+    reads=0;
+    f.setNow(f.now()+1);
+    await f.collector.collectOnce();
+    assert.equal(reads,priorities.size);
+    assert.deepEqual(visited,expected.slice(0,4));
+  } finally {await f.close();}
+});
 test("unlink during a player request prevents storage and immediately purges historical identity rows",async()=> {
   const f=fixture({budget:4});
   try {

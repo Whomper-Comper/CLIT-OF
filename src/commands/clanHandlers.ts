@@ -1,11 +1,11 @@
 import { ChatInputCommandInteraction, EmbedBuilder, Guild, GuildMember } from "discord.js";
-import { db, GuildClanConfig, managedRoles } from "../db.js";
-import { openfrontApi } from "../api.js";
+import { db, GuildClanConfig, type LinkedUser, managedRoles } from "../db.js";
+import { openfrontApi, type OpenFrontClanMembership } from "../api.js";
 import { ClanSyncService, SyncResult } from "../clanSync.js";
 import { configSnapshot, newClanDraft, normalizeClanTag, validateClanDraft } from "../setupConfig.js";
 import { toEpochSeconds } from "../utils.js";
 import { desiredRoles } from "../roles.js";
-import { CommandError, identityLocks, label, pageOf, playerId, privateReply, commandReplyOptions, profileLink, sendEmbeds, shortText, throttle } from "./support.js";
+import { CommandError, identityBindingCurrent, identityLocks, label, pageOf, playerId, privateReply, commandReplyOptions, profileLink, sendEmbeds, shortText, throttle } from "./support.js";
 import { checkClanAccess, checkConfigAccess, requireClanAccess, requireConfigAccess } from "../access.js";
 import { configCommand } from "./config.js";
 import { buildCoverageEmbeds, buildDoctorEmbeds } from "../reporting.js";
@@ -200,13 +200,24 @@ async function synchronize(i: GuildCommand, sync: ClanSyncService) {
 async function pending(i: GuildCommand, sync: ClanSyncService) {
   const available = configs(i).filter((c) => c.join_role_id);
   if (!available.length) throw new CommandError("No approval role is configured for the selected clans. A server manager can set join_role with `/clan` action `setup`.");
-  const lines: string[] = [];
+  const configsSnapshot = JSON.stringify(db.getGuildConfigs(i.guildId).map(configSnapshot));
+  const entries: { config: GuildClanConfig; entry: Awaited<ReturnType<ClanSyncService['getPendingJoinMembers']>>[number] }[] = [];
   for (const c of available) {
     const list = await sync.getPendingJoinMembers(i.guild, c);
-    for (const entry of list) lines.push(entry.link
-      ? `• [${c.clan_tag}] <@${entry.member.id}> — ${profileLink(entry.link.openfront_id, entry.ofUsername || entry.link.openfront_id)}`
-      : `• [${c.clan_tag}] <@${entry.member.id}> — needs to use /link`);
+    for (const entry of list) entries.push({ config: c, entry });
   }
+  const currentMembers = await members(i.guild);
+  await requireClanAccess(i.guild, i.user.id);
+  if (JSON.stringify(db.getGuildConfigs(i.guildId).map(configSnapshot)) !== configsSnapshot)
+    throw new CommandError("Clan configuration changed while loading. Try again.");
+  const lines = entries.filter(({config, entry}) => {
+    const currentMember = currentMembers.get(entry.member.id);
+    const currentLink = db.getEffectiveLink(i.guildId, entry.member.id);
+    return !!currentMember && !currentMember.user.bot && !!config.join_role_id && currentMember.roles.cache.has(config.join_role_id) &&
+      (entry.link ? identityBindingCurrent(i.guildId, entry.link) : !currentLink);
+  }).map(({config, entry}) => entry.link
+    ? `• [${config.clan_tag}] <@${entry.member.id}> — ${profileLink(entry.link.openfront_id, entry.ofUsername || entry.link.openfront_id)}`
+    : `• [${config.clan_tag}] <@${entry.member.id}> — needs to use /link`);
   const page = pageOf(lines, pageNumber(i), 15);
   await sendEmbeds(i, [new EmbedBuilder().setTitle("Pending clan invitations").setColor(lines.length ? 0xf59e0b : 0x22c55e)
     .setDescription(page.items.join("\n") || "No pending invitations were found.")
@@ -215,9 +226,11 @@ async function pending(i: GuildCommand, sync: ClanSyncService) {
 
 async function roster(i: GuildCommand) {
   const [c] = configs(i);
+  const allConfigs = db.getGuildConfigs(i.guildId);
+  const configsSnapshot = JSON.stringify(allConfigs.map(configSnapshot));
   const allMembers = await members(i.guild);
   const links = db.getEffectiveLinks(i.guildId).filter((link) => allMembers.has(link.discord_id));
-  const rows: { id: string; name: string; line: string }[] = [];
+  const candidates: { link: LinkedUser; name: string; role: string; clans: OpenFrontClanMembership[] }[] = [];
   let next = 0;
   let unavailable = 0;
   await Promise.all(Array.from({ length: Math.min(4, links.length) }, async () => {
@@ -226,20 +239,28 @@ async function roster(i: GuildCommand) {
       try {
         const profile = await openfrontApi.getPlayerProfile(link.openfront_id);
         if (!profile || !profile.clans) { unavailable++; continue; }
-        if (db.getEffectiveLink(i.guildId, link.discord_id)?.openfront_id !== link.openfront_id) continue;
+        if (!identityBindingCurrent(i.guildId, link)) continue;
         const clan = profile.clans.find((entry) => entry.tag.toUpperCase() === c.clan_tag);
         if (!clan) continue;
         const name = profile.username || link.openfront_username || link.openfront_id;
-        const discordMember = allMembers.get(link.discord_id)!;
-        const expected = [c.member_role_id,
-          clan.role !== "member" ? c.officer_role_id : null, clan.role === "leader" ? c.leader_role_id : null].filter((id): id is string => !!id);
-        const wanted = desiredRoles(db.getGuildConfigs(i.guildId), profile.clans);
-        const mismatch = expected.some((id) => !discordMember.roles.cache.has(id)) ||
-          managedRoles([c]).some((id) => discordMember.roles.cache.has(id) && !wanted.has(id));
-        rows.push({ id: link.discord_id, name, line: `• <@${link.discord_id}> — ${profileLink(link.openfront_id, name)} · ${clan.role}${mismatch ? " · roles need sync" : ""}` });
+        candidates.push({ link, name, role: clan.role, clans: profile.clans });
       } catch { unavailable++; }
     }
   }));
+  const currentMembers = await members(i.guild);
+  await requireClanAccess(i.guild, i.user.id);
+  if (JSON.stringify(db.getGuildConfigs(i.guildId).map(configSnapshot)) !== configsSnapshot)
+    throw new CommandError("Clan configuration changed while loading. Try again.");
+  const rows = candidates.flatMap(({link, name, role, clans}) => {
+    const discordMember = currentMembers.get(link.discord_id);
+    if (!discordMember || discordMember.user.bot || !identityBindingCurrent(i.guildId, link)) return [];
+    const expected = [c.member_role_id, role !== "member" ? c.officer_role_id : null,
+      role === "leader" ? c.leader_role_id : null].filter((id): id is string => !!id);
+    const wanted = desiredRoles(allConfigs, clans);
+    const mismatch = expected.some(id => !discordMember.roles.cache.has(id)) ||
+      managedRoles([c]).some(id => discordMember.roles.cache.has(id) && !wanted.has(id));
+    return [{ id: link.discord_id, name, line: `• <@${link.discord_id}> — ${profileLink(link.openfront_id, name)} · ${role}${mismatch ? " · roles need sync" : ""}` }];
+  });
   rows.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   const page = pageOf(rows, pageNumber(i), 15);
   await sendEmbeds(i, [new EmbedBuilder().setTitle(`Clan roster: [${c.clan_tag}]`).setColor(0x3b82f6)

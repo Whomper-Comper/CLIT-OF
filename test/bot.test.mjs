@@ -167,7 +167,8 @@ test("configuration output pages large servers within Discord limits", async () 
 
 test("pending invitations paginate members rather than silently truncating them", async () => {
   const guild = guildFixture("pending-pages"); db.setGuildClanConfig(config(guild.id));
-  const list = Array.from({ length: 22 }, (_, index) => ({ member: { id: `pending-${index}` }, link: null }));
+  const list = Array.from({ length: 22 }, (_, index) => ({ member: memberFixture(guild, `pending-${index}`, ['join']), link: null }));
+  guild.members.fetch = async () => new Map(list.map(entry => [entry.member.id, entry.member]));
   const i = interaction("pending", guild, { page: 2 });
   await clanCommand.execute(i, { getPendingJoinMembers: async () => list });
   assert.match(i.output.embeds[0].data.description, /pending-21/);

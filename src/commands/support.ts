@@ -1,7 +1,7 @@
 import { ChatInputCommandInteraction, EmbedBuilder, escapeMarkdown, MessageFlags } from "discord.js";
 import { CommandLimits, MemberLocks } from "../queues.js";
 import { resolveOpenFrontId, extractDiscordId } from "../utils.js";
-import { db } from "../db.js";
+import { db, type LinkedUser } from "../db.js";
 
 import { CommandError } from "../commandError.js";
 export { CommandError } from "../commandError.js";
@@ -11,6 +11,12 @@ export function commandReplyOptions(i: { guildId: string | null }) {
   return i.guildId && db.getDebugSettings(i.guildId)?.ephemeral_replies === 0 ? {} : privateReply;
 }
 export const identityLocks = new MemberLocks();
+/** A captured link is usable only while the same scoped identity binding remains current. */
+export function identityBindingCurrent(guildId: string | null, binding: Pick<LinkedUser, "discord_id" | "openfront_id" | "linked_at"> | null): boolean {
+  if (!binding) return true;
+  const current = guildId ? db.getEffectiveLink(guildId, binding.discord_id) : db.getUserByDiscordId(binding.discord_id);
+  return !!current && current.openfront_id === binding.openfront_id && current.linked_at === binding.linked_at;
+}
 const limits = new CommandLimits();
 
 export function throttle(key: string, milliseconds = 10_000) {

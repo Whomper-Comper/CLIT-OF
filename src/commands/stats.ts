@@ -8,7 +8,7 @@ import { openfrontApi, OpenFrontApiError, OpenFrontPlayerGame } from "../api.js"
 import { extractDiscordId, toEpochSeconds } from "../utils.js";
 import { PlayerStatsSummary, PlayerStatsType, summarizePlayerStats, winRate } from "../playerStats.js";
 import { AnalyticsMode, AnalyticsPeriod, loadPlayerAnalytics, normalizeMapName } from "../playerAnalytics.js";
-import { CommandError, label, playerId, profileLink, shortText, throttle } from "./support.js";
+import { CommandError, identityBindingCurrent, label, playerId, profileLink, shortText, throttle } from "./support.js";
 import { alignedBarChart } from "./statsGraph.js";
 import { eloLineGraph, RatingGraphPoint } from "./statsLineGraph.js";
 import { commandErrorMessage } from "./errorMessages.js";
@@ -83,6 +83,7 @@ export const statsCommand = {
     let profile;
     try { profile = await openfrontApi.getPlayerProfile(id); }
     catch (error) { if (!link) throw error; }
+    if (!identityBindingCurrent(interaction.guildId, link)) throw new CommandError("The identity link changed while loading. Run `/stats` again.");
     if (!profile && !link) throw new CommandError("That OpenFront profile was not found, and no link is available here.");
     const name = profile?.username || link?.openfront_username || id;
     const base = new EmbedBuilder().setTitle(shortText(`Stats: ${label(name)}`, 256)).setColor(profile ? 0x3b82f6 : 0xf59e0b)
@@ -104,6 +105,7 @@ export const statsCommand = {
         if (!sessionLive(session)) throw new CommandError("These statistics expired while loading. Run `/stats` again.");
         if (!historyEnabled(session.guildId)) throw new CommandError("Player game history was disabled while these statistics loaded.");
       }
+      if (!identityBindingCurrent(interaction.guildId, link)) throw new CommandError("The identity link changed while loading. Run `/stats` again.");
       const message = await interaction.editReply(render(session, error));
       session.messageId = message?.id ?? null;
     } catch (error) { tabs.delete(session.id); throw error; }
@@ -136,6 +138,14 @@ export async function handleStatsInteraction(interaction: Interaction): Promise<
   try {
     await interaction.deferUpdate();
     if (!sessionLive(session)) { await interaction.followUp({ content: "These statistics expired. Run `/stats` again.", flags: MessageFlags.Ephemeral }); return true; }
+    const invalidateIdentity = async () => {
+      tabs.delete(id);
+      const message = "The identity link changed. Run `/stats` again.";
+      await interaction.editReply({ embeds: [new EmbedBuilder().setTitle("Statistics unavailable").addFields({ name: "Identity changed", value: message })],
+        components: [], files: [], attachments: [], allowedMentions: { parse: [] } });
+      await interaction.followUp({ content: message, flags: MessageFlags.Ephemeral });
+    };
+    if (!sessionIdentityCurrent(session)) { await invalidateIdentity(); return true; }
     if (modes.includes(action as AnalyticsMode)) session.mode = action as AnalyticsMode;
     else if (action === "stats" || action === "buildings" || action === "history" || action === "elo") session.page = action;
     else if (action === "graphs" || action === "numbers") session.view = action;
@@ -156,6 +166,7 @@ export async function handleStatsInteraction(interaction: Interaction): Promise<
         : "These statistics expired while loading. Run `/stats` again.", flags: MessageFlags.Ephemeral });
       return true;
     }
+    if (!sessionIdentityCurrent(session)) { await invalidateIdentity(); return true; }
     const state = session.history.get(session.mode);
     if (session.page === "history" && state) {
       if (action === "previous") state.index = Math.max(0, state.index - 1);
@@ -167,6 +178,10 @@ export async function handleStatsInteraction(interaction: Interaction): Promise<
 }
 
 function sessionLive(session: StatsTabs) { return tabs.get(session.id) === session && session.expiresAt > Date.now(); }
+function sessionIdentityCurrent(session: StatsTabs) {
+  return identityBindingCurrent(session.guildId, session.discordId && session.identityVersion
+    ? { discord_id: session.discordId, openfront_id: session.playerId, linked_at: session.identityVersion } : null);
+}
 
 function assertHistoryCurrent(session: StatsTabs) {
   let reason = session.historyInvalid;

@@ -114,8 +114,10 @@ export class HistoryCollector {
     }
     if (this.stopping || !deletion.healthy || !this.options.buildWeeklyReport) return;
     // Discord sends are bounded too, and rotate across servers independently of collection pagination.
-    const ordered = [...snapshots.values()].sort((a,b)=>Number(this.db.history.getMeta(`weekly_work:${a.guild.id}`) ?? 0)-Number(this.db.history.getMeta(`weekly_work:${b.guild.id}`) ?? 0));
-    for (const snapshot of ordered.slice(0,2)) {
+    const ordered = [...snapshots.values()].map(snapshot => ({
+      snapshot, priority: Number(this.db.history.getMeta(`weekly_work:${snapshot.guild.id}`) ?? 0),
+    })).sort((a,b) => a.priority-b.priority);
+    for (const {snapshot} of ordered.slice(0,2)) {
       if (this.stopping) return;
       await this.deliverWeekly(snapshot);
       if (!this.stopping) this.db.history.setMeta(`weekly_work:${snapshot.guild.id}`,String(this.now()));

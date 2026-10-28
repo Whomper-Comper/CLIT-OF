@@ -87,6 +87,10 @@ Access is intentionally separate from identity ownership:
 
 Configuration sessions live in memory for ten minutes and bind a random session ID to the owner and guild, with at most 200 retained sessions. Statistics sessions also last ten minutes, bind the original message, reject concurrent button loads and retain at most 500 sessions. Expired entries are removed as new sessions are opened; reaching a cap evicts the oldest map entry. History-dependent statistics pages recheck history settings revision, identity/link timestamp and deletion tombstones after asynchronous work; invalidation clears cached history, analytics and Elo graph state. Session maps, throttles and locks disappear on restart; database checkpoints and jobs survive.
 
+Whois and statistics lookups that use a saved link recheck that scoped identity and timestamp after profile requests. Statistics also rechecks before its initial reply and subsequent page edits; an unlinked public-ID lookup has no saved binding to revalidate. Already published messages have their own lifetime.
+
+Clan pending and roster reports refresh server membership and recheck the caller's clan access after slow lookups. They verify the saved clan mappings and each returned identity binding before constructing the final page, excluding departed members and stale approvals or links.
+
 ## Role reconciliation and queue invariants
 
 `desiredRoles()` computes the union across every configured clan membership. A shared officer role remains earned if at least one configured membership qualifies. Members receive member roles; officer/leader membership can earn officer roles; leader membership can additionally earn a leader role. Approval/join roles belong to server staff; direct sync and queued cleanup do not remove a role configured as an approval role for any clan, even if another clan also maps it as a rank role.
@@ -206,6 +210,8 @@ One shared leaderboard page per eligible tick supplies Elo observations for all 
 Elo retention pruning reads the relevant guild settings in one joined query, then applies each guild's own cutoff and the existing default and bounds.
 
 Weekly scheduling uses the selected timezone's civil calendar and DST-aware conversion, independently of the host timezone. The latest due schedule covers the preceding complete local Monday-to-Monday week. `weekly_since` avoids publishing a scheduled period from before weekly delivery was enabled. The worker attempts at most two guilds per tick and rotates guild delivery work separately from collection pages.
+
+The weekly rotation reads each eligible guild's saved work priority once before sorting, rather than issuing database reads from the sort comparator; ties retain the existing snapshot order.
 
 Delivery persists `pending → sending → sent`, with retryable failures returning to pending and a terminal failed state after the bounded attempt budget. Each guild/period has a deterministic nonce. Before retrying a prior attempt, it searches the most recent 100 channel messages for its own report footer marker and records a match as sent; sending also uses Discord nonce enforcement. This reduces duplicate sends but is not an unlimited, transactional exactly-once guarantee across Discord and SQLite. A changed pending destination is failed rather than sent to an obsolete channel. Permission, membership, identity, settings and configured-tag checks happen before sending. Failed deliveries are not automatically retried forever.
 
