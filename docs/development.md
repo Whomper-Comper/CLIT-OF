@@ -10,6 +10,7 @@ Read the [architecture](architecture.md) before changing persistence, identity, 
 - [Test inventory](#test-inventory)
 - [Adding or changing a command](#adding-or-changing-a-command)
 - [Adding settings or a migration](#adding-settings-or-a-migration)
+- [Efficient database work](#efficient-database-work)
 - [Adding an API field, statistics mode or report](#adding-an-api-field-statistics-mode-or-report)
 - [Working with asynchronous state safely](#working-with-asynchronous-state-safely)
 
@@ -127,6 +128,16 @@ Trace a setting through schema/defaults, interfaces, validation, persistence, re
 An additive migration belongs in the backed-up initialization transaction (`db.ts`, or `HistoryStore.initialize` for history). Inspect schema columns before adding fields so opening an existing database is repeatable. Specify insert/copy columns explicitly; older physical column order can differ from a new database. A one-time data transformation needs a durable metadata marker and fixture coverage for both legacy/default and custom values. Never rewrite user customization on every startup.
 
 Add defaults consistently to both the SQL schema and application fallback settings. Define cleanup when disabling or removing a setting, and invalidate in-flight work/sessions when its revision changes. Test stale writes, migration idempotence and preexisting data preservation using temporary databases. Test backup failure behavior when modifying initialization. A backup file's existence is not sufficient proof that it contains committed WAL data or passes integrity checking.
+
+## Efficient database work
+
+Reuse the store APIs that batch a shared scope: `HistoryStore.ensureJobs` preserves unchanged job checkpoints and retry state, `recordEloBatch` shares one observation timestamp per guild, and `getCoverageBySubject` streams coverage for a requested inventory. Job pruning remains separate from ensuring supplied bindings. Keep identity replacement, deleted-account suppression, duplicate-input order and partial-failure rollback intact when changing these paths. Savepoints compose with caller-owned transactions and must finish before an awaited external call.
+
+An effective-link inventory includes bot-wide verified users as well as eligible server-only links. Intersect it with freshly fetched human membership for human reports, or the appropriate current roster for reconciliation. Do not assume every returned identity belongs to the current server or reuse an eligibility snapshot across an await without checking the original binding and current state again.
+
+For lists, select bounded payload rows in SQLite and decode only the displayed page. Count or project scalar fields separately when needed, keeping the same ordering, cap, guild scope and draft filtering. Preserve request/send limits and durable fairness when reducing repeated work in a background task. Pure helpers such as `roles.ts` should use type-only imports for database contracts rather than importing the runtime singleton.
+
+Prove a performance change with real operation counts or query plans alongside observable results, boundaries and failure/race coverage. The [architecture evidence](architecture.md#local-performance-evidence) records the existing fixtures and their limits; a smaller query count alone does not prove correct identity scope or bounded payload processing. Update the test inventory when adding or removing a suite, and use the current runner output for pass counts.
 
 ## Adding an API field, statistics mode or report
 

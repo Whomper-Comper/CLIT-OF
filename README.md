@@ -18,6 +18,7 @@ Start with the guide for your role. The detailed references describe the impleme
 | [Architecture](docs/architecture.md) | Runtime flows, source map, database tables, queues, identity rules, caching, sessions, and reliability boundaries |
 | [Development](docs/development.md) | Local workflow, test inventory, targeted checks, and extending commands, settings, and data collection |
 | [Agent guidance](AGENTS.md) | Shared instructions for AI agents working locally or from GitHub |
+| [Local agent handoff](docs/local-agent-guide.md) | Portable checkout, verification, and publication workflow, with boundaries for related projects |
 
 ## What the bot does
 
