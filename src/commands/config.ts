@@ -9,7 +9,7 @@ import { hasConfigAccess, requireConfigAccess } from "../access.js";
 import { openfrontApi } from "../api.js";
 import { ClanDraft, clanDraft, configSnapshot, newClanDraft, normalizeClanTag, validateClanDraft } from "../setupConfig.js";
 import { CommandError, label, privateReply, shortText, throttle } from "./support.js";
-import { buildCoverageEmbeds, buildDoctorEmbeds } from "../reporting.js";
+import { buildCoverageReport, buildDoctorEmbeds, reportSettingsGuard } from "../reporting.js";
 import { commandErrorMessage } from "./errorMessages.js";
 import { HistorySettings } from "../historyStore.js";
 
@@ -292,9 +292,14 @@ export async function handleConfigInteraction(i: Interaction): Promise<boolean> 
       await i.editReply(render(s, true, "Clan removed. Obsolete roles are queued for cleanup.")); return true;
     } else if (action === "doctor" || action === "coverage") {
       throttle(`${action}:${i.guildId}`, 15_000);
+      const currentSettings = reportSettingsGuard(i.guildId);
       const configs = db.getGuildConfigs(i.guildId);
-      const embeds = action === "doctor" ? await buildDoctorEmbeds(i.guild, configs, { accessRoleId: db.getGuildSettings(i.guildId)?.manager_role_id, jobs: db.getQueueSummary(i.guildId) })
-        : await buildCoverageEmbeds(i.guild, configs);
+      const coverage = action === "coverage" ? await buildCoverageReport(i.guild, configs) : null;
+      const embeds = coverage?.embeds ?? await buildDoctorEmbeds(i.guild, configs, { accessRoleId: db.getGuildSettings(i.guildId)?.manager_role_id, jobs: db.getQueueSummary(i.guildId) });
+      await requireConfigAccess(i.guild, i.user.id);
+      ensureLive(s);
+      currentSettings();
+      coverage?.assertCurrent();
       await i.followUp({ embeds, ...privateReply, allowedMentions: { parse: [] } }); return true;
     } else throw new CommandError("That menu action is no longer available. Reopen /config.");
     await i.editReply(render(s, true));

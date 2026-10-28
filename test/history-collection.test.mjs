@@ -253,6 +253,46 @@ test("a deletion-feed gap beyond seven days clears retained player rows and tomb
     assert.equal(f.db.history.getPlayerMatches("guild","2000","2099").length,0);
   } finally {await f.close();}
 });
+for (const [label, offset, preserve] of [
+  ['one millisecond before the safe feed cutoff', -7*DAY+59_999, false],
+  ['exactly at the safe feed cutoff', -7*DAY+60_000, true],
+  ['one millisecond after the safe feed cutoff', -7*DAY+60_001, true],
+  ['a future checkpoint', DAY, false],
+]) test(`deletion sync handles ${label} without claiming an unchecked gap`, async () => {
+  const f = fixture({ budget: 1 });
+  try {
+    f.link();
+    f.db.history.upsertPlayerMatches('guild', 'public', 'discord', [playerRow('2026-10-15T00:00:00.000Z')]);
+    f.db.history.recordElo('guild', 'public', 'discord', '1v1', 1234, f.now());
+    f.db.history.setMeta('deletions_last_success', new Date(f.now()+offset).toISOString());
+    let requests = 0;
+    f.api.getRecentlyDeletedPlayers = async since => {
+      requests++;
+      assert.equal(since, new Date(f.now()-7*DAY+60_000).toISOString());
+      return [];
+    };
+    await f.collector.collectOnce();
+    assert.equal(requests, 1, 'an invalid checkpoint cannot suppress the deletion check');
+    assert.equal(f.db.history.getPlayerMatches('guild', '2000', '2099').length, preserve ? 1 : 0);
+    assert.equal(f.db.history.getStatus('guild').eloObservations, preserve ? 1 : 0);
+    assert.equal(f.db.history.getMeta('deletions_last_success'), new Date(f.now()).toISOString());
+  } finally { await f.close(); }
+});
+
+test('failed deletion fetch at a feed gap clears unsafe rows without advancing success', async () => {
+  const f = fixture({ budget: 1 });
+  try {
+    f.link();
+    f.db.history.upsertPlayerMatches('guild', 'public', 'discord', [playerRow('2026-10-15T00:00:00.000Z')]);
+    const previous = new Date(f.now()-7*DAY+30_000).toISOString();
+    f.db.history.setMeta('deletions_last_success', previous);
+    f.api.getRecentlyDeletedPlayers = async () => { throw new Error('unavailable'); };
+    await f.collector.collectOnce();
+    assert.equal(f.db.history.getPlayerMatches('guild', '2000', '2099').length, 0);
+    assert.equal(f.db.history.getMeta('deletions_last_success'), previous);
+    assert.match(f.db.history.getMeta('deletions_error'), /unavailable/);
+  } finally { await f.close(); }
+});
 test("changing configured clan tags rebuilds player history and coverage while preserving Elo until unlink",async()=> {
   const f=fixture({budget:4});
   try {

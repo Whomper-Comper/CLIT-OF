@@ -97,6 +97,66 @@ test("player deletion queries use indexed searches across guilds", () => {
   } finally {raw.close();}
 });
 
+test("identity cleanup uses indexed identity and guild probes after repeatable migration", () => {
+  const raw = new DatabaseSync(":memory:");
+  try {
+    HistoryStore.initialize(raw);
+    // Simulate an existing database populated before the cleanup indexes were added.
+    raw.exec(`DROP INDEX IF EXISTS history_player_identity;
+      DROP INDEX IF EXISTS history_elo_identity;
+      DROP INDEX IF EXISTS history_job_identity;`);
+    const baseline = new HistoryStore(raw);
+    for (const guild of ["g","other"]) {
+      baseline.upsertPlayerMatches(guild,"match-only","target",[player("target-game")]);
+      baseline.ensureJob(guild,"player","job-only",now,"target","version");
+      baseline.recordElo(guild,"elo-only","target","1v1",1000,now);
+      for (const publicId of ["match-only","job-only","elo-only"])
+        baseline.markCoverage({guild_id:guild,kind:"player",subject:publicId,window_start:at,window_end:"2026-10-17T12:00:00.000Z"},now);
+      for (let i=0;i<50;i++) {
+        baseline.upsertPlayerMatches(guild,`unrelated-${i}`,`member-${i}`,[player("other-game")]);
+        baseline.ensureJob(guild,"player",`unrelated-${i}`,now,`member-${i}`,"version");
+        baseline.recordElo(guild,`unrelated-${i}`,`member-${i}`,"1v1",1100,now);
+      }
+      baseline.recordElo(guild,"public-profile",null,"1v1",1200,now);
+    }
+    const tables = ["history_player_matches","history_observed_elo","history_jobs","history_coverage"];
+    const snapshot = () => tables.map(table=>raw.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
+    const before = snapshot();
+    HistoryStore.initialize(raw);
+    HistoryStore.initialize(raw);
+    assert.deepEqual(snapshot(),before,"adding indexes and reopening must preserve retained data");
+
+    const plans = [];
+    const history = new HistoryStore({prepare(query) {
+      const statement = raw.prepare(query);
+      if (!query.startsWith("SELECT") || !query.includes("discord_id=?")) return statement;
+      return {all(...parameters) {
+        plans.push({query,details:raw.prepare(`EXPLAIN QUERY PLAN ${query}`).all(...parameters).map(row=>row.detail)});
+        return statement.all(...parameters);
+      }};
+    }});
+    history.purgeMember("g","target");
+    assert.equal(raw.prepare("SELECT count(*) AS count FROM history_player_matches WHERE guild_id='other' AND discord_id='target'").get().count,1);
+    assert.equal(raw.prepare("SELECT count(*) AS count FROM history_coverage WHERE guild_id='g'").get().count,0);
+    history.purgeIdentity("target");
+    for (const table of tables.slice(0,3))
+      assert.equal(raw.prepare(`SELECT count(*) AS count FROM ${table} WHERE discord_id='target'`).get().count,0,table);
+    assert.equal(raw.prepare("SELECT count(*) AS count FROM history_coverage").get().count,0);
+    assert.equal(raw.prepare("SELECT count(*) AS count FROM history_player_matches").get().count,100);
+    assert.equal(raw.prepare("SELECT count(*) AS count FROM history_jobs").get().count,100);
+    assert.equal(raw.prepare("SELECT count(*) AS count FROM history_observed_elo").get().count,102);
+    assert.equal(raw.prepare("SELECT count(*) AS count FROM history_observed_elo WHERE discord_id IS NULL").get().count,2);
+
+    assert.equal(plans.length,3,"exercise the global lookup and both scoped member lookups");
+    for (const {query,details} of plans) for (const table of tables.slice(0,3)) {
+      const access = details.find(detail=>detail.startsWith(`SEARCH ${table} `));
+      assert.ok(access?.includes("COVERING INDEX") && access.includes("discord_id=?"),`${query}: ${JSON.stringify(details)}`);
+      if (query.includes("WHERE guild_id=?"))
+        assert.ok(access.includes("guild_id=?"),`${table} must constrain both the identity and guild`);
+    }
+  } finally {raw.close();}
+});
+
 test("Elo retention uses the caller's captured clock at its exact boundary", () => {
   const raw = new DatabaseSync(":memory:");
   try {

@@ -49,12 +49,14 @@ export class HistoryCollector {
   }
   private async deletionSync(now: number): Promise<{ healthy: boolean; requests: number }> {
     const last = this.db.history.getMeta("deletions_last_success"), previous = last ? Date.parse(last) : NaN;
-    if (Number.isFinite(previous) && now-previous < DAY) return { healthy: true,requests: 0 };
-    // The endpoint retains seven days; an older checkpoint cannot prove that retained IDs still exist.
-    if (!Number.isFinite(previous) || now-previous > 7*DAY) this.db.history.clearAllPlayerHistory();
+    const validCheckpoint = Number.isFinite(previous) && previous <= now;
+    if (validCheckpoint && now-previous < DAY) return { healthy: true,requests: 0 };
+    // Keep the request inside the feed's retention boundary, including transport time.
+    const earliest = now-7*DAY+60_000;
+    // Any interval skipped by that safety margin is a gap in deletion coverage too.
+    if (!validCheckpoint || previous < earliest) this.db.history.clearAllPlayerHistory();
     try {
-      const earliest = now-7*DAY+60_000;
-      const deleted = await this.api.getRecentlyDeletedPlayers(new Date(Math.max(earliest,Number.isFinite(previous) ? previous-60_000 : earliest)).toISOString(),{fresh:true});
+      const deleted = await this.api.getRecentlyDeletedPlayers(new Date(Math.max(earliest,validCheckpoint ? previous-60_000 : earliest)).toISOString(),{fresh:true});
       if (this.stopping) return {healthy:false,requests:1};
       for (const player of deleted) this.db.history.purgePlayer(player.publicId,player.deletedAt);
       this.db.history.setMeta("deletions_last_success",new Date(now).toISOString());

@@ -194,6 +194,8 @@ Coverage compares linked current human Discord members against all current human
 
 Profile checking is limited to the first 250 linked humans with a 90-second work deadline and up to five concurrent workers. Unavailable/unexamined profiles make clan counts partial. Public results may be cached up to 15 seconds; counts can change while checking, including a confirmed linked count briefly exceeding the reported clan size. Each report page covers up to 10 clans, but its Discord human-link totals cover the server.
 
+After those requests, coverage refreshes server membership and links before calculating its totals. Departed members and removed links no longer contribute; newly linked or reverified identities count as unchecked until another report. If the final membership refresh fails, no report is released.
+
 ### Link audit
 
 ```text
@@ -215,6 +217,8 @@ Doctor refreshes role state and bot permissions, checks normal/managed role rest
 Queued retries count as issues. A role job eligible for over 15 minutes is flagged. A saved clan timestamp older than `max(15 minutes, three configured sync intervals)` is flagged overdue. With no clans configured, API clan reachability cannot be established through this report. General status and issue counts are for the displayed page and current checks.
 
 The `/config` home **Diagnostics** and **Link coverage** buttons provide private first-page reports to configuration users, including Manage Server users who do not hold the clan role. For later pages, use slash reports with the config role. These reports share their 15-second action/server cooldowns.
+
+Both entry points check access again after loading. Changed clan mappings, access settings or history settings require a fresh report; configuration-menu reports also stop if the menu expires. Coverage is withheld if human membership or linked identities in this server change during the final access check.
 
 The debug role permits:
 

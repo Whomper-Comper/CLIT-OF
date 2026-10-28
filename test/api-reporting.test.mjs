@@ -6,7 +6,7 @@ process.env.DISCORD_TOKEN = "test";
 process.env.CLIENT_ID = "test";
 const { OpenFrontApi, OpenFrontApiError, openfrontApi } = await import("../dist/api.js");
 const { summarizePlayerStats, winRate } = await import("../dist/playerStats.js");
-const { buildCoverageEmbeds, buildDoctorEmbeds } = await import("../dist/reporting.js");
+const { buildCoverageReport, buildDoctorEmbeds } = await import("../dist/reporting.js");
 const { statsCommand, handleStatsInteraction } = await import("../dist/commands/stats.js");
 const { db } = await import("../dist/db.js");
 after(() => db.close());
@@ -167,7 +167,8 @@ test("coverage counts current Discord humans and describes clan figures as a low
     return profile({ clans: [{ tag: "test" }] });
   });
   t.mock.method(openfrontApi, "getClanInfo", async () => clan());
-  const [embed] = await buildCoverageEmbeds({ id: "guild", members: { fetch: async () => members } }, [config()]);
+  const { embeds: [embed], assertCurrent } = await buildCoverageReport({ id: "guild", members: { cache: members, fetch: async () => members } }, [config()]);
+  assertCurrent();
   const fields = embed.toJSON().fields;
   assert.match(fields.find((field) => field.name === "Discord Members Linked").value, /1 \/ 2 \(50.0%\)/);
   assert.match(fields.find((field) => field.name.includes("Clan Members Linked")).value, /At least 1 \/ 20 \(5.0%\)/);
@@ -175,11 +176,12 @@ test("coverage counts current Discord humans and describes clan figures as a low
 });
 
 test("coverage reports API failures as incomplete membership checks", async (t) => {
-  const members = new Map([["linked", { user: { bot: false } }]]);
+  const members = new Map([["linked", { id: "linked", user: { bot: false } }]]);
   t.mock.method(db, "getEffectiveLinks", () => [{ discord_id: "linked", openfront_id: "player" }]);
   t.mock.method(openfrontApi, "getPlayerProfile", async () => { throw new OpenFrontApiError(); });
   t.mock.method(openfrontApi, "getClanInfo", async () => clan());
-  const [embed] = await buildCoverageEmbeds({ id: "guild", members: { fetch: async () => members } }, [config()]);
+  const { embeds: [embed], assertCurrent } = await buildCoverageReport({ id: "guild", members: { cache: members, fetch: async () => members } }, [config()]);
+  assertCurrent();
   assert.match(embed.toJSON().fields.find((field) => field.name === "Current Clan Membership Checks").value, /1 unavailable.*counts are partial/);
   assert.equal(embed.toJSON().color, 0xf59e0b);
 });

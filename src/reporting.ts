@@ -1,7 +1,7 @@
 import { ChannelType, EmbedBuilder, Guild, PermissionFlagsBits } from "discord.js";
-import { db, GuildClanConfig } from "./db.js";
+import { db, GuildClanConfig, type LinkedUser } from "./db.js";
 import { openfrontApi, OpenFrontPlayerProfile } from "./api.js";
-import { clanDraft, draftErrors } from "./setupConfig.js";
+import { clanDraft, configSnapshot, draftErrors } from "./setupConfig.js";
 import { toEpochSeconds } from "./utils.js";
 import { CommandError, label, pageOf, shortText } from "./commands/support.js";
 
@@ -14,17 +14,43 @@ export interface QueueHealth {
 export interface DoctorOptions {
   page?: number; accessRoleId?: string | null; jobs?: QueueHealth;
 }
+export interface CoverageReport { embeds: EmbedBuilder[]; assertCurrent(): void }
+
+/** Sync timestamps may advance during a report; edited settings invalidate its captured checks. */
+export function reportSettingsGuard(guildId: string): () => void {
+  const snapshot = () => JSON.stringify([db.getGuildConfigs(guildId).map(configSnapshot),
+    db.getGuildSettings(guildId)?.revision ?? 0, db.history.getSettings(guildId).revision]);
+  const original = snapshot();
+  return () => {
+    if (snapshot() !== original) throw new CommandError("Report settings changed while loading. Try again.");
+  };
+}
+
+/** Bind validation to the exact roster and links used by the rendered report. */
+function coverageSnapshotGuard(guild: Guild, members: ReadonlySet<string>, capturedLinks: LinkedUser[]): () => void {
+  const humans = () => new Set([...guild.members.cache.values()].filter(member => !member.user.bot).map(member => member.id));
+  const links = () => db.getEffectiveLinks(guild.id).filter(link => members.has(link.discord_id));
+  const bindings = new Map(capturedLinks.map(link => [link.discord_id, `${link.openfront_id}:${link.linked_at}`]));
+  return () => {
+    const currentMembers = humans(), currentLinks = links();
+    if (currentMembers.size !== members.size || [...members].some(id => !currentMembers.has(id)) ||
+        currentLinks.length !== bindings.size || currentLinks.some(link => bindings.get(link.discord_id) !== `${link.openfront_id}:${link.linked_at}`)) {
+      throw new CommandError("Server membership or linked identities changed while loading. Try again.");
+    }
+  };
+}
 
 /** Counts are scoped to people in this server. A full clan roster requires OpenFront account authentication. */
-export async function buildCoverageEmbeds(guild: Guild, configs: GuildClanConfig[], page = 1): Promise<EmbedBuilder[]> {
+export async function buildCoverageReport(guild: Guild, configs: GuildClanConfig[], page = 1): Promise<CoverageReport> {
   const selected = pageOf(configs, page, 10);
-  let members;
-  try { members = await guild.members.fetch(); }
-  catch { throw new CommandError("Could not load all server members to calculate link coverage. Please try again."); }
-  const humans = [...members.values()].filter((member) => !member.user.bot);
-  const links = db.getEffectiveLinks(guild.id).filter((link) => members.get(link.discord_id) && !members.get(link.discord_id)!.user.bot);
-  const profiles: OpenFrontPlayerProfile[] = [];
-  let unavailable = 0, checked = 0, next = 0;
+  const fetchMembers = async () => {
+    try { return await guild.members.fetch(); }
+    catch { throw new CommandError("Could not load all server members to calculate link coverage. Please try again."); }
+  };
+  const initialMembers = await fetchMembers();
+  const links = db.getEffectiveLinks(guild.id).filter((link) => initialMembers.has(link.discord_id) && !initialMembers.get(link.discord_id)!.user.bot);
+  const outcomes = new Map<string, { link: LinkedUser; profile: OpenFrontPlayerProfile | null }>();
+  let next = 0;
   const deadline = Date.now() + 90_000;
   // A large guild must not create thousands of concurrent requests or exceed Discord's interaction lifetime.
   const work = links.slice(0, 250);
@@ -32,24 +58,17 @@ export async function buildCoverageEmbeds(guild: Guild, configs: GuildClanConfig
     while (Date.now() < deadline) {
       const index = next++;
       if (index >= work.length) return;
-      checked++;
+      const link = work[index];
+      let profile: OpenFrontPlayerProfile | null = null;
       try {
-        const profile = await openfrontApi.getPlayerProfile(work[index].openfront_id);
-        if (profile && Array.isArray(profile.clans)) profiles.push(profile);
-        else unavailable++;
-      } catch { unavailable++; }
+        const result = await openfrontApi.getPlayerProfile(link.openfront_id);
+        if (result && Array.isArray(result.clans)) profile = result;
+      } catch { /* Report unavailable profiles without treating them as confirmed nonmembers. */ }
+      outcomes.set(link.discord_id, { link, profile });
     }
   }));
-  const unexamined = links.length - checked;
-  const partial = unavailable > 0 || unexamined > 0;
-  const embed = new EmbedBuilder().setTitle("OpenFront link coverage").setColor(partial ? 0xf59e0b : 0x3b82f6)
-    .setDescription("Counts use current human members of this Discord server. Bots are excluded.\nClan figures count confirmed current clan members linked here; people outside this Discord server are not checked.")
-    .addFields({ name: "Discord Members Linked", value: countLabel(links.length, humans.length), inline: true },
-      { name: "Discord Members Unlinked", value: (humans.length - links.length).toLocaleString("en-US"), inline: true },
-      { name: "Current Clan Membership Checks", value: `${profiles.length} profiles checked successfully out of ${links.length} linked Discord members.${partial ? ` ${unavailable} unavailable; ${unexamined} not checked. Clan counts are partial.` : ""}` });
-  if (!selected.items.length) embed.addFields({ name: "Clans", value: "No OpenFront clans are configured in this server." });
+  const clanTotals: { config: GuildClanConfig; total: number | null; detail: string }[] = [];
   for (const config of selected.items) {
-    const linked = profiles.filter((profile) => profile.clans!.some((clan) => clan.tag.toUpperCase() === config.clan_tag.toUpperCase())).length;
     let total: number | null = null;
     let detail: string;
     try {
@@ -58,13 +77,38 @@ export async function buildCoverageEmbeds(guild: Guild, configs: GuildClanConfig
       detail = clan ? "OpenFront does not expose a public member list, so this is the minimum linked fraction of the full clan."
         : "The configured clan was not found on OpenFront.";
     } catch { detail = "OpenFront's total clan size is temporarily unavailable."; }
+    clanTotals.push({ config, total, detail });
+  }
+  // Build every count from one final roster/link snapshot after all external requests finish.
+  const members = await fetchMembers();
+  const humans = [...members.values()].filter((member) => !member.user.bot);
+  const currentLinks = db.getEffectiveLinks(guild.id).filter(link => members.has(link.discord_id) && !members.get(link.discord_id)!.user.bot);
+  const assertCurrent = coverageSnapshotGuard(guild, new Set(humans.map(member => member.id)), currentLinks);
+  const profiles: OpenFrontPlayerProfile[] = [];
+  let unavailable = 0;
+  for (const link of currentLinks) {
+    const outcome = outcomes.get(link.discord_id);
+    if (!outcome || outcome.link.openfront_id !== link.openfront_id || outcome.link.linked_at !== link.linked_at) continue;
+    if (outcome.profile) profiles.push(outcome.profile);
+    else unavailable++;
+  }
+  const unexamined = currentLinks.length - profiles.length - unavailable;
+  const partial = unavailable > 0 || unexamined > 0;
+  const embed = new EmbedBuilder().setTitle("OpenFront link coverage").setColor(partial ? 0xf59e0b : 0x3b82f6)
+    .setDescription("Counts use current human members of this Discord server. Bots are excluded.\nClan figures count confirmed current clan members linked here; people outside this Discord server are not checked.")
+    .addFields({ name: "Discord Members Linked", value: countLabel(currentLinks.length, humans.length), inline: true },
+      { name: "Discord Members Unlinked", value: (humans.length - currentLinks.length).toLocaleString("en-US"), inline: true },
+      { name: "Current Clan Membership Checks", value: `${profiles.length} profiles checked successfully out of ${currentLinks.length} linked Discord members.${partial ? ` ${unavailable} unavailable; ${unexamined} not checked. Clan counts are partial.` : ""}` });
+  if (!selected.items.length) embed.addFields({ name: "Clans", value: "No OpenFront clans are configured in this server." });
+  for (const {config, total, detail} of clanTotals) {
+    const linked = profiles.filter((profile) => profile.clans!.some((clan) => clan.tag.toUpperCase() === config.clan_tag.toUpperCase())).length;
     const figures = total === null ? `${linked} confirmed linked here / total size unavailable`
       : linked > total ? `${linked} confirmed linked here / reported clan size ${total} (membership changed during the check)`
         : `At least ${countLabel(linked, total)} linked here`;
     embed.addFields({ name: `[${label(config.clan_tag)}] Clan Members Linked`, value: `${figures}\n${detail}` });
   }
   embed.setFooter({ text: `${selected.footer} · Public API results may be cached for up to 15 seconds.` });
-  return [embed];
+  return { embeds: [embed], assertCurrent };
 }
 
 /** Read-only checks against refreshed Discord state and uncached OpenFront clan details. */

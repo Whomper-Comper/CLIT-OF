@@ -446,6 +446,85 @@ test('trusted staged production finalization publishes complete generations with
   }
 });
 
+for (const mode of ['disabled', 'unavailable']) {
+  test(`${mode} game evidence stages availability without reading retained game payloads and scans after recovery`, async () => {
+    const f = communityFixture();
+    const originalParse = JSON.parse;
+    let prepare;
+    try {
+      const { store, board } = setup(f);
+      const matches = Array.from({ length: 451 }, (_, i) => session(f.now() + i, String(i).padStart(4, '0')));
+      f.db.history.upsertPlayerMatches('g', 'p', 'u', matches);
+      f.db.community.availability.save({ guildId: 'g', discordId: 'unlinked', timezone: 'UTC',
+        windows: [{ id: 'w', weekday: 1, startMinute: 60, endMinute: 120 }] }, 0, f.now());
+      if (mode === 'disabled') {
+        const { guild_id, revision, ...draft } = f.db.history.getSettings('g');
+        f.db.history.saveSettings('g', { ...draft, collection_enabled: 0 }, revision);
+      } else f.db.history.setMeta('deletions_error', 'offline');
+      const identities = new Map([['u', identity(f)]]), members = new Set(['u', 'unlinked']), tags = new Set(['MARS']);
+      store.syncEvidenceEligibility('g', [...identities.values()], members, tags);
+      const snapshot = store.evidenceSnapshot('g', board.id, f.now());
+      const stage = store.beginEvidenceStage(snapshot, f.now());
+      let historyPayloadReads = 0, parsedGamePayloads = 0;
+      prepare = f.db.db.prepare.bind(f.db.db);
+      f.db.db.prepare = sql => {
+        if (sql.includes('payload') && sql.includes('history_player_matches')) historyPayloadReads++;
+        return prepare(sql);
+      };
+      JSON.parse = (...args) => {
+        if (typeof args[0] === 'string' && args[0].includes('"gameId"') && args[0].includes('"gameStart"')) parsedGamePayloads++;
+        return originalParse(...args);
+      };
+      assert.deepEqual(store.stageEvidencePage(stage, identities, tags, members, f.now()), { phase: 'ready', processed: 1 });
+      store.finalizeEvidenceStage(stage, f.now());
+      assert.equal(historyPayloadReads, 0);
+      assert.equal(parsedGamePayloads, 0);
+      assert.equal(store.get('g', board.id).cells[0].progress, 0);
+      assert.equal(store.get('g', board.id).cells[11].progress, 1);
+      assert.equal(store.needsEvidenceRefresh('g', board.id, f.now()), false);
+      assert.equal(f.db.db.prepare('SELECT count(*) AS n FROM history_player_matches WHERE guild_id=?').get('g').n, 451);
+
+      // Skipping games must still bind a ready stage to the current member inventory.
+      const guarded = store.beginEvidenceStage(snapshot, f.now());
+      store.stageEvidencePage(guarded, identities, tags, members, f.now());
+      store.syncEvidenceEligibility('g', [...identities.values()], ['u'], tags);
+      assert.throws(() => store.finalizeEvidenceStage(guarded, f.now()), /changed/i);
+      store.syncEvidenceEligibility('g', [...identities.values()], members, tags);
+      const unavailableSnapshot = store.evidenceSnapshot('g', board.id, f.now());
+      const currentInventory = store.beginEvidenceStage(unavailableSnapshot, f.now());
+      store.stageEvidencePage(currentInventory, identities, tags, members, f.now());
+      store.finalizeEvidenceStage(currentInventory, f.now());
+      assert.equal(store.needsEvidenceRefresh('g', board.id, f.now()), false);
+      if (mode === 'disabled') {
+        const { guild_id, revision, ...draft } = f.db.history.getSettings('g');
+        f.db.history.saveSettings('g', { ...draft, collection_enabled: 1 }, revision);
+      } else f.db.history.setMeta('deletions_error', '');
+      assert.equal(store.gameEvidenceState('g', f.now()).status, 'observed');
+      assert.equal(store.needsEvidenceRefresh('g', board.id, f.now()), true);
+      assert.throws(() => store.beginEvidenceStage(unavailableSnapshot, f.now()), /changed/i);
+      const recovered = store.beginEvidenceStage(store.evidenceSnapshot('g', board.id, f.now()), f.now());
+      const processed = [];
+      let result;
+      do {
+        result = store.stageEvidencePage(recovered, identities, tags, members, f.now());
+        processed.push(result.processed);
+      } while (result.phase !== 'ready');
+      store.finalizeEvidenceStage(recovered, f.now());
+      assert.deepEqual(processed, [200, 200, 51, 1]);
+      assert.equal(historyPayloadReads, 3);
+      assert.equal(parsedGamePayloads, 451);
+      assert.equal(store.get('g', board.id).cells[0].progress, 451);
+      assert.equal(store.get('g', board.id).cells[3].progress, 451);
+      assert.equal(store.get('g', board.id).cells[11].progress, 1);
+      assert.equal(store.needsEvidenceRefresh('g', board.id, f.now()), false);
+    } finally {
+      JSON.parse = originalParse;
+      if (prepare) f.db.db.prepare = prepare;
+      await f.close();
+    }
+  });
+}
+
 test('partial, corrected, expired and privacy-invalidated stages never publish, and abandoned generations drain boundedly', async () => {
   const f = communityFixture();
   try {

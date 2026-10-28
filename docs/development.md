@@ -85,7 +85,7 @@ There are **54 test files** under `test/` in the documented source tree: the 24 
 
 | File | Behaviors protected |
 | --- | --- |
-| `test/access-config.test.mjs` | Explicit manager/debug roles; owner/admin boundaries; configuration/history menus; pagination and component limits; revisions, permission revocation after awaits, expired/busy sessions and conflicting edits |
+| `test/access-config.test.mjs` | Explicit manager/debug roles; owner/admin boundaries; configuration/history menus; pagination and component limits; revisions, permission revocation after awaits, expired/busy sessions, conflicting edits and final diagnostic/coverage release guards |
 | `test/api-reporting.test.mjs` | Coalesced/cloned/expired/fresh caches and generation ordering; response validation; exact profile/building arithmetic; graph alignment; coverage and fresh doctor diagnostics; statistics modes |
 | `test/backups.test.mjs` | Consistent WAL-inclusive snapshots; pre-migration contents; per-database rotation; invalid/new/in-memory database handling; process-owned deployment readiness |
 | `test/bot.test.mjs` | Command definitions and config validation; clan authorization/setup/removal/pagination; identity ownership and audit scoping; legacy migrations; role union/removal/stale-write checks; pacing, API failures and reply behavior |
@@ -93,12 +93,12 @@ There are **54 test files** under `test/` in the documented source tree: the 24 
 | `test/clan-sync-log-race.test.mjs` | Role-change logs do not publish stale destinations or identities after a write |
 | `test/clan-sync-mismatch-race.test.mjs` | Pending-invite summaries recheck identities, membership and approval roles before publication |
 | `test/clan-sync-schedule-race.test.mjs` | An empty sync cannot mark an edited clan mapping as already synchronized |
-| `test/clan-report-race.test.mjs` | Pending and roster reports recheck authorization, membership, mappings and identity bindings after slow lookups |
+| `test/clan-report-race.test.mjs` | Pending/roster/coverage/doctor authorization and mapping races; final coverage membership, unlink/replacement/reverification, newly linked members, refresh failure and identity changes during authorization |
 | `test/debug.test.mjs` | Explicit debug-role access; scoped exports; no credential leakage; revoked access and unavailable membership; oversized/empty exports; private diagnostic status/toggles and controlled error wording |
 | `test/dice.test.mjs` | Dice definition bounds/defaults; inclusive random boundaries; public animation/final result; invalid inputs and animation throttling |
 | `test/history-api.test.mjs` | Exact-ID ladder lookup and bounded absence; malformed/forbidden responses; cursor/filter cache isolation; known empty versus missing history; sessions/time bounds/clan schema; deletion feed and UTC normalization |
-| `test/history-collection.test.mjs` | Opt-in settings validation; deduplication and coverage; restart checkpoints and failure isolation; bounded rotation; unlink/settings/shutdown races; recorded tags and boundaries; deletion gaps; weekly DST and interrupted-delivery reconciliation |
-| `test/history-improvements.test.mjs` | Atomic page rollback both inside/outside caller transactions; indexed cross-guild player deletion queries; captured-clock Elo retention and joined settings lookup; leaderboard matching avoids unnecessary identity checks; one-query history settings listing |
+| `test/history-collection.test.mjs` | Opt-in settings validation; deduplication and coverage; restart checkpoints and failure isolation; bounded rotation; unlink/settings/shutdown races; recorded tags and boundaries; deletion safe-cutoff/future-checkpoint/failure gaps; weekly DST and interrupted-delivery reconciliation |
+| `test/history-improvements.test.mjs` | Atomic page rollback both inside/outside caller transactions; indexed cross-guild account deletion and Discord identity cleanup; repeatable index migration/data preservation; captured-clock Elo retention and joined settings lookup; leaderboard matching avoids unnecessary identity checks; one-query history settings listing |
 | `test/history-reports.test.mjs` | Bounded one-day recent-clan scans, deduplication and partial labels; numeric/graph agreement; current-link/historical-tag weekly rankings and incomplete coverage |
 | `test/identity-lookup-race.test.mjs` | Whois and statistics reject changed identity bindings after profile/analytics requests and during later controls, while standalone public-ID lookups remain available |
 | `test/interaction-router.test.mjs` | Interaction event contains expired reply/follow-up failures; acknowledged components preserve their original message; unknown slash commands and deferred errors receive controlled responses |
@@ -174,7 +174,7 @@ Choose affected feature suites while iterating; run `npm test` once when ready f
 | `test/milestone-interactions.test.mjs` | Private view/settings/thresholds/destination and deliberate retry, stale identity/access/session checks and exact-value output limits |
 | `test/milestone-delivery.test.mjs` | Globally paced/fair profiles, shared raw proof and budgets, deletion gate, disable/stop/reconciliation, one-query settings list |
 | `test/bingo.test.mjs` | Frozen objectives, free center/lines, unique evidence, current progress/correction, notification namespace and atomic generation creation |
-| `test/bingo-evidence.test.mjs` | Retained canonical post-board games/availability, cleanup/privacy, indexed pages, bounded dirty refresh/staging/finalization and maintained aggregate proof |
+| `test/bingo-evidence.test.mjs` | Retained canonical post-board games/availability, cleanup/privacy, indexed pages, bounded dirty refresh/staging/finalization, maintained aggregates and zero game reads while disabled/unavailable with full recovery scans |
 | `test/bingo-interactions.test.mjs` | Private draft/reset/claims/review, revisions/permissions, pending state, public serialization and recovery controls |
 | `test/bingo-worker.test.mjs` | Actual staged worker, fresh inventory masking/mixed-line deferral, membership outages, shared recovery budgets and stopped continuation disposal |
 | `test/duels.test.mjs` | Consent/state/cooldowns/slots, cryptographic draw ownership, saved ties/results, expiry, restart, cleanup and indexed bounded retention |

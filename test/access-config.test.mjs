@@ -24,7 +24,7 @@ function fixture({ bootstrap = false, owner = false, manageGuild = false } = {})
   let memberCalls = 0;
   const guild = { id, ownerId: owner ? userId : "600000000000000000", roles: { fetch: async (id) => id ? roles.get(id) ?? null : roles },
     channels: { fetch: async () => ({ type: 0, permissionsFor: () => ({ has: () => true }) }) },
-    members: { fetchMe: async () => ({ permissions: { has: () => true }, roles: { highest: { comparePositionTo: () => 1 } } }),
+    members: { cache: new Map([[userId, user]]), fetchMe: async () => ({ permissions: { has: () => true }, roles: { highest: { comparePositionTo: () => 1 } } }),
       fetch: async (options) => { memberCalls++; if (options) { assert.equal(options.force, true); return user; } return new Map([[userId, user]]); } } };
   if (!bootstrap) db.setManagerRole(id, ids.manager);
   return { guild, user, roles, userId, permissions, calls: () => memberCalls };
@@ -426,4 +426,49 @@ test("unrelated interactions fall through and closing a menu invalidates its ses
   assert.deepEqual(closed.output.components, []);
   const expired = await action(f, id, "new");
   assert.match(error(expired), /menu expired/);
+});
+
+for (const report of ['coverage', 'doctor']) {
+  for (const change of ['access', 'mapping', 'history', 'expiry']) test(`configuration ${report} withholds a report after ${change} changes during loading`, async t => {
+    const f = fixture();
+    db.setGuildClanConfig(savedConfig(f));
+    const { id } = await open(f);
+    let now = Date.now();
+    t.mock.method(Date, 'now', () => now);
+    t.mock.method(openfrontApi, 'getClanInfo', async () => {
+      if (change === 'access') f.user.roles.cache.clear();
+      if (change === 'mapping') db.setGuildClanConfig(savedConfig(f, { member_role_id: ids.replacement }));
+      if (change === 'history') db.history.saveSettings(f.guild.id, { ...db.history.getSettings(f.guild.id), player_history_enabled: 0 }, 0);
+      if (change === 'expiry') now += 11 * 60_000;
+      return { tag: 'TEST', memberCount: 10 };
+    });
+    const result = await action(f, id, report);
+    assert.equal(result.followups.some(value => value.embeds?.length), false, 'obsolete report must not be released');
+    assert.match(error(result), /permission|role|settings|configuration|expired/i);
+  });
+}
+
+for (const change of ['identity', 'departure']) test(`configuration coverage withholds ${change} during final authorization`, async t => {
+  const f = fixture();
+  db.setGuildClanConfig(savedConfig(f));
+  db.linkGuildUser(f.guild.id, 'manager', f.userId, 'coverage-final-auth', 'Player');
+  const { id } = await open(f);
+  t.mock.method(openfrontApi, 'getPlayerProfile', async () => ({ clans: [{ tag: 'TEST' }] }));
+  t.mock.method(openfrontApi, 'getClanInfo', async () => ({ tag: 'TEST', memberCount: 10 }));
+  const fetch = f.guild.members.fetch;
+  let checks = 0;
+  t.mock.method(f.guild.members, 'fetch', async request => {
+    if (request?.user && ++checks === 2) {
+      if (change === 'identity') db.unlinkGuildUser(f.guild.id, 'manager', f.userId);
+      else {
+        f.guild.members.cache.delete(f.userId);
+        db.history.purgeMember(f.guild.id, f.userId);
+        db.community.purgeMember(f.guild.id, f.userId);
+      }
+    }
+    return fetch(request);
+  });
+  const result = await action(f, id, 'coverage');
+  assert.equal(result.followups.some(value => value.embeds?.length), false);
+  assert.match(error(result), /membership|identit.*changed/i);
 });

@@ -8,7 +8,7 @@ import { desiredRoles } from "../roles.js";
 import { CommandError, identityBindingCurrent, identityLocks, label, pageOf, playerId, privateReply, commandReplyOptions, profileLink, sendEmbeds, shortText, throttle } from "./support.js";
 import { checkClanAccess, checkConfigAccess, requireClanAccess, requireConfigAccess } from "../access.js";
 import { configCommand } from "./config.js";
-import { buildCoverageEmbeds, buildDoctorEmbeds } from "../reporting.js";
+import { buildCoverageReport, buildDoctorEmbeds, reportSettingsGuard } from "../reporting.js";
 import { buildWeeklyReport, HistoryView, loadRecentClanMatches, renderClanRecent } from "../historyReports.js";
 import { weeklyPeriod } from "../historySchedule.js";
 
@@ -93,10 +93,19 @@ export async function executeClanCommand(interaction: ChatInputCommandInteractio
       if (db.history.getSettings(i.guildId).revision !== settings.revision) throw new CommandError("History settings changed while loading. Try again.");
       return sendEmbeds(i, [embed]);
     }
-    case "coverage": return sendEmbeds(i, await buildCoverageEmbeds(i.guild, reportConfigs(i), pageNumber(i)));
-    case "doctor": return sendEmbeds(i, await buildDoctorEmbeds(i.guild, reportConfigs(i), {
-      page: pageNumber(i), accessRoleId: db.getGuildSettings(i.guildId)?.manager_role_id, jobs: db.getQueueSummary(i.guildId),
-    }));
+    case "coverage":
+    case "doctor": {
+      const currentSettings = reportSettingsGuard(i.guildId);
+      const selected = reportConfigs(i);
+      const coverage = action === "coverage" ? await buildCoverageReport(i.guild, selected, pageNumber(i)) : null;
+      const embeds = coverage?.embeds ?? await buildDoctorEmbeds(i.guild, selected, {
+          page: pageNumber(i), accessRoleId: db.getGuildSettings(i.guildId)?.manager_role_id, jobs: db.getQueueSummary(i.guildId),
+        });
+      await requireClanAccess(i.guild, i.user.id);
+      currentSettings();
+      coverage?.assertCurrent();
+      return sendEmbeds(i, embeds);
+    }
     default: throw new CommandError("That command is no longer available. Refresh Discord and try again.");
   }
 }

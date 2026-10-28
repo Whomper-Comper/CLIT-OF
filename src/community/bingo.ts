@@ -382,19 +382,25 @@ export class BingoStore {
       const take = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.floor(limit))) : 200;
       let phase = row.phase as 'games' | 'availability' | 'ready';
       if (phase === 'ready') return { phase, processed: 0 };
+      const context = this.validationContext(board.guildId, now);
+      let sourceCursor = row.cursor;
+      if (phase === 'games' && context.state.status !== 'observed') {
+        phase = 'availability';
+        sourceCursor = null;
+      }
       let matches: StoredPlayerSession[] = [];
       let available: MemberAvailability[] = [];
       let cursor: string | null = null;
       let processed: number;
       if (phase === 'games') {
-        const page = this.readGamePage(snapshot, row.cursor ? JSON.parse(String(row.cursor)) : null, take, now);
+        const page = this.readGamePage(snapshot, sourceCursor ? JSON.parse(String(sourceCursor)) : null, take, now);
         matches = page.matches;
         processed = matches.length;
         cursor = page.next ? JSON.stringify(page.next) : null;
         if (!page.next) phase = 'availability';
       } else {
         const rows = this.sql.prepare(`SELECT * FROM community_availability WHERE guild_id=? AND discord_id>?
-          AND windows IS NOT NULL ORDER BY discord_id LIMIT ?`).all(board.guildId, row.cursor ? String(row.cursor) : '', take + 1);
+          AND windows IS NOT NULL ORDER BY discord_id LIMIT ?`).all(board.guildId, sourceCursor ? String(sourceCursor) : '', take + 1);
         const page = rows.slice(0, take);
         available = page.map(item => ({ guildId: board.guildId, discordId: String(item.discord_id), timezone: String(item.timezone),
           windows: JSON.parse(String(item.windows)), revision: Number(item.revision), updatedAt: Number(item.updated_at) }));
@@ -402,7 +408,6 @@ export class BingoStore {
         cursor = rows.length > take ? String(page.at(-1)!.discord_id) : null;
         if (cursor === null) phase = 'ready';
       }
-      const context = this.validationContext(board.guildId, now);
       const tags = new Set([...clanTags].map(tag => tag.trim().toUpperCase()).filter(tag => context.tags.has(tag)));
       const evidence = collectBingoEvidence(board, context.state.status === 'observed' ? matches : [], available,
         identities, tags, snapshot.retentionStart, currentMembers);

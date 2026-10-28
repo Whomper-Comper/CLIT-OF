@@ -51,12 +51,14 @@ export class HistoryStore {
         PRIMARY KEY(guild_id,public_id,game_id));
       CREATE INDEX IF NOT EXISTS history_player_time ON history_player_matches(guild_id,game_start);
       CREATE INDEX IF NOT EXISTS history_player_public_id ON history_player_matches(public_id);
+      CREATE INDEX IF NOT EXISTS history_player_identity ON history_player_matches(discord_id,guild_id,public_id);
       CREATE TABLE IF NOT EXISTS history_observed_elo (
         guild_id TEXT NOT NULL, public_id TEXT NOT NULL, discord_id TEXT, ladder TEXT NOT NULL,
         hour_bucket INTEGER NOT NULL, observed_at TEXT NOT NULL, rating REAL NOT NULL,
         PRIMARY KEY(guild_id,public_id,ladder,hour_bucket));
       CREATE INDEX IF NOT EXISTS history_elo_time ON history_observed_elo(guild_id,observed_at);
       CREATE INDEX IF NOT EXISTS history_elo_player ON history_observed_elo(public_id);
+      CREATE INDEX IF NOT EXISTS history_elo_identity ON history_observed_elo(discord_id,guild_id,public_id) WHERE discord_id IS NOT NULL;
       CREATE TABLE IF NOT EXISTS history_jobs (
         guild_id TEXT NOT NULL, kind TEXT NOT NULL, subject TEXT NOT NULL, discord_id TEXT, identity_version TEXT,
         window_start TEXT NOT NULL, window_end TEXT NOT NULL, page INTEGER NOT NULL DEFAULT 1, cursor TEXT,
@@ -64,6 +66,7 @@ export class HistoryStore {
         last_work INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(guild_id,kind,subject));
       CREATE INDEX IF NOT EXISTS history_job_subject ON history_jobs(kind,subject);
       CREATE INDEX IF NOT EXISTS history_job_last_work ON history_jobs(last_work);
+      CREATE INDEX IF NOT EXISTS history_job_identity ON history_jobs(discord_id,guild_id,subject) WHERE kind='player';
       CREATE TABLE IF NOT EXISTS history_coverage (
         guild_id TEXT NOT NULL, kind TEXT NOT NULL, subject TEXT NOT NULL, start TEXT NOT NULL, end TEXT NOT NULL,
         collected_at TEXT NOT NULL, PRIMARY KEY(guild_id,kind,subject,start,end));
