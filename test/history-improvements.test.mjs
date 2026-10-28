@@ -29,6 +29,52 @@ test("listing history settings reads all guilds in one query without changing th
   } finally { raw.close(); }
 });
 
+test('batched coverage preserves overlapping intervals, gaps, clipping and subject isolation in one indexed read', () => {
+  const raw = new DatabaseSync(':memory:');
+  try {
+    HistoryStore.initialize(raw);
+    const history = new HistoryStore(raw), start = '2026-10-12T00:00:00.000Z', end = '2026-10-19T00:00:00.000Z';
+    const add = (subject, from, until, guild = 'g', kind = 'player') => history.markCoverage({
+      guild_id: guild, kind, subject, window_start: from, window_end: until }, now);
+    add('complete', '2026-10-11T00:00:00.000Z', '2026-10-14T00:00:00.000Z');
+    add('complete', '2026-10-13T00:00:00.000Z', '2026-10-17T00:00:00.000Z');
+    add('complete', '2026-10-17T00:00:00.000Z', '2026-10-20T00:00:00.000Z');
+    add('gap', start, '2026-10-14T00:00:00.000Z');
+    add('gap', '2026-10-15T00:00:00.000Z', end);
+    add('tail', start, '2026-10-18T00:00:00.000Z');
+    add('outside', '2026-10-11T00:00:00.000Z', start);
+    add('outside', end, '2026-10-20T00:00:00.000Z');
+    add('gap', start, end, 'other');
+    add('gap', start, end, 'g', 'clan');
+    const plans = [];
+    let reads = 0;
+    const counted = new HistoryStore({ prepare(query) {
+      reads++;
+      const statement = raw.prepare(query);
+      return { iterate(...parameters) {
+        plans.push(...raw.prepare(`EXPLAIN QUERY PLAN ${query}`).all(...parameters).map(row => row.detail));
+        return statement.iterate(...parameters);
+      } };
+    } });
+    const coverage = counted.getCoverageBySubject('g', 'player', ['complete', 'gap', 'tail', 'missing', 'outside', 'complete'], start, end);
+    assert.deepEqual([...coverage], [
+      ['complete', { complete: true, coveredDays: 7, totalDays: 7 }],
+      ['gap', { complete: false, coveredDays: 6, totalDays: 7 }],
+      ['tail', { complete: false, coveredDays: 6, totalDays: 7 }],
+      ['missing', { complete: false, coveredDays: 0, totalDays: 7 }],
+      ['outside', { complete: false, coveredDays: 0, totalDays: 7 }],
+    ]);
+    assert.equal(reads, 1);
+    assert.ok(plans.some(detail => /SEARCH history_coverage.*guild_id=\?.*kind=\?.*subject=\?/.test(detail)), JSON.stringify(plans));
+    assert.ok(plans.every(detail => !/SCAN history_coverage/.test(detail)), JSON.stringify(plans));
+    for (const subject of coverage.keys()) assert.deepEqual(history.getPlayerCoverage('g', subject, start, end), coverage.get(subject));
+    assert.deepEqual([...history.getCoverageBySubject('g', 'clan', [' gap ', 'GAP'], start, end)], [['GAP', { complete: false, coveredDays: 0, totalDays: 7 }]]);
+    assert.deepEqual([...counted.getCoverageBySubject('g', 'player', ['complete'], 'invalid', end)], [['complete', { complete: false, coveredDays: 0, totalDays: 0 }]]);
+    assert.deepEqual([...counted.getCoverageBySubject('g', 'player', [], start, end)], []);
+    assert.equal(reads, 1, 'invalid windows and empty inventories need no query');
+  } finally { raw.close(); }
+});
+
 test("Elo pruning reads retention settings once and respects each guild's cutoff", () => {
   const raw = new DatabaseSync(":memory:");
   try {

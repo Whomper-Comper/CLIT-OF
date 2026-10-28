@@ -4,7 +4,7 @@ import { openfrontApi, type OpenFrontClanMembership } from "../api.js";
 import { ClanSyncService, SyncResult } from "../clanSync.js";
 import { configSnapshot, newClanDraft, normalizeClanTag, validateClanDraft } from "../setupConfig.js";
 import { toEpochSeconds } from "../utils.js";
-import { desiredRoles } from "../roles.js";
+import { affectedRoleMemberIds, desiredRoles } from "../roles.js";
 import { CommandError, identityBindingCurrent, identityLocks, label, pageOf, playerId, privateReply, commandReplyOptions, profileLink, sendEmbeds, shortText, throttle } from "./support.js";
 import { checkClanAccess, checkConfigAccess, requireClanAccess, requireConfigAccess } from "../access.js";
 import { configCommand } from "./config.js";
@@ -132,8 +132,7 @@ async function setup(i: GuildCommand) {
   const allMembers = await members(i.guild);
   await requireClanAccess(i.guild, i.user.id);
   if (configSnapshot(db.getGuildClanConfig(i.guildId, tag)) !== snapshot) throw new CommandError("This clan configuration changed while setup was running. Run setup again.");
-  const oldRoles = managedRoles(previous ? [previous] : []);
-  const affected = [...allMembers.values()].filter((m) => db.getEffectiveLink(i.guildId, m.id) || oldRoles.some((role) => m.roles.cache.has(role))).map((m) => m.id);
+  const affected = affectedRoleMemberIds(allMembers.values(), db.getEffectiveLinks(i.guildId), previous);
   db.setGuildClanConfig({ ...draft, guild_id: i.guildId, last_sync_at: null }, affected);
   await sendEmbeds(i, [configEmbed({ ...draft, guild_id: i.guildId, last_sync_at: null }).setTitle(`Clan configured: [${tag}]`)
     .setDescription(`Connected to **${label(clan.name)}**. Role updates are queued when existing mappings change.`)]);
@@ -145,8 +144,7 @@ async function remove(i: GuildCommand) {
   const allMembers = await members(i.guild);
   await requireClanAccess(i.guild, i.user.id);
   if (configSnapshot(db.getGuildClanConfig(i.guildId, selected.clan_tag)) !== snapshot) throw new CommandError("The configuration changed while removal was running. Try again.");
-  const oldRoles = managedRoles([selected]);
-  const affected = [...allMembers.values()].filter((m) => db.getEffectiveLink(i.guildId, m.id) || oldRoles.some((role) => m.roles.cache.has(role))).map((m) => m.id);
+  const affected = affectedRoleMemberIds(allMembers.values(), db.getEffectiveLinks(i.guildId), selected);
   db.deleteGuildClanConfig(i.guildId, selected.clan_tag, affected);
   await i.editReply({ content: `Removed **[${selected.clan_tag}]** from this server. Cleanup of its obsolete roles is queued.` });
 }
@@ -260,6 +258,8 @@ async function roster(i: GuildCommand) {
   await requireClanAccess(i.guild, i.user.id);
   if (JSON.stringify(db.getGuildConfigs(i.guildId).map(configSnapshot)) !== configsSnapshot)
     throw new CommandError("Clan configuration changed while loading. Try again.");
+  const approvalRoles = new Set(allConfigs.map(config => config.join_role_id).filter((id): id is string => !!id));
+  const selectedRoles = managedRoles([c]);
   const rows = candidates.flatMap(({link, name, role, clans}) => {
     const discordMember = currentMembers.get(link.discord_id);
     if (!discordMember || discordMember.user.bot || !identityBindingCurrent(i.guildId, link)) return [];
@@ -267,7 +267,7 @@ async function roster(i: GuildCommand) {
       role === "leader" ? c.leader_role_id : null].filter((id): id is string => !!id);
     const wanted = desiredRoles(allConfigs, clans);
     const mismatch = expected.some(id => !discordMember.roles.cache.has(id)) ||
-      managedRoles([c]).some(id => discordMember.roles.cache.has(id) && !wanted.has(id));
+      selectedRoles.some(id => discordMember.roles.cache.has(id) && !wanted.has(id) && !approvalRoles.has(id));
     return [{ id: link.discord_id, name, line: `• <@${link.discord_id}> — ${profileLink(link.openfront_id, name)} · ${role}${mismatch ? " · roles need sync" : ""}` }];
   });
   rows.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));

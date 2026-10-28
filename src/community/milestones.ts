@@ -86,18 +86,23 @@ export class MilestoneStore {
   /** Supply one fresh eligible guild inventory. Removed candidates invalidate captured generations. */
   syncCandidates(guildId: string, bindings: IdentityBinding[], now: number): void {
     withCommunityTransaction(this.sql, () => {
+      const current = new Map(this.sql.prepare(`SELECT discord_id,public_id,linked_at
+        FROM community_milestone_candidates WHERE guild_id=?`).all(guildId)
+        .map(row => [String(row.discord_id), { publicId: String(row.public_id), linkedAt: String(row.linked_at) }]));
       const present = new Set<string>();
-      const writeCandidate = this.candidateWriter();
+      let writeCandidate: ((binding: IdentityBinding, now: number) => void) | undefined;
       for (const binding of bindings) {
         if (binding.guildId !== guildId) throw changed();
         if (this.identityCurrent && !this.identityCurrent(binding)) continue;
         present.add(binding.discordId);
-        writeCandidate(binding, now);
+        const prior = current.get(binding.discordId);
+        if (prior?.publicId === binding.publicId && prior.linkedAt === binding.linkedAt) continue;
+        (writeCandidate ??= this.candidateWriter())(binding, now);
+        current.set(binding.discordId, { publicId: binding.publicId, linkedAt: binding.linkedAt });
       }
-      const current = this.sql.prepare('SELECT discord_id FROM community_milestone_candidates WHERE guild_id=?').all(guildId);
-      for (const row of current) {
-        if (!present.has(String(row.discord_id))) {
-          this.sql.prepare('DELETE FROM community_milestone_candidates WHERE guild_id=? AND discord_id=?').run(guildId, row.discord_id!);
+      for (const discordId of current.keys()) {
+        if (!present.has(discordId)) {
+          this.sql.prepare('DELETE FROM community_milestone_candidates WHERE guild_id=? AND discord_id=?').run(guildId, discordId);
         }
       }
     });

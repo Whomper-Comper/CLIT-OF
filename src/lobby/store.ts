@@ -40,6 +40,21 @@ export interface Notification {
   deadline: number | null;
   error: string | null;
 }
+const decodeNotification = (r: Record<string, unknown>): Notification => ({
+  id: String(r.id),
+  guild: String(r.guild),
+  user: String(r.user),
+  generation: String(r.generation),
+  revision: Number(r.revision),
+  lobby: JSON.parse(String(r.lobby)),
+  status: String(r.status),
+  attempts: Number(r.attempts),
+  next: Number(r.next),
+  message: r.message as string | null,
+  channel: r.channel as string | null,
+  deadline: r.deadline === null ? null : Number(r.deadline),
+  error: r.error as string | null,
+});
 export class LobbyStore {
   private pruneCursor: { updated: number; id: string } | null = null;
   constructor(private readonly sql: DatabaseSync) {}
@@ -299,58 +314,41 @@ export class LobbyStore {
     const r = this.sql
       .prepare("SELECT * FROM lobby_notifications WHERE id=?")
       .get(id);
-    return r
-      ? {
-          id,
-          guild: String(r.guild),
-          user: String(r.user),
-          generation: String(r.generation),
-          revision: Number(r.revision),
-          lobby: JSON.parse(String(r.lobby)),
-          status: String(r.status),
-          attempts: Number(r.attempts),
-          next: Number(r.next),
-          message: r.message as string | null,
-          channel: r.channel as string | null,
-          deadline: r.deadline === null ? null : Number(r.deadline),
-          error: r.error as string | null,
-        }
-      : null;
+    return r ? decodeNotification(r) : null;
   }
   valid(n: Notification): boolean {
-    const s = this.search(n.guild, n.user),
-      config = this.settings(n.guild),
-      saved = this.notification(n.id);
-    return (
-      !!s &&
-      s.state === "delivering" &&
-      s.pending === n.id &&
-      s.generation === n.generation &&
-      config.enabled &&
-      config.revision === n.revision &&
-      !!saved &&
-      [
-        "pending_dm",
-        "pending_fallback",
-        "sending_dm",
-        "sending_fallback",
-      ].includes(saved.status)
-    );
+    return !!this.sql
+      .prepare(
+        `SELECT 1 FROM lobby_searches AS search
+         JOIN lobby_settings AS config ON config.guild=search.guild
+         JOIN lobby_notifications AS saved ON saved.id=search.pending
+         WHERE search.guild=? AND search.user=? AND search.state='delivering'
+           AND search.pending=? AND search.generation=?
+           AND config.enabled<>0 AND config.revision=?
+           AND saved.status IN ('pending_dm','pending_fallback','sending_dm','sending_fallback')`,
+      )
+      .get(n.guild, n.user, n.id, n.generation, n.revision);
   }
   due(now: number): Notification[] {
     return this.sql
       .prepare(
-        `SELECT id FROM lobby_notifications WHERE status IN ('pending_dm','pending_fallback','sending_dm','sending_fallback') AND next<=? ORDER BY next,updated,id LIMIT 4`,
+        `SELECT * FROM lobby_notifications WHERE status IN ('pending_dm','pending_fallback','sending_dm','sending_fallback') AND next<=? ORDER BY next,updated,id LIMIT 4`,
       )
       .all(now)
-      .map((r) => this.notification(String(r.id))!);
+      .map(decodeNotification);
   }
   begin(id: string, fallback: boolean, now: number): boolean {
-    const n = this.notification(id);
-    if (!n || !this.valid(n)) return false;
     return !!this.sql
       .prepare(
-        "UPDATE lobby_notifications SET status=?,updated=? WHERE id=? AND status=?",
+        `UPDATE lobby_notifications AS notification SET status=?,updated=?
+         WHERE id=? AND status=? AND EXISTS (
+           SELECT 1 FROM lobby_searches AS search
+           JOIN lobby_settings AS config ON config.guild=search.guild
+           WHERE search.guild=notification.guild AND search.user=notification.user
+             AND search.state='delivering' AND search.pending=notification.id
+             AND search.generation=notification.generation
+             AND config.enabled<>0 AND config.revision=notification.revision
+         )`,
       )
       .run(
         fallback ? "sending_fallback" : "sending_dm",
@@ -490,10 +488,10 @@ export class LobbyStore {
   diagnostics(guild: string): Notification[] {
     return this.sql
       .prepare(
-        `SELECT id FROM lobby_notifications WHERE guild=? AND status='review' ORDER BY updated DESC LIMIT 5`,
+        `SELECT * FROM lobby_notifications WHERE guild=? AND status='review' ORDER BY updated DESC LIMIT 5`,
       )
       .all(guild)
-      .map((r) => this.notification(String(r.id))!);
+      .map(decodeNotification);
   }
   prune(now: number, live: Lobby[]): void {
     const select = this.sql.prepare(

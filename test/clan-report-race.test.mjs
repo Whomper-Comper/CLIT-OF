@@ -155,6 +155,22 @@ test('coverage fails closed when the final member refresh fails', async t => {
   await assert.rejects(buildCoverageReport(f.i.guild, db.getGuildConfigs(f.guildId)), /Could not load all server members/);
 });
 
+for (const protectedApproval of [true, false]) test(`roster ${protectedApproval ? 'preserves another clan approval role without a warning' : 'warns about an actual surplus rank role'}`, async t => {
+  const f = fixture(`roster-approval-${protectedApproval}`, 'roster');
+  const config = db.getGuildClanConfig(f.guildId, 'ABC');
+  db.setGuildClanConfig({ ...config, officer_role_id: 'extra-rank' });
+  db.setGuildClanConfig({ ...config, clan_tag: 'DEF', member_role_id: 'other-rank',
+    join_role_id: protectedApproval ? 'extra-rank' : 'other-approval' });
+  f.person.roles.cache.set('rank', true);
+  f.person.roles.cache.set('extra-rank', true);
+  t.mock.method(openfrontApi, 'getPlayerProfile', async () => ({ username: 'Player', clans: [{ tag: 'ABC', role: 'member' }] }));
+  await clanCommand.execute(f.i, {});
+  const description = f.i.output.embeds[0].toJSON().description;
+  assert.match(description, /Player/);
+  if (protectedApproval) assert.doesNotMatch(description, /roles need sync/);
+  else assert.match(description, /roles need sync/);
+});
+
 test('roster excludes a binding reverified while another profile lookup is pending', async t => {
   const f = fixture('roster-link', 'roster');
   let release, entered;

@@ -204,21 +204,36 @@ export class HistoryStore {
       remove.run(guild,iso(now-days*DAY));
     }
   }
-  private coverage(guild: string, kind: string, subject: string, start: string, end: string): HistoryCoverage {
+  /** Stream ordered intervals once for a report inventory, retaining only per-subject accumulators. */
+  getCoverageBySubject(guild: string, kind: "clan" | "player", subjects: readonly string[], start: string, end: string): Map<string, HistoryCoverage> {
+    const unique = [...new Set(subjects.map(subject => kind === "clan" ? subject.trim().toUpperCase() : subject))];
     const from = Date.parse(start), until = Date.parse(end);
-    if (!Number.isFinite(from) || !Number.isFinite(until) || until <= from) return { complete: false, coveredDays: 0, totalDays: 0 };
-    const intervals = this.db.prepare(`SELECT start,end FROM history_coverage WHERE guild_id=? AND kind=? AND subject=? AND start<? AND end>? ORDER BY start,end`)
-      .all(guild,kind,subject,end,start);
-    let cursor = from, covered = 0, complete = true;
+    if (!Number.isFinite(from) || !Number.isFinite(until) || until <= from)
+      return new Map(unique.map(subject => [subject, { complete: false, coveredDays: 0, totalDays: 0 }]));
+    if (!unique.length) return new Map();
+    const states = new Map(unique.map(subject => [subject, { cursor: from, covered: 0, complete: true }]));
+    const intervals = this.db.prepare(`SELECT subject,start,end FROM history_coverage WHERE guild_id=? AND kind=?
+      AND subject IN (SELECT value FROM json_each(?)) AND start<? AND end>? ORDER BY subject,start,end`)
+      .iterate(guild,kind,JSON.stringify(unique),end,start);
     for (const interval of intervals) {
+      const state = states.get(String(interval.subject))!;
       const lower = Math.max(from,Date.parse(String(interval.start))), upper = Math.min(until,Date.parse(String(interval.end)));
-      if (lower > cursor) complete = false;
-      if (upper > cursor) { covered += upper - Math.max(cursor,lower); cursor = upper; }
+      if (lower > state.cursor) state.complete = false;
+      if (upper > state.cursor) { state.covered += upper - Math.max(state.cursor,lower); state.cursor = upper; }
     }
-    return { complete: complete && cursor >= until, coveredDays: Math.min(Math.round(covered / DAY),Math.round((until-from)/DAY)), totalDays: Math.round((until-from)/DAY) || 1 };
+    return new Map([...states].map(([subject, state]) => [subject, {
+      complete: state.complete && state.cursor >= until,
+      coveredDays: Math.min(Math.round(state.covered / DAY),Math.round((until-from)/DAY)),
+      totalDays: Math.round((until-from)/DAY) || 1,
+    }]));
   }
-  getClanCoverage(guild: string, tag: string, start: string, end: string) { return this.coverage(guild,"clan",tag.trim().toUpperCase(),start,end); }
-  getPlayerCoverage(guild: string, publicId: string, start: string, end: string) { return this.coverage(guild,"player",publicId,start,end); }
+  getClanCoverage(guild: string, tag: string, start: string, end: string) {
+    const normalized = tag.trim().toUpperCase();
+    return this.getCoverageBySubject(guild,"clan",[normalized],start,end).get(normalized)!;
+  }
+  getPlayerCoverage(guild: string, publicId: string, start: string, end: string) {
+    return this.getCoverageBySubject(guild,"player",[publicId],start,end).get(publicId)!;
+  }
   markCoverage(job: HistoryJob, now: number) {
     this.db.prepare(`INSERT INTO history_coverage(guild_id,kind,subject,start,end,collected_at) VALUES(?,?,?,?,?,?)
       ON CONFLICT(guild_id,kind,subject,start,end) DO UPDATE SET collected_at=excluded.collected_at`)

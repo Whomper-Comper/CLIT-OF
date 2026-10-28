@@ -4,7 +4,7 @@ import {
   ChatInputCommandInteraction, EmbedBuilder, Interaction, InteractionContextType, ModalBuilder,
   PermissionFlagsBits, RoleSelectMenuBuilder, SlashCommandBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle,
 } from "discord.js";
-import { db, managedRoles } from "../db.js";
+import { db } from "../db.js";
 import { hasConfigAccess, requireConfigAccess } from "../access.js";
 import { openfrontApi } from "../api.js";
 import { ClanDraft, clanDraft, configSnapshot, newClanDraft, normalizeClanTag, validateClanDraft } from "../setupConfig.js";
@@ -12,6 +12,7 @@ import { CommandError, label, privateReply, shortText, throttle } from "./suppor
 import { buildCoverageReport, buildDoctorEmbeds, reportSettingsGuard } from "../reporting.js";
 import { commandErrorMessage } from "./errorMessages.js";
 import { HistorySettings } from "../historyStore.js";
+import { affectedRoleMemberIds } from "../roles.js";
 
 type Screen = "home" | "draft" | "roles" | "logs" | "confirm" | "history";
 interface Session {
@@ -273,8 +274,7 @@ export async function handleConfigInteraction(i: Interaction): Promise<boolean> 
       ensureLive(s);
       if (configSnapshot(db.getGuildClanConfig(i.guildId, draft.clan_tag)) !== s.snapshot) throw new CommandError("This clan changed in another session. Reopen it before saving.");
       const old = db.getGuildClanConfig(i.guildId, draft.clan_tag);
-      const oldRoles = managedRoles(old ? [old] : []);
-      const affected = [...all.values()].filter((m) => db.getEffectiveLink(i.guildId, m.id) || oldRoles.some((r) => m.roles.cache.has(r))).map((m) => m.id);
+      const affected = affectedRoleMemberIds(all.values(), db.getEffectiveLinks(i.guildId), old);
       db.setGuildClanConfig({ ...draft, guild_id: i.guildId, last_sync_at: null }, affected);
       s.tag = draft.clan_tag; s.snapshot = configSnapshot(db.getGuildClanConfig(i.guildId, s.tag)); s.screen = "draft";
       await i.editReply(render(s, true, "Saved. Role reconciliation is queued.")); return true;
@@ -285,8 +285,7 @@ export async function handleConfigInteraction(i: Interaction): Promise<boolean> 
       await requireConfigAccess(i.guild, i.user.id);
       ensureLive(s);
       if (configSnapshot(db.getGuildClanConfig(i.guildId, s.tag)) !== s.snapshot) throw new CommandError("The configuration changed. Reopen the menu.");
-      const roles = managedRoles([current]);
-      const affected = [...all.values()].filter((m) => db.getEffectiveLink(i.guildId, m.id) || roles.some((r) => m.roles.cache.has(r))).map((m) => m.id);
+      const affected = affectedRoleMemberIds(all.values(), db.getEffectiveLinks(i.guildId), current);
       db.deleteGuildClanConfig(i.guildId, s.tag, affected);
       s.draft = null; s.tag = null; s.screen = "home";
       await i.editReply(render(s, true, "Clan removed. Obsolete roles are queued for cleanup.")); return true;

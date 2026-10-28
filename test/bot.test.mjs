@@ -4,6 +4,7 @@ import { mkdtempSync, unlinkSync, rmdirSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { spawnSync } from "node:child_process";
 process.env.DB_PATH = ":memory:";
 process.env.DISCORD_TOKEN = "test";
 process.env.CLIENT_ID = "test";
@@ -59,6 +60,26 @@ function serviceFixture(guilds = []) {
 }
 afterEach(() => { let job; while ((job = db.nextJob(Number.MAX_SAFE_INTEGER))) db.finishJob(job); });
 after(() => db.close());
+
+test("role helpers import without runtime configuration or database initialization", () => {
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", `
+    import assert from 'node:assert/strict';
+    import { register } from 'node:module';
+    register('data:text/javascript,' + encodeURIComponent(\`
+      export async function resolve(specifier, context, nextResolve) {
+        const result = await nextResolve(specifier, context);
+        if (result.url.endsWith('/db.js') || result.url.endsWith('/config.js') || result.url.includes('/dotenv/'))
+          throw new Error('Role helpers must not initialize runtime configuration or the database.');
+        return result;
+      }
+    \`), import.meta.url);
+    const { affectedRoleMemberIds, desiredRoles, managedRoles } = await import('./dist/roles.js');
+    assert.deepEqual(affectedRoleMemberIds([], [], null), []);
+    assert.deepEqual(desiredRoles([], []), new Set());
+    assert.deepEqual(managedRoles([]), []);
+  `], { encoding: "utf8", env: { ...process.env, DB_PATH: ":memory:", DISCORD_TOKEN: "test", CLIENT_ID: "test" } });
+  assert.equal(result.status, 0, result.stderr);
+});
 
 test("command registration exposes one clan command with an action choice and shared inputs", () => {
   const data = commands.map((command) => command.data.toJSON());
@@ -153,6 +174,41 @@ test("removal defers before fetching members and queues cleanup for unlinked rol
   await clanCommand.execute(i, {});
   assert.equal(db.getGuildClanConfig(guild.id, "TEST"), null);
   assert.ok(JSON.parse(db.getJob(guild.id, holder.id).role_ids).includes("member"));
+});
+
+for (const action of ["setup", "remove"]) test(`${action} selects reconciliation members with one identity read for a large roster`, async (t) => {
+  const guild = guildFixture(`batch-${action}`);
+  db.setGuildClanConfig(config(guild.id, "TEST", { officer_role_id: "old-officer" }));
+  const global = memberFixture(guild, `global-${guild.id}`), local = memberFixture(guild, `local-${guild.id}`);
+  const holder = memberFixture(guild, "unlinked-holder", ["old-officer"]);
+  const approval = memberFixture(guild, "approval-only", ["join"]), foreign = memberFixture(guild, "foreign-local");
+  const outside = `outside-${guild.id}`;
+  db.linkUser(global.id, `account-${global.id}`, null, "identity_token");
+  db.linkGuildUser(guild.id, "manager", local.id, `account-${local.id}`, null);
+  db.linkGuildUser(`other-${guild.id}`, "manager", foreign.id, `account-foreign-${guild.id}`, null);
+  db.linkUser(outside, `account-${outside}`, null, "identity_token");
+  for (const id of [global.id, local.id, outside]) {
+    const job = db.getJob(guild.id, id);
+    if (job) db.finishJob(job);
+  }
+  const roster = new Map([global, local, holder, approval, foreign,
+    ...Array.from({ length: 451 }, (_, index) => memberFixture(guild, `unlinked-${index}`))].map(member => [member.id, member]));
+  guild.members.fetch = async () => roster;
+  t.mock.method(openfrontApi, "getClanInfo", async () => ({ tag: "TEST", name: "Test", description: "" }));
+  const i = interaction(action, guild, { clan_tag: "TEST", member_role: { id: "member" } });
+  const prepare = db.db.prepare.bind(db.db);
+  let identityReads = 0;
+  t.mock.method(db.db, "prepare", sql => {
+    if (/^SELECT\b/i.test(sql) && /\bFROM\s+(?:linked_users|guild_links)\b/i.test(sql)) identityReads++;
+    return prepare(sql);
+  });
+  await clanCommand.execute(i, {});
+  assert.equal(identityReads, 1, "identity reads must not grow with the roster");
+  for (const id of [global.id, local.id, holder.id]) {
+    assert.ok(db.getJob(guild.id, id), `${id} requires reconciliation`);
+    assert.ok(JSON.parse(db.getJob(guild.id, id).role_ids).includes("old-officer"), "obsolete mapped roles remain queued");
+  }
+  for (const id of [approval.id, foreign.id, outside, "unlinked-450"]) assert.equal(db.getJob(guild.id, id), null);
 });
 
 test("configuration output pages large servers within Discord limits", async () => {

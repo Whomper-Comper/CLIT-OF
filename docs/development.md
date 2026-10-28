@@ -85,21 +85,21 @@ There are **54 test files** under `test/` in the documented source tree: the 24 
 
 | File | Behaviors protected |
 | --- | --- |
-| `test/access-config.test.mjs` | Explicit manager/debug roles; owner/admin boundaries; configuration/history menus; pagination and component limits; revisions, permission revocation after awaits, expired/busy sessions, conflicting edits and final diagnostic/coverage release guards |
+| `test/access-config.test.mjs` | Explicit manager/debug roles; owner/admin boundaries; configuration/history menus; pagination and component limits; revisions, permission revocation after awaits, expired/busy sessions, conflicting edits, final report guards and batched affected-member selection for Save/removal |
 | `test/api-reporting.test.mjs` | Coalesced/cloned/expired/fresh caches and generation ordering; response validation; exact profile/building arithmetic; graph alignment; coverage and fresh doctor diagnostics; statistics modes |
 | `test/backups.test.mjs` | Consistent WAL-inclusive snapshots; pre-migration contents; per-database rotation; invalid/new/in-memory database handling; process-owned deployment readiness |
-| `test/bot.test.mjs` | Command definitions and config validation; clan authorization/setup/removal/pagination; identity ownership and audit scoping; legacy migrations; role union/removal/stale-write checks; pacing, API failures and reply behavior |
+| `test/bot.test.mjs` | Command definitions and config validation; pure role-helper imports; clan authorization/setup/removal/pagination and batched affected-member selection; identity ownership and audit scoping; legacy migrations; role union/removal/stale-write checks; pacing, API failures and reply behavior |
 | `test/clan-sync-cross-config.test.mjs` | Cross-clan configuration changes and same-account re-verification invalidate stale role updates |
 | `test/clan-sync-log-race.test.mjs` | Role-change logs do not publish stale destinations or identities after a write |
 | `test/clan-sync-mismatch-race.test.mjs` | Pending-invite summaries recheck identities, membership and approval roles before publication |
 | `test/clan-sync-schedule-race.test.mjs` | An empty sync cannot mark an edited clan mapping as already synchronized |
-| `test/clan-report-race.test.mjs` | Pending/roster/coverage/doctor authorization and mapping races; final coverage membership, unlink/replacement/reverification, newly linked members, refresh failure and identity changes during authorization |
+| `test/clan-report-race.test.mjs` | Pending/roster/coverage/doctor authorization and mapping races; protected approval versus surplus rank warnings; final coverage membership, identity changes, newly linked members, refresh failures and rendering/authorization handoffs |
 | `test/debug.test.mjs` | Explicit debug-role access; scoped exports; no credential leakage; revoked access and unavailable membership; oversized/empty exports; private diagnostic status/toggles and controlled error wording |
 | `test/dice.test.mjs` | Dice definition bounds/defaults; inclusive random boundaries; public animation/final result; invalid inputs and animation throttling |
 | `test/history-api.test.mjs` | Exact-ID ladder lookup and bounded absence; malformed/forbidden responses; cursor/filter cache isolation; known empty versus missing history; sessions/time bounds/clan schema; deletion feed and UTC normalization |
 | `test/history-collection.test.mjs` | Opt-in settings validation; deduplication and coverage; restart checkpoints and failure isolation; bounded rotation; unlink/settings/shutdown races; recorded tags and boundaries; deletion safe-cutoff/future-checkpoint/failure gaps; weekly DST and interrupted-delivery reconciliation |
-| `test/history-improvements.test.mjs` | Atomic page rollback both inside/outside caller transactions; indexed cross-guild account deletion and Discord identity cleanup; repeatable index migration/data preservation; captured-clock Elo retention and joined settings lookup; leaderboard matching avoids unnecessary identity checks; one-query history settings listing |
-| `test/history-reports.test.mjs` | Bounded one-day recent-clan scans, deduplication and partial labels; numeric/graph agreement; current-link/historical-tag weekly rankings and incomplete coverage |
+| `test/history-improvements.test.mjs` | Atomic page rollback both inside/outside caller transactions; indexed account deletion and identity cleanup; repeatable index migration/data preservation; streamed batched coverage with overlap/gap/clipping/isolation; captured-clock Elo retention; leaderboard identity filtering; one-query settings listing |
+| `test/history-reports.test.mjs` | Bounded one-day recent-clan scans, deduplication and partial labels; numeric/graph agreement; current-link/historical-tag weekly rankings and incomplete coverage; batched recap coverage and reuse of clan payloads |
 | `test/identity-lookup-race.test.mjs` | Whois and statistics reject changed identity bindings after profile/analytics requests and during later controls, while standalone public-ID lookups remain available |
 | `test/interaction-router.test.mjs` | Interaction event contains expired reply/follow-up failures; acknowledged components preserve their original message; unknown slash commands and deferred errors receive controlled responses |
 | `test/player-analytics.test.mjs` | Inclusive period boundaries, future/incomplete games, map normalization and scope separation; duplicate/cursor loops; later API failure, bounded scans and early period-boundary exit |
@@ -170,7 +170,7 @@ Choose affected feature suites while iterating; run `npm test` once when ready f
 | `test/event-delivery.test.mjs` | Durable publication/reminders, current opted-in membership, missed deadlines, cancellation/recovery and bounded cleanup |
 | `test/onboarding.test.mjs` | Approved-to-join versus actual membership, unknown evidence, signup versus attendance, async identity/role/enrollment checks and bounded ten-person queue |
 | `test/wheel.test.mjs` | Complete valid packages, supported catalog, random bounds, private explicit save/removal, copied event settings and safe output |
-| `test/milestones.test.mjs` | Exact huge counters, thresholds/baselines/crossings, partial data, revisions, cleanup and deduplicated awards |
+| `test/milestones.test.mjs` | Exact huge counters, thresholds/baselines/crossings, partial data, revisions, cleanup and deduplicated awards; unchanged inventory query counts, identity generations, preserved backoff, duplicate ordering and rollback |
 | `test/milestone-interactions.test.mjs` | Private view/settings/thresholds/destination and deliberate retry, stale identity/access/session checks and exact-value output limits |
 | `test/milestone-delivery.test.mjs` | Globally paced/fair profiles, shared raw proof and budgets, deletion gate, disable/stop/reconciliation, one-query settings list |
 | `test/bingo.test.mjs` | Frozen objectives, free center/lines, unique evidence, current progress/correction, notification namespace and atomic generation creation |
@@ -190,7 +190,7 @@ Bingo's measured production source pages are 200/200/51/1 for 451 games plus ava
 
 ## Lobby alert verification
 
-The eight lobby suites add behavioral coverage for source fixtures/full/count frames, filter combinations, reconnection, durable rules/deduplication, exact 180-second boundaries, DM success, blocked-DM fallback/guidance, fresh channel visibility, ambiguous/interrupted sends, retry of unsent candidates, lookup races, stop/drain and private command/button bindings. Matching and candidate rotation tests bound database operations; retention tests check indexed and fair bounded cleanup. The actual central router suite exercises continuation from a DM. Build before focused tests:
+The eight lobby suites add behavioral coverage for source fixtures/full/count frames, filter combinations, reconnection, durable rules/deduplication, exact 180-second boundaries, DM success, blocked-DM fallback/guidance, fresh channel visibility, ambiguous/interrupted sends, retry of unsent candidates, lookup races, stop/drain and private command/button bindings. Matching, candidate rotation, joined validation, guarded send activation and bounded notification decoding tests constrain database operations; retention tests check indexed and fair bounded cleanup. The actual central router suite exercises continuation from a DM. Build before focused tests:
 
 ```sh
 npm run build

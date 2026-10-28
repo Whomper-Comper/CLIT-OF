@@ -181,6 +181,8 @@ Full synchronization can post a combined pending-invitation notice in the config
 
 Roster is public and requires a clan tag and config role. It checks effective links for people currently in this server, fetches profiles with bounded concurrency, confirms membership and sorts matching members by name. It shows up to 15 per page, role-mismatch markers and unavailable-profile counts.
 
+A rank role also configured as an approval role for another clan is protected from removal and does not produce a surplus-role warning. Missing earned ranks and other surplus rank roles still receive mismatch markers.
+
 It is **not** the full OpenFront clan member list, a list of everyone holding a Discord role, or proof that an omitted player is not in the clan. Unlinked players, people outside the server and unavailable profiles are outside confirmed roster rows. Roster only reports; run sync to reconcile roles.
 
 ### Link coverage

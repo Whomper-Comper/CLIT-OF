@@ -91,3 +91,47 @@ test("weekly ranking uses exact current links and historical tags; missing cover
   assert.match(stale.fields.find(field=>field.name.includes("Most recorded wins")).value,/withheld/);
   assert.doesNotMatch(stale.fields.find(field=>field.name.includes("Most recorded wins")).value,/Present/);
 });
+
+test('weekly recap batches coverage and reads each clan payload once while preserving totals and gaps', async t => {
+  const guildId = 'weekly-batch', start = '2026-10-12T00:00:00.000Z', end = '2026-10-19T00:00:00.000Z';
+  const members = new Map();
+  db.history.setMeta('deletions_last_success', new Date().toISOString());
+  for (let i = 0; i < 10; i++) {
+    const tag = `C${String(i).padStart(2, '0')}`;
+    db.setGuildClanConfig({ guild_id: guildId, clan_tag: tag, member_role_id: 'rank', officer_role_id: null,
+      leader_role_id: null, join_role_id: null, log_channel_id: null, sync_interval_mins: 10, last_sync_at: null });
+    db.history.upsertClanMatches(guildId, tag, [row('weekly-shared', { clanTag: tag }),
+      row(`weekly-only-${i}`, { clanTag: tag, hasWon: i % 2 === 0 })]);
+    db.history.markCoverage({ guild_id: guildId, kind: 'clan', subject: tag,
+      window_start: start, window_end: i === 9 ? '2026-10-15T00:00:00.000Z' : end }, now);
+  }
+  for (let i = 0; i < 1_000; i++) {
+    const discordId = `weekly-user-${i}`, publicId = `weekly-account-${i}`;
+    members.set(discordId, { id: discordId, user: { bot: false } });
+    db.linkGuildUser(guildId, 'manager', discordId, publicId, `Player ${i}`);
+    db.history.markCoverage({ guild_id: guildId, kind: 'player', subject: publicId,
+      window_start: start, window_end: i === 999 ? '2026-10-18T00:00:00.000Z' : end }, now);
+  }
+  const counts = { clanQueries: 0, coverageQueries: 0, payloadRows: 0 };
+  const prepare = db.db.prepare.bind(db.db);
+  t.mock.method(db.db, 'prepare', query => {
+    const statement = prepare(query);
+    if (query.startsWith('SELECT') && query.includes('FROM history_coverage')) counts.coverageQueries++;
+    if (!query.startsWith('SELECT payload FROM history_clan_matches')) return statement;
+    return { all(...parameters) {
+      counts.clanQueries++;
+      const rows = statement.all(...parameters);
+      counts.payloadRows += rows.length;
+      return rows;
+    } };
+  });
+  const report = (await buildWeeklyReport({ id: guildId, members: { fetch: async () => members } }, start, end)).toJSON();
+  assert.deepEqual(counts, { clanQueries: 10, coverageQueries: 2, payloadRows: 20 });
+  assert.match(report.description, /\*\*11\*\* distinct recorded games across \*\*10\*\*/);
+  assert.match(report.fields.find(field => field.name === 'Collection coverage').value, /9\/10 clans and 999\/1000 current linked members.*Coverage is partial/);
+  assert.match(report.fields.find(field => field.name === '[C00]').value, /2 recorded games · 2 wins · 0 losses/);
+  assert.match(report.fields.find(field => field.name === '[C01]').value, /2 recorded games · 1 wins · 1 losses/);
+  assert.equal(report.fields.filter(field => /^\[C/.test(field.name)).length, 8);
+  assert.match(report.fields.find(field => field.name === 'Clan result entries').value, /Wins\s+█+\s+15/);
+  assert.match(report.fields.find(field => field.name === 'Clan result entries').value, /Losses\s+[█░]+\s+5/);
+});

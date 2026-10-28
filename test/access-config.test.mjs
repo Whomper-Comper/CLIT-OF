@@ -272,6 +272,44 @@ test("configuration menus stay within Discord limits and paginate more than 25 c
   assertComponentLimits(logs.output);
 });
 
+for (const operation of ["save", "remove"]) test(`configuration ${operation} selects reconciliation members with one identity read for a large roster`, async (t) => {
+  const f = fixture();
+  db.setGuildClanConfig(savedConfig(f, { officer_role_id: ids.officer, join_role_id: ids.approval }));
+  const member = (id, roles = []) => ({ id, user: { bot: false }, roles: { cache: new Map(roles.map(role => [role, true])) } });
+  const global = member(`global-${f.guild.id}`), local = member(`local-${f.guild.id}`), holder = member("unlinked-holder", [ids.officer]);
+  const approval = member("approval-only", [ids.approval]), foreign = member("foreign-local"), outside = `outside-${f.guild.id}`;
+  db.linkUser(global.id, `account-${global.id}`, null, "identity_token");
+  db.linkGuildUser(f.guild.id, "manager", local.id, `account-${local.id}`, null);
+  db.linkGuildUser(`other-${f.guild.id}`, "manager", foreign.id, `account-foreign-${f.guild.id}`, null);
+  db.linkUser(outside, `account-${outside}`, null, "identity_token");
+  for (const id of [global.id, local.id, outside]) {
+    const job = db.getJob(f.guild.id, id);
+    if (job) db.finishJob(job);
+  }
+  const roster = new Map([global, local, holder, approval, foreign,
+    ...Array.from({ length: 451 }, (_, index) => member(`unlinked-${index}`))].map(value => [value.id, value]));
+  f.guild.members.fetch = async options => options ? f.user : roster;
+  const { id } = await open(f);
+  await action(f, id, "clan", "string", ["TEST"]);
+  if (operation === "save") await action(f, id, "officer_role_id", "role", []);
+  else await action(f, id, "delete");
+  t.mock.method(openfrontApi, "getClanInfo", async () => ({ tag: "TEST", name: "Test", description: "" }));
+  const prepare = db.db.prepare.bind(db.db);
+  let identityReads = 0;
+  t.mock.method(db.db, "prepare", sql => {
+    if (/^SELECT\b/i.test(sql) && /\bFROM\s+(?:linked_users|guild_links)\b/i.test(sql)) identityReads++;
+    return prepare(sql);
+  });
+  const result = await action(f, id, operation);
+  assert.equal(error(result), "");
+  assert.equal(identityReads, 1, "identity reads must not grow with the roster");
+  for (const memberId of [global.id, local.id, holder.id]) {
+    assert.ok(db.getJob(f.guild.id, memberId), `${memberId} requires reconciliation`);
+    assert.ok(JSON.parse(db.getJob(f.guild.id, memberId).role_ids).includes(ids.officer), "obsolete mapped roles remain queued");
+  }
+  for (const memberId of [approval.id, foreign.id, outside, "unlinked-450"]) assert.equal(db.getJob(f.guild.id, memberId), null);
+});
+
 test("new clan modal, role selection and save persist a validated mapping", async (t) => {
   const f = fixture(), { id } = await open(f);
   t.mock.method(openfrontApi, "getClanInfo", async () => ({ tag: "TEST", name: "Test", description: "" }));

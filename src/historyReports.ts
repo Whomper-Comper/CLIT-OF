@@ -80,8 +80,10 @@ export async function buildWeeklyReport(guild: Guild, start: string, end: string
   const links = db.getEffectiveLinks(guild.id).filter(link => members.has(link.discord_id) && !members.get(link.discord_id)!.user.bot);
   const validIds = new Map(links.map(link => [link.openfront_id, link]));
   const tags = new Set(configs.map(config => config.clan_tag.toUpperCase()));
-  const allRows = configs.flatMap(config => db.history.getClanMatches(guild.id, config.clan_tag, start, end));
-  const completeClans = configs.filter(config => db.history.getClanCoverage(guild.id, config.clan_tag, start, end).complete).length;
+  const clanRows = configs.map(config => ({ config, rows: db.history.getClanMatches(guild.id, config.clan_tag, start, end) }));
+  const allRows = clanRows.flatMap(clan => clan.rows);
+  const clanCoverage = db.history.getCoverageBySubject(guild.id, "clan", configs.map(config => config.clan_tag), start, end);
+  const completeClans = [...clanCoverage.values()].filter(coverage => coverage.complete).length;
   const players = new Map<string, { games: Set<string>; wins: Set<string> }>();
   const deletionCheck = Date.parse(db.history.getMeta("deletions_last_success") ?? "");
   const deletionsFresh = Number.isFinite(deletionCheck) && Date.now() - deletionCheck < day;
@@ -98,11 +100,13 @@ export async function buildWeeklyReport(guild: Guild, start: string, end: string
   }
   const ranked = [...players].sort((a, b) => b[1].wins.size - a[1].wins.size || b[1].games.size - a[1].games.size || a[0].localeCompare(b[0]));
   const bestRates = ranked.filter(([, entry]) => entry.games.size >= 3).sort((a, b) => b[1].wins.size / b[1].games.size - a[1].wins.size / a[1].games.size || b[1].games.size - a[1].games.size);
-  const completePlayers = deletionsFresh ? links.filter(link => db.history.getPlayerCoverage(guild.id, link.openfront_id, start, end).complete).length : 0;
+  const playerCoverage = deletionsFresh && rankingsEnabled
+    ? db.history.getCoverageBySubject(guild.id, "player", links.map(link => link.openfront_id), start, end) : new Map();
+  const completePlayers = [...playerCoverage.values()].filter(coverage => coverage.complete).length;
   const embed = new EmbedBuilder().setTitle("OpenFront weekly clan recap").setColor(completeClans === configs.length && (!rankingsEnabled || completePlayers === links.length) ? 0x3b82f6 : 0xf59e0b)
     .setDescription(`<t:${Math.floor(Date.parse(start) / 1000)}:f> to <t:${Math.floor(Date.parse(end) / 1000)}:f>\n**${new Set(allRows.map(row => row.gameId)).size}** distinct recorded games across **${configs.length}** configured clan(s).`);
-  for (const config of configs.slice(0, 8)) {
-    const stats = clanAnalysis(db.history.getClanMatches(guild.id, config.clan_tag, start, end));
+  for (const { config, rows } of clanRows.slice(0, 8)) {
+    const stats = clanAnalysis(rows);
     embed.addFields({ name: `[${label(config.clan_tag)}]`, value: `${stats.games} recorded games · ${stats.wins} wins · ${stats.losses} losses · ${winRate(BigInt(stats.wins), BigInt(stats.games))}\nPeak tagged turnout ${stats.peakTurnout} · average ${stats.averageTurnout.toFixed(1)} · API score sum ${stats.score.toFixed(2)}`, inline: true });
   }
   const performer = ([id, entry]: typeof ranked[number]) => `${profileLink(id, shortText(validIds.get(id)?.openfront_username || id, 32))} — **${entry.wins.size}** wins / **${entry.games.size}** appearances (${winRate(BigInt(entry.wins.size), BigInt(entry.games.size))})`;

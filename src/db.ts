@@ -6,6 +6,7 @@ import { CONFIG } from "./config.js";
 import { backupDatabaseBeforeMigration } from "./backups.js";
 import { HistoryStore } from "./historyStore.js";
 import { CommunityStore } from "./community/store.js";
+import { managedRoles } from "./roles.js";
 
 export interface LinkedUser {
   discord_id: string; openfront_id: string; openfront_username: string | null;
@@ -26,8 +27,7 @@ export interface AuditEntry {
   id: number; guild_id: string | null; actor_id: string; discord_id: string;
   action: string; old_id: string | null; new_id: string | null; created_at: string;
 }
-export const managedRoles = (configs: GuildClanConfig[]) => [...new Set(configs.flatMap(c =>
-  [c.member_role_id, c.officer_role_id, c.leader_role_id].filter((id): id is string => !!id)))];
+export { managedRoles } from "./roles.js";
 
 export class BotDatabase {
   private db: DatabaseSync;

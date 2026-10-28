@@ -201,6 +201,135 @@ test('guild candidate polling persists attempts, fair backoff and never-observed
   } finally { await f.close(); }
 });
 
+test('unchanged thousand-member inventories use one candidate read without observation lookups or writes', () => {
+  const sql = new DatabaseSync(':memory:');
+  try {
+    CommunityStore.initialize(sql);
+    const bindings = Array.from({ length: 1000 }, (_, n) => ({
+      guildId: 'g', discordId: `u${n}`, publicId: `p${n}`, linkedAt: 'v1',
+    }));
+    let identityChecks = 0;
+    const store = new milestones.MilestoneStore(sql, () => { identityChecks++; return true; });
+    store.syncCandidates('g', bindings, 1000);
+    store.markAttempt(bindings[0], 1000);
+    store.markAttempt(bindings[0], 901000);
+    store.observe(bindings[1], counters(9n), thresholds, 2000);
+    const prepare = sql.prepare.bind(sql);
+    const readCandidates = () => prepare('SELECT * FROM community_milestone_candidates ORDER BY guild_id,discord_id').all();
+    const before = readCandidates();
+    const operations = [];
+    sql.prepare = query => new Proxy(prepare(query), { get(target, key) {
+      const value = target[key];
+      if (['all', 'get', 'run'].includes(key)) return (...args) => {
+        operations.push({ query, method: key });
+        return value.apply(target, args);
+      };
+      return typeof value === 'function' ? value.bind(target) : value;
+    } });
+    identityChecks = 0;
+    store.syncCandidates('g', bindings, 61000);
+    sql.prepare = prepare;
+    assert.deepEqual(readCandidates(), before);
+    assert.equal(identityChecks, 1000, 'every supplied binding still receives a fresh identity check');
+    assert.equal(operations.length, 1, `unchanged inventory executed ${operations.length} statements`);
+    assert.equal(operations[0].method, 'all');
+    assert.match(operations[0].query, /FROM community_milestone_candidates/);
+  } finally { sql.close(); }
+});
+
+test('inventory changes preserve scheduling, seed new candidates and invalidate removed or replaced generations', () => {
+  const sql = new DatabaseSync(':memory:');
+  try {
+    CommunityStore.initialize(sql);
+    const make = discordId => ({ guildId: 'g', discordId, publicId: `${discordId}-account`, linkedAt: 'v1' });
+    const [unchanged, replaced, reverified, removed, stale, fresh, recent] =
+      ['unchanged', 'replaced', 'reverified', 'removed', 'stale', 'fresh', 'recent'].map(make);
+    const identities = new Map([unchanged, replaced, reverified, removed, stale, fresh, recent]
+      .map(b => [b.discordId, b]));
+    const store = new milestones.MilestoneStore(sql, b => {
+      const current = identities.get(b.discordId);
+      return current?.publicId === b.publicId && current.linkedAt === b.linkedAt;
+    });
+    store.syncCandidates('g', [unchanged, replaced, reverified, removed, stale], 1000);
+    store.observe(replaced, counters(9n), thresholds, 2000);
+    store.markAttempt(replaced, 902000);
+    store.markAttempt(replaced, 1802000);
+    store.observe(reverified, counters(9n), thresholds, 3000);
+    store.markAttempt(reverified, 903000);
+    store.observe(removed, counters(9n), thresholds, 4000);
+    store.observe(recent, counters(9n), thresholds, 4000);
+    const otherGuild = { ...unchanged, guildId: 'h' };
+    store.syncCandidates('h', [otherGuild], 1000);
+    const candidate = b => sql.prepare(`SELECT * FROM community_milestone_candidates
+      WHERE guild_id=? AND discord_id=?`).get(b.guildId, b.discordId);
+    const before = [unchanged, replaced, reverified, otherGuild].map(candidate);
+    const newAccount = { ...replaced, publicId: 'replacement-account', linkedAt: 'v2' };
+    const newVerification = { ...reverified, linkedAt: 'v2' };
+    identities.set(replaced.discordId, newAccount);
+    identities.set(reverified.discordId, newVerification);
+    identities.delete(stale.discordId);
+    store.syncCandidates('g', [unchanged, newAccount, newVerification, fresh, recent, stale], 5000);
+    assert.deepEqual(candidate(unchanged), before[0]);
+    assert.deepEqual(candidate(otherGuild), before[3]);
+    for (const [b, previous] of [[newAccount, before[1]], [newVerification, before[2]]]) {
+      const current = candidate(b);
+      assert.equal(current.public_id, b.publicId);
+      assert.equal(current.linked_at, 'v2');
+      assert.notEqual(current.generation, previous.generation);
+      assert.deepEqual([current.next_attempt, current.failures, current.last_success],
+        [previous.next_attempt, previous.failures, previous.last_success]);
+      assert.throws(() => store.observe(b, counters(10n), thresholds, 5001, previous.generation));
+    }
+    assert.deepEqual([candidate(fresh).next_attempt, candidate(fresh).failures, candidate(fresh).last_success], [5000, 0, null]);
+    assert.deepEqual([candidate(recent).next_attempt, candidate(recent).failures, candidate(recent).last_success], [904000, 0, 4000]);
+    assert.equal(candidate(removed), undefined);
+    assert.equal(candidate(stale), undefined);
+    assert.throws(() => store.candidateGeneration(removed));
+    assert.equal(store.getState('g', removed.publicId).counters.games, 9n);
+    assert.deepEqual(store.dueMembers('g', 5000, 10), ['unchanged', 'fresh']);
+  } finally { sql.close(); }
+});
+
+test('repeated inventory bindings apply in order and reject a generation captured before a temporary replacement', () => {
+  const sql = new DatabaseSync(':memory:');
+  try {
+    milestones.MilestoneStore.initialize(sql);
+    const store = new milestones.MilestoneStore(sql);
+    const b = { guildId: 'g', discordId: 'u', publicId: 'p', linkedAt: 'v1' };
+    store.syncCandidates('g', [b], 1000);
+    const generation = store.candidateGeneration(b);
+    store.syncCandidates('g', [{ ...b, publicId: 'q' }, b, b], 2000);
+    assert.notEqual(store.candidateGeneration(b), generation);
+    assert.throws(() => store.markAttempt(b, 2000, generation));
+    assert.deepEqual(store.dueMembers('g', 1000, 1), ['u']);
+  } finally { sql.close(); }
+});
+
+test('failed candidate removal rolls back replacements and additions, and invalid guild inventories roll back writes', () => {
+  const sql = new DatabaseSync(':memory:');
+  try {
+    milestones.MilestoneStore.initialize(sql);
+    const store = new milestones.MilestoneStore(sql);
+    const b = { guildId: 'g', discordId: 'u', publicId: 'p', linkedAt: 'v1' };
+    const removed = { ...b, discordId: 'removed' };
+    const fresh = { ...b, discordId: 'fresh' };
+    store.syncCandidates('g', [b, removed], 1000);
+    const read = () => sql.prepare('SELECT * FROM community_milestone_candidates ORDER BY discord_id').all();
+    const before = read();
+    sql.exec(`CREATE TRIGGER reject_candidate_removal BEFORE DELETE ON community_milestone_candidates
+      BEGIN SELECT RAISE(ABORT, 'candidate removal unavailable'); END`);
+    assert.throws(() => store.syncCandidates('g', [{ ...b, linkedAt: 'v2' }, fresh], 2000), /candidate removal unavailable/);
+    assert.deepEqual(read(), before);
+    assert.throws(() => store.syncCandidates('g', [fresh, { ...b, guildId: 'h' }], 2000), /identity or membership changed/);
+    assert.deepEqual(read(), before);
+    sql.exec('DROP TRIGGER reject_candidate_removal');
+    sql.exec('BEGIN');
+    store.syncCandidates('g', [fresh], 2000);
+    sql.exec('ROLLBACK');
+    assert.deepEqual(read(), before);
+  } finally { sql.close(); }
+});
+
 // Losing the transaction boundary would retain awards after an intent insert fails.
 test('failed intent persistence rolls back counters, awards and due scheduling', () => {
   const sql = new DatabaseSync(':memory:');
