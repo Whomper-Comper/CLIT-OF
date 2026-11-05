@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, mock, test } from "node:test";
-import { Client, Collection, Events, MessageFlags } from "discord.js";
+import { Client, Collection, Events, MessageFlags, ChatInputCommandInteraction, ButtonInteraction,
+  ChannelSelectMenuInteraction, StringSelectMenuInteraction, PermissionFlagsBits } from "discord.js";
 
 process.env.DB_PATH = ":memory:";
 process.env.DISCORD_TOKEN = "test";
@@ -256,4 +257,155 @@ test('actual central event routes a saved lobby continuation from a DM',async()=
   const i=interaction({client,guildId:null,channelId:'dm',user:{id:'owner'},customId:`lobby:continue:${n.id}`,message:{id:'lobby-message',edit:async()=>{}},deferReply:async function(p){this.deferred=true;this.deferPayload=p;}});
   await route(i);assert.equal(s.search(guildId,'owner').state,'searching');assert.equal(i.edits.length,1);assert.equal(i.deferPayload.flags,MessageFlags.Ephemeral);
  }finally{client.guilds.cache.delete(guildId);db.community.purgeGuild(guildId);}
+});
+
+let configSequence = 0;
+async function realConfigFixture(t) {
+  const n = ++configSequence;
+  const guildId = `82000000000000000${n}`, userId = "720000000000000001", channelId = "920000000000000001";
+  const roleId = "920000000000000002", selectedChannel = "920000000000000003", changedChannel = "920000000000000004";
+  const member = { id: userId, user: { id: userId, bot: false }, roles: { cache: new Collection([[roleId, true]]) }, permissions: { has: () => true } };
+  const guild = { id: guildId, ownerId: userId,
+    members: { _add: () => member, resolve: () => null, fetch: async options => options ? member : new Collection([[userId, member]]),
+      fetchMe: async () => ({ permissions: { has: () => true }, roles: { highest: { comparePositionTo: () => 1 } } }) },
+    roles: { fetch: async id => id ? { id, managed: false } : new Collection([[roleId, { id: roleId, managed: false }]]) },
+    channels: { fetch: async id => ({ id, type: 0, permissionsFor: () => ({ has: () => true }) }) } };
+  client.guilds.cache.set(guildId, guild);
+  t.after(() => client.guilds.cache.delete(guildId));
+  db.setManagerRole(guildId, roleId);
+  db.setGuildClanConfig({ guild_id: guildId, clan_tag: "TEST", member_role_id: roleId, officer_role_id: null,
+    leader_role_id: null, join_role_id: null, log_channel_id: null, sync_interval_mins: 10, last_sync_at: null });
+  const { openfrontApi } = await import("../dist/api.js");
+  t.mock.method(openfrontApi, "getClanInfo", async () => ({ tag: "TEST", name: "Test" }));
+  const responses = [], edits = [], order = [], fail = {};
+  const message = body => ({ id: "620000000000000001", channel_id: channelId, guild_id: guildId,
+    author: { id: "520000000000000001", username: "bot", discriminator: "0", bot: true },
+    content: "", embeds: [], components: [], attachments: [], flags: 64, ...JSON.parse(JSON.stringify(body ?? {})) });
+  t.mock.method(client.rest, "request", async () => { throw new Error("Unexpected REST boundary"); });
+  t.mock.method(client.rest, "post", async (path, options) => {
+    order.push("ack"); responses.push(options.body);
+    if (path.endsWith("/callback") && fail.ack) { const error = fail.ack; delete fail.ack; throw error; }
+    if (!path.endsWith("/callback") && fail.recovery) { const error = fail.recovery; delete fail.recovery; throw error; }
+    return path.endsWith("/callback") ? {} : message(options.body);
+  });
+  t.mock.method(client.rest, "patch", async (_path, options) => {
+    order.push("redraw");
+    if (fail.redraw) { const error = fail.redraw; delete fail.redraw; throw error; }
+    edits.push(options.body); return message(options.body);
+  });
+  let serial = 0;
+  const raw = (type, data) => ({ id: String((BigInt(Date.now()) - 1420070400000n) * 4194304n + BigInt(++serial)), application_id: "520000000000000001",
+    token: "local-test-token", type, version: 1, guild_id: guildId, channel: { id: channelId, type: 0 },
+    member: { user: { id: userId, username: "manager", discriminator: "0" }, roles: [roleId], permissions: String(PermissionFlagsBits.ManageGuild) },
+    app_permissions: "0", locale: "en-US", guild_locale: "en-US", entitlements: [], authorizing_integration_owners: {}, data,
+    ...(type === 3 ? { message: message(edits.at(-1)) } : {}) });
+  const slash = new ChatInputCommandInteraction(client, raw(2, { id: "420000000000000001", name: "config", type: 1 }));
+  await route(slash);
+  assert.equal(slash.deferred, true);
+  assert.equal(responses[0].data.flags, 64);
+  const custom = action => edits.at(-1).components.flatMap(r => r.components).find(c => c.custom_id?.endsWith(`:${action}`))?.custom_id;
+  const send = async (action, values, explicitId) => {
+    const id = explicitId ?? custom(action);
+    assert.ok(id, `visible ${action} control`);
+    const data = { custom_id: id, component_type: values ? (action === "clan" ? 3 : 8) : 2, ...(values ? { values, resolved: {} } : {}) };
+    const Class = values ? (action === "clan" ? StringSelectMenuInteraction : ChannelSelectMenuInteraction) : ButtonInteraction;
+    const i = new Class(client, raw(3, data));
+    await route(i);
+    return i;
+  };
+  return { guildId, guild, selectedChannel, changedChannel, edits, responses, order, send, custom, fail };
+}
+
+test("actual central event serializes real config channel select, change, clear and Save interactions", async t => {
+  const f = await realConfigFixture(t);
+  await f.send("clans"); await f.send("clan", ["TEST"]); await f.send("logs");
+  for (const selected of [f.selectedChannel, f.changedChannel, null]) {
+    const i = await f.send("log_channel_id", selected ? [selected] : []);
+    assert.ok(i instanceof ChannelSelectMenuInteraction);
+    assert.equal(i.deferred, true);
+    const body = f.edits.at(-1), select = body.components.flatMap(r => r.components).find(c => c.type === 8);
+    assert.deepEqual(body.allowed_mentions, { parse: [] });
+    assert.match(body.embeds[0].description, /unsaved/i);
+    assert.deepEqual(select.default_values ?? [], selected ? [{ id: selected, type: "channel" }] : []);
+    assert.equal(db.getGuildClanConfig(f.guildId, "TEST").log_channel_id, null);
+  }
+  await f.send("log_channel_id", [f.changedChannel]);
+  await f.send("save");
+  assert.equal(db.getGuildClanConfig(f.guildId, "TEST").log_channel_id, f.changedChannel);
+  assert.match(f.edits.at(-1).embeds[0].description, /Saved/);
+  assert.ok(f.responses.slice(1).every(body => body.type === 6), "normal components deferUpdate before redraw");
+  assert.deepEqual(f.order.slice(-2), ["ack", "redraw"]);
+  await f.send("logs"); await f.send("log_channel_id", []); await f.send("save");
+  assert.equal(db.getGuildClanConfig(f.guildId, "TEST").log_channel_id, null, "clearing and saving removes the saved destination");
+});
+
+test("actual central event serializes real history channel select, change, clear and Save interactions", async t => {
+  const f = await realConfigFixture(t);
+  await f.send("history");
+  for (const selected of [f.selectedChannel, f.changedChannel, null]) {
+    await f.send("history_channel", selected ? [selected] : []);
+    const body = f.edits.at(-1), select = body.components.flatMap(r => r.components).find(c => c.type === 8);
+    assert.deepEqual(body.allowed_mentions, { parse: [] });
+    assert.match(body.embeds[0].description, /unsaved/i);
+    assert.deepEqual(select.default_values ?? [], selected ? [{ id: selected, type: "channel" }] : []);
+    assert.equal(db.history.getSettings(f.guildId).channel_id, null);
+  }
+  await f.send("history_channel", [f.changedChannel]); await f.send("history_save");
+  assert.equal(db.history.getSettings(f.guildId).channel_id, f.changedChannel);
+  await f.send("history_channel", []); await f.send("history_save");
+  assert.equal(db.history.getSettings(f.guildId).channel_id, null);
+  assert.equal(db.history.getSettings(f.guildId).weekly_enabled, 0);
+});
+
+test("real config redraw rejection safely preserves draft and contains a failed private recovery", async t => {
+  const f = await realConfigFixture(t), failures = [], centralErrors = [];
+  t.mock.method(console, "warn", (...args) => failures.push(args));
+  t.mock.method(console, "error", (...args) => centralErrors.push(args));
+  await f.send("clans"); await f.send("clan", ["TEST"]); await f.send("logs");
+  await f.send("log_channel_id", [f.selectedChannel]);
+  f.fail.redraw = Object.assign(new Error("secret-token private request"), { code: 50035, requestBody: "secret request" });
+  f.fail.recovery = Object.assign(new Error("secret webhook"), { code: 10062 });
+  await assert.doesNotReject(f.send("log_channel_id", [f.changedChannel]));
+  assert.deepEqual(failures.map(args => [args[1].stage, args[1].code]), [["redraw", 50035], ["recovery", 10062]]);
+  assert.doesNotMatch(JSON.stringify(failures), /secret|requestBody|token|webhook/);
+  assert.equal(centralErrors.length, 0);
+  const recovery = f.responses.at(-1);
+  assert.equal(recovery.flags, 64);
+  assert.deepEqual(recovery.allowed_mentions, { parse: [] });
+  await f.send("save");
+  assert.equal(db.getGuildClanConfig(f.guildId, "TEST").log_channel_id, f.selectedChannel);
+});
+
+test("real config acknowledgement expiry stops work and releases the session", async t => {
+  const f = await realConfigFixture(t), failures = [];
+  t.mock.method(console, "warn", (...args) => failures.push(args));
+  const clansId = f.custom("clans"), before = f.edits.length;
+  const fetch = f.guild.members.fetch;
+  f.guild.members.fetch = async () => { assert.fail("failed acknowledgement must stop before access fetch"); };
+  f.fail.ack = Object.assign(new Error("secret expiry"), { code: 10062 });
+  const i = await f.send("clans");
+  assert.equal(i.deferred, false);
+  assert.equal(f.edits.length, before);
+  assert.equal(failures[0][1].stage, "acknowledgement");
+  assert.equal(failures[0][1].code, 10062);
+  assert.doesNotMatch(JSON.stringify(failures), /secret/);
+  assert.equal(f.responses.at(-1).data.flags, 64);
+  assert.deepEqual(f.responses.at(-1).data.allowed_mentions, { parse: [] });
+  f.guild.members.fetch = fetch;
+  await f.send("clans", undefined, clansId);
+  assert.match(f.edits.at(-1).embeds[0].title, /Clan configuration/);
+});
+
+test("saved clan config report groups mappings, approval/logging and synchronization", async t => {
+  const f = await realConfigFixture(t);
+  const clan = commandsByName.get("clan"), output = [];
+  await clan.execute({ guildId: f.guildId, guild: f.guild, user: { id: "720000000000000001" },
+    member: { roles: { cache: new Collection([["920000000000000002", true]]) } }, memberPermissions: { has: () => true },
+    inCachedGuild: () => true, options: { getString: key => key === "action" ? "config" : null, getInteger: () => 1 },
+    deferReply: async () => {}, editReply: async body => { output.push(body); } }, {});
+  const fields = output[0].embeds[0].toJSON().fields;
+  assert.deepEqual(fields.map(field => field.name), ["Role mappings", "Approval & logging", "Synchronization"]);
+  assert.match(fields[0].value, /Member.*Officer.*Leader/s);
+  assert.match(fields[1].value, /Approval.*Logs/s);
+  assert.match(fields[2].value, /10 minutes.*Never/s);
 });

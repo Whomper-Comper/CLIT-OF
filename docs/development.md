@@ -16,6 +16,8 @@ Read the [architecture](architecture.md) before changing persistence, identity, 
 
 ## Toolchain and local setup
 
+The [Oracle ARM runbook](oracle-arm.md) explains the ANT compatibility gate, existing Node fallback and offline CPU/RSS workload. `node tools/check-runtime.mjs` makes no external requests and imports no bot configuration. `.github/workflows/verify.yml` runs isolated Node verification on Linux x64 and ARM64 without deployment credentials for pull requests, manual dispatch and pushes to main or feature branches.
+
 The package requires Node.js **22.13.0 or newer**. It uses Node's built-in `node:sqlite` `DatabaseSync`; installing a separate SQLite npm driver is unnecessary. `package.json` declares ESM (`"type": "module"`). TypeScript targets ES2022, uses strict checking and `NodeNext` module/module resolution, and emits from `src/` to `dist/`. Source imports use `.js` extensions so compiled imports resolve correctly. Tests are JavaScript ESM `.mjs` files that import the compiled `dist/` modules.
 
 Install locked dependencies from the repository root:
@@ -66,8 +68,11 @@ For a targeted iteration, build once before invoking the relevant files. Running
 ```sh
 npm run build
 node --test test/queue-reliability.test.mjs test/bot.test.mjs
+node --test test/role-enqueue-batch.test.mjs test/history-maintenance-indexes.test.mjs
+node --test test/api-admission.test.mjs test/session-expiry.test.mjs test/session-handlers.test.mjs
 node --test test/history-api.test.mjs test/history-collection.test.mjs test/history-improvements.test.mjs
 node --test test/stats-history.test.mjs test/stats-elo.test.mjs test/stats-line-graph.test.mjs
+node --test test/stats-line-graph-efficiency.test.mjs test/lobby-query-index.test.mjs test/lobby-feed-counts.test.mjs
 node --test test/access-config.test.mjs test/debug.test.mjs test/interaction-router.test.mjs
 node --test test/backups.test.mjs test/schedule-migration.test.mjs
 ```
@@ -82,12 +87,17 @@ After verification, inspect the actual changed files and report which commands r
 
 ## Test inventory
 
-There are **55 test files** under `test/` in the documented source tree: the 24 existing suites below, 23 community suites, and eight lobby suites in the [community inventory](#community-regression-inventory-and-performance-evidence). This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
+The suites below cover foundation, community and lobby behavior. Cross-cutting command, runtime and clan-batch checks are included alongside them. This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
 
 | File | Behaviors protected |
 | --- | --- |
+| `test/runtime-compatibility.test.mjs` | Isolated runtime preflight without bot configuration, disk database paths, credentials or external services; real CLI rejects a SQLite implementation missing ordered statement iteration |
+| `test/command-actions.test.mjs` | Seven flat action-choice schemas, required/irrelevant action inputs, zero/false values, permissions and legacy registered-subcommand compatibility |
+| `test/clan-sync-batch.test.mjs` | Shared initial rosters, profile cache/expiry, overlapping clan locks, per-clan timestamps/final membership checks, clone-returning role writes and real targeted command page/tag scopes with authoritative refresh/failure behavior |
 | `test/access-config.test.mjs` | Explicit manager/debug roles; owner/admin boundaries; configuration/history menus; pagination and component limits; revisions, permission revocation after awaits, expired/busy sessions, conflicting edits, final report guards and batched affected-member selection for Save/removal |
 | `test/api-reporting.test.mjs` | Coalesced/cloned/expired/fresh caches and generation ordering; response validation; exact profile/building arithmetic; graph alignment; coverage and fresh doctor diagnostics; statistics modes |
+| `test/api-admission.test.mjs` | Eight-active/64-waiting burst bounds; FIFO/exact queue deadlines; body/error cancellation and release; token-audience grouping; fresh generation cleanup; per-caller mutation isolation and maximum deletion-feed clone count |
+| `test/session-expiry.test.mjs`, `test/session-handlers.test.mjs` | Idle release without interaction; ten-minute boundaries, caps, clock jumps, timer cancellation/unref; real statistics/configuration/community handlers, retained heavy analytics and post-await revocation |
 | `test/backups.test.mjs` | Consistent WAL-inclusive snapshots; pre-migration contents; per-database rotation; invalid/new/in-memory database handling; process-owned deployment readiness |
 | `test/bot.test.mjs` | Command definitions and config validation; pure role-helper imports; clan authorization/setup/removal/pagination and batched affected-member selection; identity ownership and audit scoping; legacy migrations; role union/removal/stale-write checks; pacing, API failures and reply behavior |
 | `test/clan-sync-cross-config.test.mjs` | Cross-clan configuration changes and same-account re-verification invalidate stale role updates |
@@ -100,16 +110,21 @@ There are **55 test files** under `test/` in the documented source tree: the 24 
 | `test/history-api.test.mjs` | Exact-ID ladder lookup and bounded absence; malformed/forbidden responses; cursor/filter cache isolation; known empty versus missing history; sessions/time bounds/clan schema; deletion feed and UTC normalization |
 | `test/history-collection.test.mjs` | Opt-in settings; deduplication/coverage; batched job inventory counts/plans, preserved checkpoints/backoff, replacement/deletion/scope/rollback; bounded rotation; unlink/settings/shutdown races; deletion gaps; weekly DST and delivery reconciliation |
 | `test/history-improvements.test.mjs` | Atomic page and rating batches; indexed account/identity cleanup; repeatable index migration; streamed batched coverage; captured-clock Elo retention, latest-hour association rules and tombstones; leaderboard identity filtering and batch counts; one-query settings listing |
+| `test/history-maintenance-indexes.test.mjs` | Covering retained-member inventories, selective coverage/due ranges, identical pruning/retention/fairness results, repeatable initialization, preservation and migration rollback |
 | `test/history-reports.test.mjs` | Bounded one-day recent-clan scans, deduplication and partial labels; numeric/graph agreement; current-link/historical-tag weekly rankings and incomplete coverage; batched recap coverage and reuse of clan payloads |
 | `test/identity-lookup-race.test.mjs` | Whois and statistics reject changed identity bindings after profile/analytics requests and during later controls, while standalone public-ID lookups remain available |
 | `test/interaction-router.test.mjs` | Interaction event contains expired reply/follow-up failures; acknowledged components preserve their original message; unknown slash commands and deferred errors receive controlled responses |
 | `test/player-analytics.test.mjs` | Inclusive period boundaries, future/incomplete games, map normalization and scope separation; duplicate/cursor loops; later API failure, bounded scans and early period-boundary exit |
 | `test/player-stats-correctness.test.mjs` | Disjoint profile type/mode buckets; exact recent-window selection; missing bucket/partial totals; building, launch and trade wire slots |
 | `test/queue-reliability.test.mjs` | Persisted unlink priority; replacement-job version protection; paced priority preemption; guild fairness; one write per cleanup turn; failure isolation; revocation before grants; restartable progress |
+| `test/role-enqueue-batch.test.mjs` | Constant mapping/preparation work on large config rosters; obsolete-role retention, per-member/guild isolation, duplicate order, priority/created-at/version behavior, retries, empty rosters and atomic failure rollback |
 | `test/schedule-migration.test.mjs` | One-time legacy weekly default migration, custom schedule preservation and Monday-noon UTC default boundaries |
 | `test/stats-elo.test.mjs` | Cached/in-flight invalidation after deletion/unlink/settings changes; ladder-specific completeness warnings; graph attachment reuse and replacement; removed observations cannot reappear |
 | `test/stats-history.test.mjs` | Buildings independence/lifetime labels/exact counters; lazy bounded history pages and filters; session ownership/message binding/busy/expiry; settings races; retry paths, DMs, missing/deleted players and Discord output limits |
 | `test/stats-line-graph.test.mjs` | No fabricated chart for no valid points; complete decodable PNGs for parameterized samples; trace changes with observation order |
+| `test/stats-line-graph-efficiency.test.mjs` | Decoded-pixel equivalence to the prior renderer, spikes/duplicates/rounding boundaries and reduced dense-chart raster writes with unchanged observations |
+| `test/lobby-query-index.test.mjs` | Bounded ordered due-candidate selection under large mixed backlogs; four recovery statuses, exact cutoff/ties, legacy index upgrade, repeat initialization, custom-index preservation and rollback |
+| `test/lobby-feed-counts.test.mjs` | Owned count-state/index reuse; defensive old/new snapshots and point copies; partial/zero/duplicate/unknown counts, source/replacement/freshness/invalidation, and post-await capacity/rule rechecks |
 
 ## Adding or changing a command
 
@@ -194,7 +209,7 @@ Choose affected feature suites while iterating; run `npm test` once when ready f
 | `test/community-integration.test.mjs` | Actual runtime signup/checklist/availability evidence, deletion across guilds/account isolation, milestone disable, maximum cards/lists and indexed mixed-history diagnostics with real private pagination |
 | `test/final-review-regressions.test.mjs` | Event final-roster permission/session guards, availability draft validation, event list cap, cooldown expiry-scan counts/exact boundaries/clock changes/atomic capacity, milestone cooldown and in-flight sharing |
 
-`test/bot.test.mjs` also asserts exactly 16 unique commands, the unchanged `sides`/`count` dice interface and all seven Guild contexts. `test/interaction-router.test.mjs` exercises the actual central dispatcher and InteractionCreate listener across every community public/private prefix, malformed/forged bindings, valid bingo/milestones/duel controls and legacy fallthrough. The fixture substitutes only Discord/API boundaries; state transitions and query plans use real SQLite.
+`test/bot.test.mjs` also asserts exactly 16 unique commands, the unchanged `sides`/`count` dice interface and all seven community Guild contexts. `test/interaction-router.test.mjs` exercises the actual central dispatcher and InteractionCreate listener across every community public/private prefix, malformed/forged bindings, valid bingo/milestones/duel controls and legacy fallthrough. Its real Discord interaction objects also exercise config channel select/change/clear/Save and injected acknowledgement/redraw failures. `access-config` verifies staged redraw failures, committed-write recovery and repeated saves with legacy column ordering. The fixture substitutes only Discord/API boundaries; state transitions and query plans use real SQLite.
 
 Retain count/plan evidence for optimizations rather than adding wall-clock thresholds. Committed [architecture measurements](architecture.md#local-performance-evidence) preserve earlier local observations: availability Intl calls 93,810 → 46,905 for 129 zones/258 members (1.2649s → 0.5511s representative); event participant rows 10,001 → 20 + two aggregate rows; 1,000 settings queries 1,001 → 1 (12-iteration median 8.9947ms → 1.7075ms, p95 30.0878ms → 2.4469ms). The final diagnostics fixture seeds 12,000 mixed rows, returns 11 instead of 10,000 guild rows, and proves indexed order without a temporary sort. Later-page OFFSET cost is proportional to preceding matching diagnostics.
 
@@ -202,7 +217,7 @@ Bingo's measured production source pages are 200/200/51/1 for 451 games plus ava
 
 ## Lobby alert verification
 
-The eight lobby suites add behavioral coverage for source fixtures/full/count frames, filter combinations, reconnection, durable rules/deduplication, exact 180-second boundaries, DM success, blocked-DM fallback/guidance, fresh channel visibility, ambiguous/interrupted sends, retry of unsent candidates, lookup races, stop/drain and private command/button bindings. Matching, candidate rotation, joined validation, guarded send activation and bounded notification decoding tests constrain database operations; retention tests check indexed and fair bounded cleanup. The actual central router suite exercises continuation from a DM. Build before focused tests:
+The lobby suites add behavioral coverage for source fixtures/full/count frames, filter combinations, reconnection, durable rules/deduplication, exact 180-second boundaries, DM success, blocked-DM fallback/guidance, fresh channel visibility, ambiguous/interrupted sends, retry of unsent candidates, lookup races, stop/drain and private command/button bindings. Matching, candidate rotation, joined validation, guarded send activation and bounded notification decoding tests constrain database operations; retention tests check indexed and fair bounded cleanup. The actual central router suite exercises continuation from a DM. Build before focused tests:
 
 ```sh
 npm run build

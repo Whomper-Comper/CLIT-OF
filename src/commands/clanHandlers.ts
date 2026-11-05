@@ -1,7 +1,7 @@
 import { ChatInputCommandInteraction, EmbedBuilder, Guild, GuildMember } from "discord.js";
 import { db, GuildClanConfig, type LinkedUser, managedRoles } from "../db.js";
 import { openfrontApi, type OpenFrontClanMembership } from "../api.js";
-import { ClanSyncService, SyncResult } from "../clanSync.js";
+import { ClanSyncService, GuildClanSyncResult } from "../clanSync.js";
 import { configSnapshot, newClanDraft, normalizeClanTag, validateClanDraft } from "../setupConfig.js";
 import { toEpochSeconds } from "../utils.js";
 import { affectedRoleMemberIds, desiredRoles } from "../roles.js";
@@ -153,13 +153,9 @@ function configEmbed(c: GuildClanConfig) {
   const epoch = toEpochSeconds(c.last_sync_at);
   const role = (id: string | null) => id ? `<@&${id}>` : "None";
   return new EmbedBuilder().setTitle(`Clan configuration: [${shortText(c.clan_tag, 32)}]`).setColor(0x3b82f6)
-    .addFields({ name: "Member Role", value: role(c.member_role_id), inline: true },
-      { name: "Officer Role", value: role(c.officer_role_id), inline: true },
-      { name: "Leader Role", value: role(c.leader_role_id), inline: true },
-      { name: "Approval Role", value: role(c.join_role_id), inline: true },
-      { name: "Log Channel", value: c.log_channel_id ? `<#${c.log_channel_id}>` : "None", inline: true },
-      { name: "Sync Interval", value: `${c.sync_interval_mins} minutes`, inline: true },
-      { name: "Last Successful Sync", value: epoch !== null ? `<t:${epoch}:F> (<t:${epoch}:R>)` : "Never" });
+    .addFields({ name: "Role mappings", value: `**Member:** ${role(c.member_role_id)}\n**Officer:** ${role(c.officer_role_id)}\n**Leader:** ${role(c.leader_role_id)}` },
+      { name: "Approval & logging", value: `**Approval:** ${role(c.join_role_id)}\n**Logs:** ${c.log_channel_id ? `<#${c.log_channel_id}>` : "None"}` },
+      { name: "Synchronization", value: `**Sync interval:** ${c.sync_interval_mins} minutes\n**Last successful sync:** ${epoch !== null ? `<t:${epoch}:F> (<t:${epoch}:R>)` : "Never"}` });
 }
 
 async function config(i: GuildCommand) {
@@ -174,30 +170,29 @@ async function synchronize(i: GuildCommand, sync: ClanSyncService) {
   const target = i.options.getUser("user");
   // Public messages remain editable with the bot token after an interaction expires.
   const progress = !target ? await i.editReply({ content: "Clan sync is running. Role changes are paced; this message will show the result when it finishes." }) : null;
-  const results: { config: GuildClanConfig; results: SyncResult[] }[] = [];
+  const results: GuildClanSyncResult[] = [];
   if (target) {
     const targetMember = await member(i.guild, target.id);
     const link = db.getEffectiveLink(i.guildId, target.id);
     if (!link) throw new CommandError("That member has no OpenFront link in this server. They can use `/link`.");
-    for (const c of page.items) {
-      const result = await sync.syncMemberForClan(targetMember, link, c);
-      if (result.rolesAdded.length || result.rolesRemoved.length) await sync.logRoleChange(i.guild, c, targetMember, result);
-      results.push({ config: c, results: [result] });
-    }
+    const memberResults = await sync.syncMemberClans(targetMember, link, page.items);
+    results.push(...memberResults.map((result, index) => ({ config: page.items[index], results: [result] })));
   } else {
-    for (const c of page.items) results.push({ config: c, results: await sync.syncGuildClan(i.guild, c) });
+    results.push(...await sync.syncGuildClans(i.guild, page.items));
   }
   const flat = results.flatMap((r) => r.results);
-  const failed = flat.filter((r) => r.error).length;
+  const failed = flat.filter((r) => r.error).length + results.filter((r) => r.error).length;
   const unique = new Set(flat.map((r) => r.discordId)).size;
   const embed = new EmbedBuilder().setTitle(failed ? "Clan sync finished with errors" : "Clan sync complete").setColor(failed ? 0xf59e0b : 0x22c55e)
     .setDescription(`${unique} linked member(s) checked across ${page.items.length} clan(s). ${failed} failed check(s).`)
     .setFooter({ text: page.footer });
   for (const c of page.items) {
-    const list = results.find((r) => r.config.clan_tag === c.clan_tag)!.results;
+    const bucket = results.find((r) => r.config.clan_tag === c.clan_tag)!;
+    const list = bucket.results;
     const errors = list.filter((r) => r.error);
     const changes = list.reduce((count, r) => count + r.rolesAdded.length + r.rolesRemoved.length, 0);
-    embed.addFields({ name: `[${c.clan_tag}]`, value: target && list[0]?.error ? `Could not sync: ${shortText(list[0].error, 300)}`
+    embed.addFields({ name: `[${c.clan_tag}]`, value: bucket.error ? `Could not complete sync: ${shortText(bucket.error, 300)}`
+      : target && list[0]?.error ? `Could not sync: ${shortText(list[0].error, 300)}`
       : `${list.filter((r) => !r.error && r.inClan).length} in clan · ${changes} role changes · ${errors.length} failed check(s)`, inline: true });
   }
   if (progress) await progress.edit({ content: null, embeds: [embed], allowedMentions: { parse: [] } });

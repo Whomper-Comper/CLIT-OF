@@ -75,7 +75,13 @@ function fixture() {
   };
   s.configure("g", true, "c", time);
   s.watch("g", "u", { name: "World", map: "World" }, time);
-  const feed = { snapshot: () => ({ observedAt: time, lobbies }) };
+  const feed = {
+    snapshot: () => ({ observedAt: time, lobbies }),
+    getLobby: (source, id) => {
+      const current = lobbies.find(lobby => lobby.source === source && lobby.id === id);
+      return current ? { ...current } : null;
+    },
+  };
   const worker = new LobbyWorker(client, s, feed, { now: () => time });
   return {
     s,

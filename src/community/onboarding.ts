@@ -66,7 +66,7 @@ export interface OnboardingStatus {
   steps: OnboardingStep[];
   nextStep: string | null;
 }
-const changed = () => new CommandError('Onboarding identity, membership or enrollment changed. Reopen /onboarding status.');
+const changed = () => new CommandError('Onboarding identity, membership or enrollment changed. Reopen /onboarding action:status.');
 /** Resolve remote data first; the returned synchronous finalizer uses the final fresh member and current local facts.
 * Queue callers share a final bounded member lookup and release no stale earlier row. */
 export async function prepareOnboardingStatus(guildId: string, discordId: string, clanTag: string, db: BotDatabase, api: OpenFrontApi, now: number): Promise<(member: GuildMember | undefined) => OnboardingStatus> {
@@ -97,7 +97,7 @@ export async function prepareOnboardingStatus(guildId: string, discordId: string
       clan = {
         key: 'clan',
         state: 'unknown',
-        detail: 'This clan is no longer configured. Reopen /onboarding status and choose a configured clan.'
+        detail: 'This clan is no longer configured. Reopen /onboarding action:status and choose a configured clan.'
       };
     else if (!link)
       clan = {
@@ -134,13 +134,13 @@ export async function prepareOnboardingStatus(guildId: string, discordId: string
     steps.push({
       key: 'availability',
       state: available ? 'complete' : 'incomplete',
-      detail: available ? 'Weekly playing availability saved.' : 'Use /availability set to save at least one weekly playing window.'
+      detail: available ? 'Weekly playing availability saved.' : 'Use /availability action:set to save at least one weekly playing window.'
     });
     const signed = db.community.events.hasConfirmedSignup(guildId, discordId, now);
     steps.push({
       key: 'event',
       state: signed ? 'complete' : 'incomplete',
-      detail: signed ? 'Confirmed event signup recorded; this is not proof of attendance.' : 'Use /event list, open an event and Join. A reserve place does not complete this step.'
+      detail: signed ? 'Confirmed event signup recorded; this is not proof of attendance.' : 'Use /event action:list, open an event and Join. A reserve place does not complete this step.'
     });
     const complete = steps.every(s => s.state === 'complete');
     db.community.onboarding.markCompletion(guildId, discordId, complete, now, { publicId: link?.openfront_id ?? null, clanTag: tag });

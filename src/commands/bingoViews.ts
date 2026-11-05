@@ -26,7 +26,7 @@ export function renderBingoBoard(board: BingoBoard, state: BingoViewState = { re
   const lines = Array.from({ length: 12 }, (_, part) => bingoLineCells(part)).filter(indices => indices.every(index => visible.cells[index].complete)).length;
   const embed = new EmbedBuilder().setColor(0x5865f2).setTitle('Shared server bingo · 5 × 5')
     .setDescription(`${visible.cells.filter(c => c.complete).length}/25 complete · ${lines}/12 lines\nCreated <t:${Math.floor(board.createdAt / 1000)}:f>${board.closesAt === null ? ' · No closing date' : ` · Closes <t:${Math.floor(board.closesAt / 1000)}:f>`}`)
-    .setFooter({ text: `${state.label} · Full descriptions: /bingo view cell:<number> · Revision ${board.revision}`.slice(0, 1000) });
+    .setFooter({ text: `${state.label} · Full descriptions: /bingo action:view cell:<number> · Revision ${board.revision}`.slice(0, 1000) });
   for (let row = 0; row < 5; row++) {
     const value = visible.cells.slice(row * 5, row * 5 + 5).map(cell => {
       if (!cell.objective) return '**13 ✓ FREE**';

@@ -1,3 +1,4 @@
+import { commandAction } from './action.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, InteractionContextType, SlashCommandBuilder, type ChatInputCommandInteraction, type Interaction } from 'discord.js';
 import { db as defaultDatabase, type BotDatabase } from '../db.js';
 import { openfrontApi, type OpenFrontApi } from '../api.js';
@@ -68,10 +69,10 @@ export function createOnboardingCommand(dependencies: Dependencies = {}) {
         messageId: session.messageId
       }, now());
       const statuses = finish.map((finalize, n) => finalize(current.get(page.entries[n].discordId)));
-      const embed = new EmbedBuilder().setColor(0x5865f2).setTitle('Newcomer follow-up queue · Private').setDescription('Enrolled current members · Open /onboarding status user:… for private details.');
+      const embed = new EmbedBuilder().setColor(0x5865f2).setTitle('Newcomer follow-up queue · Private').setDescription('Enrolled current members · Open /onboarding action:status user:… for private details.');
       embed.addFields(...statuses.map((s, n) => ({ name: `${label(page.entries[n].discordId)} · ${label(page.entries[n].clanTag)}`, value: s.nextStep ?? 'Complete · Confirmed signup is not attendance.' })));
       if (!statuses.length)
-        embed.setDescription('No current members are enrolled. Members enroll with /onboarding status.');
+        embed.setDescription('No current members are enrolled. Members enroll with /onboarding action:status.');
       embed.setFooter({ text: `Page ${data.page + 1}/${page.pages} · 10 members per page · Private menu expires in 10 minutes` });
       return {
         embeds: [embed],
@@ -100,16 +101,18 @@ export function createOnboardingCommand(dependencies: Dependencies = {}) {
   }
   return {
     data: new SlashCommandBuilder().setName('onboarding').setDescription('Follow newcomer steps or privately review the officer queue').setContexts(InteractionContextType.Guild)
-      .addSubcommand(s => s.setName('status').setDescription('Your private newcomer checklist; officers may inspect a member')
-        .addStringOption(o => o.setName('clan').setDescription('Configured clan tag; required when more than one is configured').setMaxLength(32))
-        .addUserOption(o => o.setName('user').setDescription('Member to inspect (officers only)')))
-      .addSubcommand(s => s.setName('queue').setDescription('Private officer follow-up queue')
-        .addIntegerOption(o => o.setName('page').setDescription('Page number').setMinValue(1))),
+      .addStringOption(o => o.setName('action').setDescription('Choose the onboarding action').setRequired(true)
+        .addChoices(...['status', 'queue'].map(value => ({ name: value, value }))))
+      .addStringOption(o => o.setName('clan').setDescription('Status: configured clan tag; required if several are configured').setMaxLength(32))
+      .addUserOption(o => o.setName('user').setDescription('Status: member to inspect (officers only)'))
+      .addIntegerOption(o => o.setName('page').setDescription('Queue: page number').setMinValue(1)),
 
     async execute(i: ChatInputCommandInteraction): Promise<void> {
       if (!i.guild || !i.guildId || !i.channelId)
         throw new CommandError('Use onboarding in a server.');
-      const queue = i.options.getSubcommand() === 'queue';
+      const queue = commandAction(i.options, {
+        status: { allowed: ['clan', 'user'] }, queue: { allowed: ['page'] },
+      }) === 'queue';
       const targetId = queue ? i.user.id : i.options.getUser('user')?.id ?? i.user.id;
       if (queue || targetId !== i.user.id)
         await requireCommunityOfficer(i.guild, i.user.id, db);
@@ -166,7 +169,7 @@ export function createOnboardingCommand(dependencies: Dependencies = {}) {
       }, now());
       if (!['onboarding-queue', 'onboarding-status'].includes(session.kind) || !['previous', 'next', 'refresh'].includes(action) ||
         (session.kind === 'onboarding-status' && action !== 'refresh'))
-        throw new CommandError('Reopen /onboarding status or queue.');
+        throw new CommandError('Reopen /onboarding action:status or queue.');
       const data = session.data as Menu;
       if (data.busy || now() - data.lastAction < 10000)
         throw new CommandError('Please wait a few seconds before refreshing or changing pages.');

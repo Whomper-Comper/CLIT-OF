@@ -252,7 +252,7 @@ test('full availability, onboarding, event and wheel lists serialize their real 
     const queue = await execute(createOnboardingCommand(dependencies), 'queue');
     assert.equal(queue.embeds[0].fields.length, 10);
     const events = await execute(createEventCommand(dependencies), 'list', { page: 10 });
-    assert.equal(events.embeds[0].description.match(/\/event view/g).length, 10);
+    assert.equal(events.embeds[0].description.match(/\/event action:view/g).length, 10);
     const wheel = await execute(createWheelCommand(dependencies), 'presets');
     assert.deepEqual(wheel.components.map(r => r.components[0].options.length), [25, 25]);
   } finally { await f.close(); }

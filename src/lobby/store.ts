@@ -69,10 +69,30 @@ export class LobbyStore {
    CREATE TABLE IF NOT EXISTS lobby_notifications(id TEXT PRIMARY KEY,guild TEXT NOT NULL,user TEXT NOT NULL,generation TEXT NOT NULL,revision INTEGER NOT NULL,
     source TEXT NOT NULL,lobby_id TEXT NOT NULL,lobby TEXT NOT NULL,status TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next INTEGER NOT NULL,
     message TEXT,channel TEXT,deadline INTEGER,error TEXT,updated INTEGER NOT NULL,UNIQUE(guild,user,source,lobby_id));
-   CREATE INDEX IF NOT EXISTS lobby_notification_due ON lobby_notifications(status,next,updated);
+   CREATE INDEX IF NOT EXISTS lobby_notification_due ON lobby_notifications(status,next,updated,id);
    CREATE INDEX IF NOT EXISTS lobby_notification_owner ON lobby_notifications(guild,user);
    CREATE INDEX IF NOT EXISTS lobby_notification_retention ON lobby_notifications(updated);
    CREATE INDEX IF NOT EXISTS lobby_notification_terminal_retention ON lobby_notifications(updated,id) WHERE status IN ('sent','cancelled','review');`);
+    // IF NOT EXISTS leaves the installed three-column index unchanged. Upgrade
+    // only that legacy definition in the caller's backed-up schema transaction;
+    // leave already-upgraded and custom definitions intact on later startups.
+    const dueColumns = sql.prepare("PRAGMA index_info(lobby_notification_due)").all();
+    if (
+      dueColumns.length === 3 &&
+      dueColumns.every((column, i) => column.name === ["status", "next", "updated"][i])
+    ) {
+      const dueIndex = sql.prepare("PRAGMA index_list(lobby_notifications)").all()
+        .find((index) => index.name === "lobby_notification_due");
+      const keys = sql.prepare("PRAGMA index_xinfo(lobby_notification_due)").all()
+        .filter((column) => column.key === 1);
+      if (
+        dueIndex?.origin === "c" && dueIndex.unique === 0 && dueIndex.partial === 0 &&
+        keys.every((column) => column.desc === 0 && column.coll === "BINARY")
+      ) {
+        sql.exec(`DROP INDEX lobby_notification_due;
+          CREATE INDEX lobby_notification_due ON lobby_notifications(status,next,updated,id);`);
+      }
+    }
   }
   private transaction<T>(fn: () => T): T {
     return withCommunityTransaction(this.sql, fn);
@@ -470,7 +490,7 @@ export class LobbyStore {
       !this.settings(n.guild).enabled
     )
       throw new CommandError(
-        "This continuation has expired or was already used. Use /lobby resume in the server.",
+        "This continuation has expired or was already used. Use /lobby action:resume in the server.",
       );
     this.sql
       .prepare(

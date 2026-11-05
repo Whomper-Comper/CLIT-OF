@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { communityFixture } from './helpers/community.mjs';
+import { Client, MessageManager } from 'discord.js';
 const { CommunityService } = await import('../dist/community/service.js');
 const { deliveryMarker } = await import('../dist/community/deliveries.js');
 const jobInput = (f, extra = {}) => ({ key: 'one', guildId: 'g', channelId: 'c', kind: 'test', subjectId: 's', revision: 1, dueAt: f.now(), part: 0, ...extra });
@@ -8,6 +9,36 @@ function service(f, handler = { prepare: async () => ({ payload: { embeds: [{ ti
   const s = new CommunityService(f.client,f.db,f.api,{ now: f.now, ...options });
   s.registerDelivery('test', handler); f.services.push(s); return s;
 }
+
+test('recovery scans 100 messages without caching them and keeps the canonical cache', async (t) => {
+  const f = communityFixture(), client = new Client({ intents: [] });
+  try {
+    const s = service(f), deliveries = f.db.community.deliveries;
+    const job = deliveries.enqueue(jobInput(f));
+    deliveries.claim(f.now(), 1);
+    f.advance(300000);
+    const manager = new MessageManager({ id: 'c', client });
+    const canonical = { id: 'canonical', partial: false };
+    manager.cache.set(canonical.id, canonical);
+    let requests = 0;
+    t.mock.method(client.rest, 'get', async (_route, options) => {
+      requests++;
+      assert.equal(options.query.get('limit'), '100');
+      return Array.from({ length: 100 }, (_, i) => ({
+        id: String(1000 + i), content: '', author: { id: i === 0 ? 'imposter' : 'bot', username: 'Bot', discriminator: '0', avatar: null },
+        embeds: [{ footer: { text: i === 0 || i === 99 ? deliveryMarker(job) : 'unrelated' } }],
+      }));
+    });
+    f.channel.messages = manager;
+    await s.runOnce();
+    assert.equal(deliveries.get(job.id).messageId, '1099');
+    assert.equal(deliveries.get(job.id).status, 'sent');
+    assert.equal(f.calls.sends.length, 0);
+    assert.equal(requests, 1);
+    assert.equal(manager.cache.size, 1);
+    assert.equal(await manager.fetch('canonical'), canonical);
+  } finally { await f.close(); await client.destroy(); }
+});
 
 test('synchronous final-delivery hook uses the actual post-lookup clock and replaces the prepared edit payload', async () => {
   const f = communityFixture();

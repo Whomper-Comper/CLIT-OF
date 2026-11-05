@@ -56,7 +56,27 @@ export function eloLineGraph(values: RatingGraphPoint[]): Buffer | null {
     write(time(first),left,height-bottom+36);
     if (last !== first) write(time(last),width-right-60,height-bottom+36);
   }
-  for (let index = 1; index < points.length; index++) drawLine(x(points[index - 1].at), y(points[index - 1].rating), x(points[index].at), y(points[index].rating), line, true);
+  // Dense histories can retrace the same thick segment many times per column.
+  // Only identical ordered endpoints are interchangeable: reversing Bresenham
+  // endpoints can change its tie pixels. Up to two observations per column, keep
+  // the original loop: sets cost more when rounded segments rarely repeat.
+  if (points.length > 2 * (width - left - right)) {
+    const segments = new Set<number>();
+    for (let index = 1; index < points.length; index++) {
+      const x0 = Math.round(x(points[index - 1].at)), y0 = Math.round(y(points[index - 1].rating));
+      const x1 = Math.round(x(points[index].at)), y1 = Math.round(y(points[index].rating));
+      // Plot endpoints lie inside the image: x * height + y encodes one point.
+      // The ordered pair is below (900 * 380)^2, safely exact below 2^53.
+      const key = (x0 * height + y0) * (width * height) + x1 * height + y1;
+      if (segments.has(key)) continue;
+      segments.add(key);
+      drawLine(x0, y0, x1, y1, line, true);
+    }
+  } else {
+    for (let index = 1; index < points.length; index++) drawLine(x(points[index - 1].at), y(points[index - 1].rating), x(points[index].at), y(points[index].rating), line, true);
+  }
+  // Keep marker coordinates unrounded until pixel(): round(center + offset)
+  // can differ from round(center) + offset at floating-point half-pixel edges.
   for (const point of points) for (let dx = -3; dx <= 3; dx++) for (let dy = -3; dy <= 3; dy++) if (dx * dx + dy * dy <= 10) pixel(x(point.at) + dx, y(point.rating) + dy, line);
   const rows = Buffer.alloc((width * 3 + 1) * height);
   for (let row = 0; row < height; row++) pixels.copy(rows, row * (width * 3 + 1) + 1, row * width * 3, (row + 1) * width * 3);

@@ -20,7 +20,7 @@ export interface MilestoneIntent {
   awards: MilestoneAward[];
 }
 const POLL_INTERVAL = 15 * 60_000;
-const changed = () => new CommandError('Milestone identity or membership changed. Reopen /milestones view.');
+const changed = () => new CommandError('Milestone identity or membership changed. Reopen /milestones action:view.');
 
 export class MilestoneStore {
   constructor(private readonly sql: DatabaseSync, private readonly identityCurrent?: (binding: IdentityBinding) => boolean) {}

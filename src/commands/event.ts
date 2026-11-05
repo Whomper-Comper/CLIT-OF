@@ -1,3 +1,4 @@
+import { commandAction } from './action.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, InteractionContextType, ModalBuilder, SlashCommandBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle, type ChatInputCommandInteraction, type Interaction } from "discord.js";
 import { db as defaultDatabase, type BotDatabase } from "../db.js";
 import { CommandError, privateReply } from "./support.js";
@@ -27,7 +28,7 @@ export function createEventCommand(dependencies: Dependencies = {}) {
   const requireEvent = (guildId: string, id: string) => {
     const e = store.get(guildId, id);
     if (!e) {
-      throw new CommandError('Event unavailable. Reopen /event list.');
+      throw new CommandError('Event unavailable. Reopen /event action:list.');
     }
     return e;
   };
@@ -120,19 +121,18 @@ export function createEventCommand(dependencies: Dependencies = {}) {
   }
   return {
     data: new SlashCommandBuilder().setName('event').setDescription('Create and join team events').setContexts(InteractionContextType.Guild)
-      .addSubcommand(s => s.setName('create').setDescription('Preview a private event draft (officers)')
-        .addStringOption(o => o.setName('title').setDescription('Event title').setRequired(true).setMaxLength(100))
-        .addStringOption(o => o.setName('start').setDescription('Local date YYYY-MM-DD HH:mm').setRequired(true))
-        .addStringOption(o => o.setName('timezone').setDescription('IANA timezone, e.g. America/Bahia').setRequired(true))
-        .addStringOption(o => o.setName('offset').setDescription('UTC offset +/-HH:mm (required if date repeats)'))
-        .addStringOption(o => o.setName('description').setDescription('Description').setMaxLength(1000))
-        .addIntegerOption(o => o.setName('capacity').setDescription('Seats (default 20)').setMinValue(1).setMaxValue(100))
-        .addIntegerOption(o => o.setName('duration').setDescription('Minutes (default 120)').setMinValue(15).setMaxValue(720))
-        .addIntegerOption(o => o.setName('reminder').setDescription('Optional reminder lead').addChoices({ name: 'Off', value: 0 }, { name: '15 minutes', value: 15 }, { name: '30 minutes', value: 30 }, { name: '60 minutes', value: 60 })))
-      .addSubcommand(s => s.setName('list').setDescription('List recent and upcoming events').addIntegerOption(o => o.setName('page').setDescription('Page').setMinValue(1).setMaxValue(10)))
-      .addSubcommand(s => s.setName('view').setDescription('View an event').addStringOption(o => o.setName('id').setDescription('Event ID').setRequired(true)))
-      .addSubcommand(s => s.setName('edit').setDescription('Manage event draft, squads and members (officers)').addStringOption(o => o.setName('id').setDescription('Event ID').setRequired(true)))
-      .addSubcommand(s => s.setName('cancel').setDescription('Cancel an event (officers)').addStringOption(o => o.setName('id').setDescription('Event ID').setRequired(true))),
+      .addStringOption(o => o.setName('action').setDescription('Choose the event action').setRequired(true)
+        .addChoices(...['create', 'list', 'view', 'edit', 'cancel'].map(value => ({ name: value, value }))))
+      .addStringOption(o => o.setName('title').setDescription('Create: event title').setMaxLength(100))
+      .addStringOption(o => o.setName('start').setDescription('Create: local date YYYY-MM-DD HH:mm'))
+      .addStringOption(o => o.setName('timezone').setDescription('Create: IANA timezone, e.g. America/Bahia'))
+      .addStringOption(o => o.setName('offset').setDescription('Create: UTC offset +/-HH:mm (required if date repeats)'))
+      .addStringOption(o => o.setName('description').setDescription('Create: description').setMaxLength(1000))
+      .addIntegerOption(o => o.setName('capacity').setDescription('Create: seats (default 20)').setMinValue(1).setMaxValue(100))
+      .addIntegerOption(o => o.setName('duration').setDescription('Create: minutes (default 120)').setMinValue(15).setMaxValue(720))
+      .addIntegerOption(o => o.setName('reminder').setDescription('Create: optional reminder lead').addChoices({ name: 'Off', value: 0 }, { name: '15 minutes', value: 15 }, { name: '30 minutes', value: 30 }, { name: '60 minutes', value: 60 }))
+      .addIntegerOption(o => o.setName('page').setDescription('List: page').setMinValue(1).setMaxValue(10))
+      .addStringOption(o => o.setName('id').setDescription('View/edit/cancel: event ID')),
 
     createDraft,
 
@@ -140,7 +140,11 @@ export function createEventCommand(dependencies: Dependencies = {}) {
       if (!i.guild || !i.guildId || !i.channelId) {
         throw new CommandError('Use event in a server.');
       }
-      const sub = i.options.getSubcommand();
+      const sub = commandAction(i.options, {
+        create: { allowed: ['title', 'start', 'timezone', 'offset', 'description', 'capacity', 'duration', 'reminder'], required: ['title', 'start', 'timezone'] },
+        list: { allowed: ['page'] }, view: { allowed: ['id'], required: ['id'] },
+        edit: { allowed: ['id'], required: ['id'] }, cancel: { allowed: ['id'], required: ['id'] },
+      });
       await i.deferReply(privateReply);
       if (['create', 'edit', 'cancel'].includes(sub)) {
         await requireCommunityOfficer(i.guild, i.user.id, database);
@@ -172,7 +176,7 @@ export function createEventCommand(dependencies: Dependencies = {}) {
       if (sub === 'list') {
         const page = i.options.getInteger('page') ?? 1;
         const { entries, pages } = store.publishedPage(i.guildId, page);
-        await i.editReply({ embeds: [new EmbedBuilder().setTitle('Team events').setDescription(entries.map(e => `**${safe(e.title)}** · <t:${Math.floor(e.startAt / 1000)}:f> · ${e.status}\n/event view id:${e.id}`).join('\n\n') || 'No published events yet.').setFooter({ text: `Page ${page}/${pages}` })], allowedMentions: { parse: [] } });
+        await i.editReply({ embeds: [new EmbedBuilder().setTitle('Team events').setDescription(entries.map(e => `**${safe(e.title)}** · <t:${Math.floor(e.startAt / 1000)}:f> · ${e.status}\n/event action:view id:${e.id}`).join('\n\n') || 'No published events yet.').setFooter({ text: `Page ${page}/${pages}` })], allowedMentions: { parse: [] } });
         return;
       }
       const e = requireEvent(i.guildId, i.options.getString('id', true));
@@ -315,7 +319,7 @@ export function createEventCommand(dependencies: Dependencies = {}) {
           }
           sessions.delete(id);
           await i.reply({
-            content: `Saved. Start: UTC ${new Date(e.startAt).toISOString()} (UTC+00:00), <t:${Math.floor(e.startAt / 1000)}:F>. Reopen /event edit to review or publish.`,
+            content: `Saved. Start: UTC ${new Date(e.startAt).toISOString()} (UTC+00:00), <t:${Math.floor(e.startAt / 1000)}:F>. Reopen /event action:edit to review or publish.`,
             ...privateReply,
             allowedMentions: { parse: [] }
           });
@@ -368,7 +372,7 @@ export function createEventCommand(dependencies: Dependencies = {}) {
       }
       const parts = i.customId.split(':');
       if (parts.length < 4 || parts.length > 5 || !/^\d+$/.test(parts[3]) || (parts[4] !== undefined && !/^\d+$/.test(parts[4]))) {
-        throw new CommandError('Invalid event control. Reopen /event view.');
+        throw new CommandError('Invalid event control. Reopen /event action:view.');
       }
       const [, id, action, revision, pageText] = parts;
       const e = requireEvent(i.guildId, id);

@@ -80,8 +80,24 @@ export async function buildWeeklyReport(guild: Guild, start: string, end: string
   const links = db.getEffectiveLinks(guild.id).filter(link => members.has(link.discord_id) && !members.get(link.discord_id)!.user.bot);
   const validIds = new Map(links.map(link => [link.openfront_id, link]));
   const tags = new Set(configs.map(config => config.clan_tag.toUpperCase()));
-  const clanRows = configs.map(config => ({ config, rows: db.history.getClanMatches(guild.id, config.clan_tag, start, end) }));
-  const allRows = clanRows.flatMap(clan => clan.rows);
+  const gameIds = new Set<string>();
+  let clanWins = 0, clanLosses = 0;
+  const clanStats = configs.map(config => {
+    let games = 0, wins = 0, turnout = 0, peakTurnout = 0, score = 0;
+    // The store yields one canonical row per clan/game, including any correction.
+    // Finish each iterator synchronously, retaining only aggregates and game IDs.
+    for (const row of db.history.iterateClanMatches(guild.id, config.clan_tag, start, end)) {
+      gameIds.add(row.gameId);
+      games++;
+      if (row.hasWon) wins++;
+      turnout += row.clanPlayerCount;
+      peakTurnout = Math.max(peakTurnout, row.clanPlayerCount);
+      score += row.score;
+    }
+    clanWins += wins;
+    clanLosses += games - wins;
+    return { config, stats: { games, wins, losses: games - wins, averageTurnout: games ? turnout / games : 0, peakTurnout, score } };
+  });
   const clanCoverage = db.history.getCoverageBySubject(guild.id, "clan", configs.map(config => config.clan_tag), start, end);
   const completeClans = [...clanCoverage.values()].filter(coverage => coverage.complete).length;
   const players = new Map<string, { games: Set<string>; wins: Set<string> }>();
@@ -89,7 +105,7 @@ export async function buildWeeklyReport(guild: Guild, start: string, end: string
   const deletionsFresh = Number.isFinite(deletionCheck) && Date.now() - deletionCheck < day;
   const rankingsEnabled = settings.player_history_enabled === 1;
   let incomplete = 0;
-  for (const row of deletionsFresh && rankingsEnabled ? db.history.getPlayerMatches(guild.id, start, end) : []) {
+  for (const row of deletionsFresh && rankingsEnabled ? db.history.iteratePlayerMatches(guild.id, start, end) : []) {
     const link = validIds.get(row.public_id);
     if (!link || link.discord_id !== row.discord_id || !row.clanTag || !tags.has(row.clanTag.trim().toUpperCase()) || row.gameType.toLowerCase() !== "public" || row.gameMode.toLowerCase() !== "team") continue;
     if (!row.gameEnd) { incomplete++; continue; }
@@ -104,15 +120,14 @@ export async function buildWeeklyReport(guild: Guild, start: string, end: string
     ? db.history.getCoverageBySubject(guild.id, "player", links.map(link => link.openfront_id), start, end) : new Map();
   const completePlayers = [...playerCoverage.values()].filter(coverage => coverage.complete).length;
   const embed = new EmbedBuilder().setTitle("OpenFront weekly clan recap").setColor(completeClans === configs.length && (!rankingsEnabled || completePlayers === links.length) ? 0x3b82f6 : 0xf59e0b)
-    .setDescription(`<t:${Math.floor(Date.parse(start) / 1000)}:f> to <t:${Math.floor(Date.parse(end) / 1000)}:f>\n**${new Set(allRows.map(row => row.gameId)).size}** distinct recorded games across **${configs.length}** configured clan(s).`);
-  for (const { config, rows } of clanRows.slice(0, 8)) {
-    const stats = clanAnalysis(rows);
+    .setDescription(`<t:${Math.floor(Date.parse(start) / 1000)}:f> to <t:${Math.floor(Date.parse(end) / 1000)}:f>\n**${gameIds.size}** distinct recorded games across **${configs.length}** configured clan(s).`);
+  for (const { config, stats } of clanStats.slice(0, 8)) {
     embed.addFields({ name: `[${label(config.clan_tag)}]`, value: `${stats.games} recorded games · ${stats.wins} wins · ${stats.losses} losses · ${winRate(BigInt(stats.wins), BigInt(stats.games))}\nPeak tagged turnout ${stats.peakTurnout} · average ${stats.averageTurnout.toFixed(1)} · API score sum ${stats.score.toFixed(2)}`, inline: true });
   }
   const performer = ([id, entry]: typeof ranked[number]) => `${profileLink(id, shortText(validIds.get(id)?.openfront_username || id, 32))} — **${entry.wins.size}** wins / **${entry.games.size}** appearances (${winRate(BigInt(entry.wins.size), BigInt(entry.games.size))})`;
   embed.addFields({ name: "Most recorded wins · linked server members", value: ranked.slice(0, 5).map(performer).join("\n") || (!rankingsEnabled ? "Player history and rankings are disabled in /config." : deletionsFresh ? "No eligible player sessions were collected." : "Player rankings are withheld until the daily deleted-account check succeeds.") },
     { name: "Best recorded win fraction · at least 3 games", value: bestRates.slice(0, 3).map(performer).join("\n") || "No player has at least three collected games." },
-    { name: "Clan result entries", value: alignedBarChart([{ name: "Wins", value: BigInt(allRows.filter(row => row.hasWon).length) }, { name: "Losses", value: BigInt(allRows.filter(row => !row.hasWon).length) }]) },
+    { name: "Clan result entries", value: alignedBarChart([{ name: "Wins", value: BigInt(clanWins) }, { name: "Losses", value: BigInt(clanLosses) }]) },
     { name: "Collection coverage", value: `${completeClans}/${configs.length} clans${rankingsEnabled ? ` and ${completePlayers}/${links.length} current linked members` : " (player rankings disabled)"} have a fully checked window. ${completeClans < configs.length || (rankingsEnabled && completePlayers < links.length) ? "Coverage is partial; missing records can change rankings." : "All configured sources were checked for this window."}${configs.length > 8 ? ` Only the first 8 clan breakdowns are displayed; totals include all ${configs.length}.` : ""}\nRankings use stable linked accounts, completed public Team sessions and the clan tag recorded at game time. ${incomplete} record(s) without an end timestamp were excluded. This is not a tournament qualification system.` });
   return embed.setFooter({ text: shortText(`Weekly schedule zone: ${settings.timezone} · ${settings.collection_enabled ? "Automatic collection enabled" : "Automatic collection disabled"}`, 200) });
 }
