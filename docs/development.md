@@ -72,6 +72,7 @@ node --test test/role-enqueue-batch.test.mjs test/history-maintenance-indexes.te
 node --test test/api-admission.test.mjs test/session-expiry.test.mjs test/session-handlers.test.mjs
 node --test test/history-api.test.mjs test/history-collection.test.mjs test/history-improvements.test.mjs
 node --test test/stats-history.test.mjs test/stats-elo.test.mjs test/stats-line-graph.test.mjs
+node --test test/stats-line-graph-efficiency.test.mjs test/lobby-query-index.test.mjs test/lobby-feed-counts.test.mjs
 node --test test/access-config.test.mjs test/debug.test.mjs test/interaction-router.test.mjs
 node --test test/backups.test.mjs test/schedule-migration.test.mjs
 ```
@@ -121,6 +122,9 @@ The suites below cover foundation, community and lobby behavior. Cross-cutting c
 | `test/stats-elo.test.mjs` | Cached/in-flight invalidation after deletion/unlink/settings changes; ladder-specific completeness warnings; graph attachment reuse and replacement; removed observations cannot reappear |
 | `test/stats-history.test.mjs` | Buildings independence/lifetime labels/exact counters; lazy bounded history pages and filters; session ownership/message binding/busy/expiry; settings races; retry paths, DMs, missing/deleted players and Discord output limits |
 | `test/stats-line-graph.test.mjs` | No fabricated chart for no valid points; complete decodable PNGs for parameterized samples; trace changes with observation order |
+| `test/stats-line-graph-efficiency.test.mjs` | Decoded-pixel equivalence to the prior renderer, spikes/duplicates/rounding boundaries and reduced dense-chart raster writes with unchanged observations |
+| `test/lobby-query-index.test.mjs` | Bounded ordered due-candidate selection under large mixed backlogs; four recovery statuses, exact cutoff/ties, legacy index upgrade, repeat initialization, custom-index preservation and rollback |
+| `test/lobby-feed-counts.test.mjs` | Owned count-state/index reuse; defensive old/new snapshots and point copies; partial/zero/duplicate/unknown counts, source/replacement/freshness/invalidation, and post-await capacity/rule rechecks |
 
 ## Adding or changing a command
 
@@ -213,7 +217,7 @@ Bingo's measured production source pages are 200/200/51/1 for 451 games plus ava
 
 ## Lobby alert verification
 
-The eight lobby suites add behavioral coverage for source fixtures/full/count frames, filter combinations, reconnection, durable rules/deduplication, exact 180-second boundaries, DM success, blocked-DM fallback/guidance, fresh channel visibility, ambiguous/interrupted sends, retry of unsent candidates, lookup races, stop/drain and private command/button bindings. Matching, candidate rotation, joined validation, guarded send activation and bounded notification decoding tests constrain database operations; retention tests check indexed and fair bounded cleanup. The actual central router suite exercises continuation from a DM. Build before focused tests:
+The lobby suites add behavioral coverage for source fixtures/full/count frames, filter combinations, reconnection, durable rules/deduplication, exact 180-second boundaries, DM success, blocked-DM fallback/guidance, fresh channel visibility, ambiguous/interrupted sends, retry of unsent candidates, lookup races, stop/drain and private command/button bindings. Matching, candidate rotation, joined validation, guarded send activation and bounded notification decoding tests constrain database operations; retention tests check indexed and fair bounded cleanup. The actual central router suite exercises continuation from a DM. Build before focused tests:
 
 ```sh
 npm run build

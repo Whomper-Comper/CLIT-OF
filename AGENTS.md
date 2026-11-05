@@ -25,6 +25,8 @@ This checked-in guidance applies to any AI agent working locally or from GitHub.
 - Make schema changes through the existing backed-up initialization and migration paths. Cover preservation of existing data, repeatable initialization, and failure behavior when relevant.
 - Keep clan configuration snapshots in explicit field order: legacy migrations append columns, so database row property order can differ from a new draft. A successful persistent Save must retain its new snapshot/revision even if Discord redraw fails; unsaved changes publish only after a successful redraw.
 - Keep external requests and runtime side effects out of local tests. The lobby codec is pinned to an upstream revision; see [lobby feed operations](docs/operations.md#lobby-feed-operations) before changing it.
+- Lobby count frames may reuse only privately owned normalized state; keep defensive `snapshot()`/`getLobby()` results, duplicate-ID behavior and all freshness/invalidation checks. The due index includes `(status,next,updated,id)`; initialization upgrades the recognized legacy definition once and preserves custom indexes and saved notifications.
+- Elo drawing optimizations must preserve decoded pixels and all observations used for scales/labels. Ordered Bresenham endpoints cannot be freely reversed, and marker `round(center + offset)` can differ from `round(center) + offset` at floating-point boundaries. Keep the original marker arithmetic; avoid deduplication allocations for sparse plots.
 
 ## Verification and operations
 

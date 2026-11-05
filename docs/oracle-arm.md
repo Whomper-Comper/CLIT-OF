@@ -18,7 +18,7 @@ The probe imports no bot configuration or entry point, opens only an in-memory S
 
 The user-authorized fallback is the bot's existing **Node.js >=22.13.0** runtime. Use a maintained, patched release satisfying that floor. The architecture CI checks the patched Node 22 line on Linux x64 and ARM64. Build/test tools and the current PM2/deployment script also use Node/npm. No SQLite adapter or alternate Discord transport is introduced.
 
-The feature publication `8357b45` passed both Node 22 / Ubuntu 24.04 x64 and Node 22 / Ubuntu 24.04 ARM64 jobs in [architecture verification run 41965480293](https://github.com/Whomper-Comper/CLIT-OF/actions/runs/41965480293). This verifies the Linux architecture matrix on that revision; Oracle Linux host/runtime and live Discord checks remain part of cutover.
+The optimization publication `1e13640` passed both Node 22 / Ubuntu 24.04 x64 and Node 22 / Ubuntu 24.04 ARM64 jobs in [architecture verification run 42048524530](https://github.com/Whomper-Comper/CLIT-OF/actions/runs/42048524530). This verifies the Linux architecture matrix on that revision; Oracle Linux host/runtime and live Discord checks remain part of cutover.
 
 ```sh
 node --version

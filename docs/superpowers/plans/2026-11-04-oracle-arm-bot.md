@@ -33,3 +33,13 @@ The initial implementation was published as `8357b45`. The user authorized conti
 4. Batch role-job enqueue preparation during clan configuration saves/removals. Read the unchanged mapping inventory once, reuse statements, and retain per-member obsolete roles, priority, versions, creation order, retries and atomic rollback. A synthetic 5,000-member/20-clan save exposed 5,000 mapping reads and 15,002 statement preparations in the original path.
 
 These tasks have disjoint source ownership and may run in parallel; final compilation and integration verification are serialized. Broad retention batching, blanket Discord member-cache limits, persistent roster caches and a graph rewrite remain deferred because their correctness or benefit is not established. Each follow-up receives a scoped review and publication includes updated documentation and agent guidance.
+
+## Further measured workload improvements
+
+The follow-up was reviewed, verified with 850 passing tests, and published as `1e13640`. The next pass preserves behavior and targets three measured costs:
+
+1. Extend the existing lobby notification due index with its final `id` ordering key. Upgrade only the recognized legacy three-column definition through backed-up initialization; do not rebuild unchanged indexes. Keep all four pending/recovery statuses, exact cutoffs, deterministic ordering and the four-row limit. Verify bounded candidate work and preservation/rollback on existing databases.
+2. Suppress identical ordered raster segments and safely identical markers in dense Elo charts, retaining all observations for scaling/labels. Require identical decoded pixels, including floating-point rounding boundaries, short spikes and duplicate timestamps. Sparse charts should avoid needless deduplication allocations. This is a local drawing optimization rather than a graph rewrite or sampling change.
+3. Reuse privately owned lobby objects/index entries for validated count frames. Public snapshots and point lookups remain defensive copies; full-frame replacement and every failure/stop/disconnect still invalidate the appropriate state. Verify zero index-key reconstruction on count updates alongside duplicate-ID, source, exact freshness and post-await delivery behavior.
+
+Use deterministic operation counts and pixel/result equivalence as regression evidence. Record local runtime/platform and storage costs alongside timings, then review and run integration verification before another feature-branch publication.
