@@ -10,7 +10,9 @@ export function commandErrorMessage(error: unknown, guildId: string | null): str
   if (!guildId || !db.getDebugSettings(guildId)?.verbose_errors) return shortText(message, 1900);
   let detail: string;
   if (error instanceof OpenFrontApiError) {
-    detail = error.reason === "timeout" ? "The OpenFront request exceeded its time limit. The service may be overloaded or the connection may be slow. Wait a minute and retry."
+    detail = error.reason === "busy" ? "The bot's OpenFront request capacity and waiting queue are full. This request could not start. Wait briefly and retry."
+      : error.reason === "queue_timeout" ? "The bot's wait for OpenFront request capacity reached its queue deadline before this request could start. Wait briefly and retry."
+      : error.reason === "timeout" ? "The OpenFront request exceeded its time limit. The service may be overloaded or the connection may be slow. Wait a minute and retry."
       : error.reason === "network" ? "The bot could not reach OpenFront. A network, DNS, or OpenFront outage may be responsible. Retry later; a manager can check clan API connectivity with the doctor action."
       : error.status === 429 ? "OpenFront is rate limiting requests (HTTP 429). Wait before retrying; repeated commands can extend the problem."
       : error.reason === "http" ? `OpenFront rejected the request (HTTP ${error.status ?? "error"}). Its service may be unavailable or access requirements may have changed. Retry later; persistent failures need a bot maintainer.`

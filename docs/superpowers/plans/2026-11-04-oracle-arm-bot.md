@@ -22,3 +22,14 @@ Approved design: [configuration and Oracle ARM design](../specs/2026-11-04-oracl
 ## Verification
 
 Each behavioral change gets a failing regression first and focused verification after compilation. Check operation counts as well as behavior for performance work. Review each task, run the complete suite and diff checks after integration, then obtain an independent whole-change review. Report measurements and limitations without extrapolating local checks to live Discord or Oracle performance.
+
+## Follow-up optimization pass
+
+The initial implementation was published as `8357b45`. The user authorized continued substantial optimization and refactoring after that publication. Offline audits identified four concrete follow-up tasks; these preserve the constraints above:
+
+1. Add covering retained-member inventories and selective coverage-retention/due-job indexes through repeatable schema initialization. Preserve pruning scope, exact cutoffs and fair job selection. Verify query plans alongside behavior and document index storage/write costs.
+2. Release expired statistics, configuration and private community sessions during idle periods. Use bounded registries with an unreferenced expiry timer, preserve existing caps and ten-minute deadlines, and retain all binding and post-await revocation checks. Use deterministic clocks/schedulers in tests.
+3. Remove the redundant cache-insertion clone while preserving per-caller defensive copies. Bound API-instance network/body/validation work with eight active slots, a FIFO queue of at most 64 and a two-second queue deadline; validate constructor overrides. Keep same-key coalescing, distinct fresh reads, generation ordering, controlled errors and existing fetch timeouts.
+4. Batch role-job enqueue preparation during clan configuration saves/removals. Read the unchanged mapping inventory once, reuse statements, and retain per-member obsolete roles, priority, versions, creation order, retries and atomic rollback. A synthetic 5,000-member/20-clan save exposed 5,000 mapping reads and 15,002 statement preparations in the original path.
+
+These tasks have disjoint source ownership and may run in parallel; final compilation and integration verification are serialized. Broad retention batching, blanket Discord member-cache limits, persistent roster caches and a graph rewrite remain deferred because their correctness or benefit is not established. Each follow-up receives a scoped review and publication includes updated documentation and agent guidance.

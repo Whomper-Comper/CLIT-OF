@@ -68,6 +68,8 @@ For a targeted iteration, build once before invoking the relevant files. Running
 ```sh
 npm run build
 node --test test/queue-reliability.test.mjs test/bot.test.mjs
+node --test test/role-enqueue-batch.test.mjs test/history-maintenance-indexes.test.mjs
+node --test test/api-admission.test.mjs test/session-expiry.test.mjs test/session-handlers.test.mjs
 node --test test/history-api.test.mjs test/history-collection.test.mjs test/history-improvements.test.mjs
 node --test test/stats-history.test.mjs test/stats-elo.test.mjs test/stats-line-graph.test.mjs
 node --test test/access-config.test.mjs test/debug.test.mjs test/interaction-router.test.mjs
@@ -93,6 +95,8 @@ The suites below cover foundation, community and lobby behavior. Cross-cutting c
 | `test/clan-sync-batch.test.mjs` | Shared initial rosters, profile cache/expiry, overlapping clan locks, per-clan timestamps/final membership checks, clone-returning role writes and real targeted command page/tag scopes with authoritative refresh/failure behavior |
 | `test/access-config.test.mjs` | Explicit manager/debug roles; owner/admin boundaries; configuration/history menus; pagination and component limits; revisions, permission revocation after awaits, expired/busy sessions, conflicting edits, final report guards and batched affected-member selection for Save/removal |
 | `test/api-reporting.test.mjs` | Coalesced/cloned/expired/fresh caches and generation ordering; response validation; exact profile/building arithmetic; graph alignment; coverage and fresh doctor diagnostics; statistics modes |
+| `test/api-admission.test.mjs` | Eight-active/64-waiting burst bounds; FIFO/exact queue deadlines; body/error cancellation and release; token-audience grouping; fresh generation cleanup; per-caller mutation isolation and maximum deletion-feed clone count |
+| `test/session-expiry.test.mjs`, `test/session-handlers.test.mjs` | Idle release without interaction; ten-minute boundaries, caps, clock jumps, timer cancellation/unref; real statistics/configuration/community handlers, retained heavy analytics and post-await revocation |
 | `test/backups.test.mjs` | Consistent WAL-inclusive snapshots; pre-migration contents; per-database rotation; invalid/new/in-memory database handling; process-owned deployment readiness |
 | `test/bot.test.mjs` | Command definitions and config validation; pure role-helper imports; clan authorization/setup/removal/pagination and batched affected-member selection; identity ownership and audit scoping; legacy migrations; role union/removal/stale-write checks; pacing, API failures and reply behavior |
 | `test/clan-sync-cross-config.test.mjs` | Cross-clan configuration changes and same-account re-verification invalidate stale role updates |
@@ -105,12 +109,14 @@ The suites below cover foundation, community and lobby behavior. Cross-cutting c
 | `test/history-api.test.mjs` | Exact-ID ladder lookup and bounded absence; malformed/forbidden responses; cursor/filter cache isolation; known empty versus missing history; sessions/time bounds/clan schema; deletion feed and UTC normalization |
 | `test/history-collection.test.mjs` | Opt-in settings; deduplication/coverage; batched job inventory counts/plans, preserved checkpoints/backoff, replacement/deletion/scope/rollback; bounded rotation; unlink/settings/shutdown races; deletion gaps; weekly DST and delivery reconciliation |
 | `test/history-improvements.test.mjs` | Atomic page and rating batches; indexed account/identity cleanup; repeatable index migration; streamed batched coverage; captured-clock Elo retention, latest-hour association rules and tombstones; leaderboard identity filtering and batch counts; one-query settings listing |
+| `test/history-maintenance-indexes.test.mjs` | Covering retained-member inventories, selective coverage/due ranges, identical pruning/retention/fairness results, repeatable initialization, preservation and migration rollback |
 | `test/history-reports.test.mjs` | Bounded one-day recent-clan scans, deduplication and partial labels; numeric/graph agreement; current-link/historical-tag weekly rankings and incomplete coverage; batched recap coverage and reuse of clan payloads |
 | `test/identity-lookup-race.test.mjs` | Whois and statistics reject changed identity bindings after profile/analytics requests and during later controls, while standalone public-ID lookups remain available |
 | `test/interaction-router.test.mjs` | Interaction event contains expired reply/follow-up failures; acknowledged components preserve their original message; unknown slash commands and deferred errors receive controlled responses |
 | `test/player-analytics.test.mjs` | Inclusive period boundaries, future/incomplete games, map normalization and scope separation; duplicate/cursor loops; later API failure, bounded scans and early period-boundary exit |
 | `test/player-stats-correctness.test.mjs` | Disjoint profile type/mode buckets; exact recent-window selection; missing bucket/partial totals; building, launch and trade wire slots |
 | `test/queue-reliability.test.mjs` | Persisted unlink priority; replacement-job version protection; paced priority preemption; guild fairness; one write per cleanup turn; failure isolation; revocation before grants; restartable progress |
+| `test/role-enqueue-batch.test.mjs` | Constant mapping/preparation work on large config rosters; obsolete-role retention, per-member/guild isolation, duplicate order, priority/created-at/version behavior, retries, empty rosters and atomic failure rollback |
 | `test/schedule-migration.test.mjs` | One-time legacy weekly default migration, custom schedule preservation and Monday-noon UTC default boundaries |
 | `test/stats-elo.test.mjs` | Cached/in-flight invalidation after deletion/unlink/settings changes; ladder-specific completeness warnings; graph attachment reuse and replacement; removed observations cannot reappear |
 | `test/stats-history.test.mjs` | Buildings independence/lifetime labels/exact counters; lazy bounded history pages and filters; session ownership/message binding/busy/expiry; settings races; retry paths, DMs, missing/deleted players and Discord output limits |

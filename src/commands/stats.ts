@@ -12,6 +12,7 @@ import { CommandError, identityBindingCurrent, label, playerId, profileLink, sho
 import { alignedBarChart } from "./statsGraph.js";
 import { eloLineGraph, RatingGraphPoint } from "./statsLineGraph.js";
 import { commandErrorMessage } from "./errorMessages.js";
+import { ExpiringSessions } from "../expiringSessions.js";
 
 type Analytics = NonNullable<Awaited<ReturnType<typeof loadPlayerAnalytics>>>;
 type Ladder = "1v1" | "2v2" | "ffa";
@@ -31,7 +32,7 @@ interface StatsTabs {
   eloGraphs: Map<Ladder, { key: string; image: Buffer | null }>;
   historyRevision: number; historyInvalid?: string;
 }
-const tabs = new Map<string, StatsTabs>();
+const tabs = new ExpiringSessions<StatsTabs>(500, session => session.expiresAt);
 const tabLifetime = 10 * 60_000, tabPrefix = "stats-pages:", historyPageSize = 5, historyMatchLimit = 100, historyBatchLimit = 20;
 const modes: AnalyticsMode[] = ["ffa", "team", "hvn", "ranked", "all"];
 const periods: AnalyticsPeriod[] = ["all", "24h", "7d", "30d", "90d", "365d"];
@@ -94,8 +95,6 @@ export const statsCommand = {
       playerId: id, discordId: link?.discord_id ?? null, identityVersion: link?.linked_at ?? null, expiresAt: now + tabLifetime, now, busy: false, base, stats: profile?.stats, mode, scope, period, map, ladder,
       view: interaction.options.getString("view") === "numbers" ? "numbers" : "graphs", page: "stats", history: new Map(), analytics: new Map(),
       eloGraphs: new Map(), historyRevision: db.history.getSettings(interaction.guildId ?? "dm").revision };
-    for (const [key, value] of tabs) if (value.expiresAt <= now) tabs.delete(key);
-    if (tabs.size >= 500) tabs.delete(tabs.keys().next().value!);
     tabs.set(session.id, session);
     try {
       let error: string | undefined;
