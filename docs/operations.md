@@ -260,7 +260,7 @@ For a deliberate code rollback, after checking database compatibility, deploying
 
 ### GitHub Actions deployment
 
-[The workflow](../.github/workflows/deploy.yml) runs on pushes to `main` and manual dispatch. It grants repository contents read permission, serializes production runs under `production-bot-deployment`, and does not cancel an already running deployment. The job has a 15-minute timeout; the SSH command has a ten-minute timeout.
+[The deployment workflow](../.github/workflows/deploy.yml) runs **only by manual dispatch** from GitHub Actions. Pushing or merging into `main` does not deploy the bot. The separate Linux architecture verification workflow still runs on pushes. To deploy deliberately, select **Deploy Bot to Oracle Cloud** in Actions and use **Run workflow** on the intended branch. The deployment workflow grants repository contents read permission, serializes production runs under `production-bot-deployment`, and does not cancel an already running deployment. The job has a 15-minute timeout; the SSH command has a ten-minute timeout.
 
 | Repository secret | Required / fallback | Use |
 | --- | --- | --- |
