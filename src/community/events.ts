@@ -50,7 +50,7 @@ const signupRow = (r: Record<string, unknown>): EventSignup => ({
   sequence: Number(r.sequence),
   reminder: !!r.reminder,
 });
-const changed = () => new CommandError("This event changed or is unavailable. Reopen /event view or edit.");
+const changed = () => new CommandError("This event changed or is unavailable. Reopen /event action:view or edit.");
 const decode = (row: Record<string, unknown>): EventRecord => ({
   ...JSON.parse(String(row.data)),
   id: String(row.id),

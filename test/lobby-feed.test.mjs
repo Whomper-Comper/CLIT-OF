@@ -10,6 +10,52 @@ const raw = {
   publicGameType: "team",
   gameConfig: { gameMap: "World", gameMode: "Team", maxPlayers: 100 },
 };
+const source = "https://blue.openfront.io";
+function full(games = [raw]) {
+  return { type: "full", serverTime: now, gitCommit: SUPPORTED_BUILD, active: true, games: { team: games } };
+}
+
+test("point reads return defensive copies of the first duplicate and preserve snapshot isolation", () => {
+  const f = new LobbyFeed({ now: () => now });
+  assert.equal(typeof f.getLobby, "function");
+  f.accept(full([raw, { ...raw, numClients: 99 }]), source);
+  const lobby = f.getLobby(source, raw.gameID);
+  assert.equal(lobby.players, 12);
+  lobby.players = 77;
+  const snapshot = f.snapshot();
+  snapshot.lobbies[0].players = 88;
+  snapshot.lobbies.length = 0;
+  assert.equal(f.getLobby(source, raw.gameID).players, 12);
+  assert.equal(f.snapshot().lobbies.length, 2);
+  f.accept({ type: "counts", serverTime: now, counts: { [raw.gameID]: 20 } }, source);
+  assert.equal(f.getLobby(source, raw.gameID).players, 20);
+  assert.equal(f.getLobby("https://red.openfront.io", raw.gameID), null);
+  f.accept(full(), "https://red.openfront.io");
+  assert.equal(f.getLobby(source, raw.gameID), null);
+  assert.equal(f.getLobby("https://red.openfront.io", raw.gameID).players, 12);
+  f.accept(full([]), source);
+  assert.equal(f.getLobby("https://red.openfront.io", raw.gameID), null);
+  assert.equal(f.getLobby(source, raw.gameID), null);
+});
+
+test("point reads expire at exactly thirty seconds and clear on stop and invalid frames", () => {
+  let time = now;
+  const f = new LobbyFeed({ now: () => time });
+  assert.equal(typeof f.getLobby, "function");
+  f.accept(full(), source);
+  time += 29_999;
+  assert.equal(f.getLobby(source, raw.gameID).players, 12);
+  time++;
+  assert.equal(f.getLobby(source, raw.gameID), null);
+  assert.equal(f.snapshot(), null);
+  f.accept(full(), source);
+  f.stop();
+  assert.equal(f.getLobby(source, raw.gameID), null);
+  f.accept(full(), source);
+  assert.throws(() => f.accept({ type: "counts", serverTime: now, counts: { a1234567: -1 } }, source));
+  assert.equal(f.getLobby(source, raw.gameID), null);
+  assert.equal(f.snapshot(), null);
+});
 test("filters combine and never match unknown, full or started lobbies", () => {
   const lobby = normalizeLobby(raw, "https://blue.openfront.io", now, now);
   assert.equal(
@@ -121,10 +167,15 @@ test("connection errors replace watchdog with reconnect instead of leaving the f
   f.start();
   await immediate();
   assert.equal(sockets, 1);
+  f.accept(full(), source);
+  assert.ok(f.getLobby(source, raw.gameID));
   socket.dispatchEvent(new Event("error"));
+  assert.equal(f.getLobby(source, raw.gameID), null);
+  assert.equal(f.snapshot(), null);
   t.mock.timers.tick(3000);
   await immediate();
   assert.equal(sockets, 2);
+  assert.equal(f.getLobby(source, raw.gameID), null);
   f.stop();
 });
 

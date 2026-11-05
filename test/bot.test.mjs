@@ -234,7 +234,7 @@ test("pending invitations paginate members rather than silently truncating them"
 test("server sync reports failed checks without a green success summary", async () => {
   const guild = guildFixture("sync-errors"); db.setGuildClanConfig(config(guild.id));
   const i = interaction("sync", guild);
-  await clanCommand.execute(i, { syncGuildClan: async () => [{ discordId: "u", inClan: false, rolesAdded: [], rolesRemoved: [], error: "Missing Permissions" }] });
+  await clanCommand.execute(i, { syncGuildClans: async (_guild, configs) => configs.map(config => ({ config, results: [{ discordId: "u", inClan: false, rolesAdded: [], rolesRemoved: [], error: "Missing Permissions" }] })) });
   assert.match(i.output.embeds[0].data.title, /errors/);
   assert.match(i.output.embeds[0].data.description, /1 failed/);
 });
@@ -493,7 +493,7 @@ test("server sync finishes by editing its public bot message", async () => {
   const i = interaction("sync", guild);
   let completed;
   i.editReply = async () => ({ edit: async (payload) => { completed = payload; } });
-  await clanCommand.execute(i, { syncGuildClan: async () => [] });
+  await clanCommand.execute(i, { syncGuildClans: async (_guild, configs) => configs.map(config => ({ config, results: [] })) });
   assert.equal(completed.content, null);
   assert.match(completed.embeds[0].data.title, /complete/);
 });

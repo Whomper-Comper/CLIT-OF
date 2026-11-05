@@ -128,7 +128,7 @@ export class CommunityService {
     }
   }
   private async reconcile(channel: DeliveryChannel, job: DeliveryJob): Promise<string | null> {
-    const messages = await channel.messages.fetch({ limit: 100 });
+    const messages = await channel.messages.fetch({ limit: 100, cache: false });
     const marker = deliveryMarker(job);
     return messages.find(message => message.author.id === this.client.user?.id &&
       (message.content?.split("\n").includes(marker) ||

@@ -32,9 +32,9 @@ Manage Server permission grants `/config` access even if the config role is miss
 
 1. Create a normal server role for bot managers, such as `@ClanManager`, and assign it to the people who should manage clans.
 2. A member with **Manage Server** opens `/config`.
-3. Select that role in **Set config role (saves immediately)**. The role must not be `@everyone` or an integration-managed role. Selecting it grants access to holders; it does not assign the role to anyone.
+3. Open **Access** and select that role in **Set config role (saves immediately)**. The role must not be `@everyone` or an integration-managed role. Selecting it grants access to holders; it does not assign the role to anyone.
 4. Optionally create/select a separate debug role and give it to people allowed to export identity associations. Its selector saves immediately. Clear it to disable `/debug`.
-5. Confirm the home menu displays the intended roles. A person without Manage Server can lose configuration access immediately if they change the config role to one they do not hold.
+5. Confirm the Access page displays the intended roles. A person without Manage Server can lose configuration access immediately if they change the config role to one they do not hold.
 
 If no one holds the saved role or it was deleted, a Manage Server member can reopen `/config` and choose a replacement. Previously opened menus cannot retain revoked access: actions refresh membership and permissions. All menu sessions are private, belong to their opener, expire after 10 minutes and disappear from process memory on restart.
 
@@ -62,16 +62,16 @@ Roles may be shared across different clans. The bot calculates earned roles acro
 
 ### Recommended menu workflow
 
-1. Open `/config` and choose **New clan**.
+1. Open `/config`, choose **Clans**, then **New clan**.
 2. Open **Tag / sync interval**. Enter a tag of 2–5 letters or digits without brackets; it is trimmed and uppercased. Enter an integer sync interval from 2 to 1440 minutes. New drafts use `DEFAULT_SYNC_INTERVAL_MINS`, normally 10 minutes.
-3. Open **Clan roles** and select Member plus optional Officer, Leader and Approval mappings. Optional selectors can be cleared. Choose **Back** to return to the draft summary.
-4. Open **Log channel**, optionally select a text channel, then return or save.
+3. Open **Roles** and select Member plus optional Officer, Leader and Approval mappings. Optional selectors can be cleared. Choose **Back** to return to General.
+4. Open **Logging**, optionally select a text channel, then return or save.
 5. Review the complete draft and choose **Save**. The bot refreshes roles/permissions, verifies the OpenFront clan exists, loads server membership and checks that no other session changed this configuration. Success reports that reconciliation is queued.
 6. Run `/clan action:doctor clan_tag:MARS`, then `/clan action:sync clan_tag:MARS` to inspect initial behavior. These slash actions require the selected config role, even if you created the configuration using Manage Server permission.
 
-Draft role/channel changes do not persist until Save. Leaving the clan draft with Back to clans/Cancel discards it. Changing the access/debug selectors on the home screen is different: those changes save immediately.
+Draft role/channel changes do not persist until Save. The General, Roles and Logging pages display saved/unsaved status. Back from Roles or Logging retains the draft; Cancel leaves the clan editor and discards it. The config/debug selectors on the Access page save immediately.
 
-Select an existing clan on the home menu to edit it. The home selector displays up to 25 clans per page. An existing tag cannot be renamed in place; configure the replacement tag and remove the old configuration if a tag changes. Concurrent edits are rejected rather than silently overwriting saved state. Reopen the clan and reapply the intended changes after a conflict.
+Select an existing clan on the Clans page to edit it. Its selector displays up to 25 clans per page. An existing tag cannot be renamed in place; configure the replacement tag and remove the old configuration if a tag changes. Concurrent edits are rejected rather than silently overwriting saved state. Reopen the clan and reapply the intended changes after a conflict.
 
 ### Equivalent slash setup
 
@@ -251,9 +251,9 @@ For removal, open the saved clan in `/config` → **Delete** → **Confirm remov
 
 ## Weekly availability
 
-Members manage their own schedules with `/availability set`, `/availability view`, and `/availability clear`. Personal schedules and edit menus stay private. Community officers (the configured manager role or an officer/leader role mapped to a configured clan) can use `/availability view user:@Member`; the bot fetches current roles for each privileged command or control. Existing configuration, clan and debug access rules remain unchanged.
+Members manage their own schedules with `/availability action:set`, `/availability action:view`, and `/availability action:clear`. Personal schedules and edit menus stay private. Community officers (the configured manager role or an officer/leader role mapped to a configured clan) can use `/availability action:view user:@Member`; the bot fetches current roles for each privileged command or control. Existing configuration, clan and debug access rules remain unchanged.
 
-`/availability suggest` publishes counts and viewer-local Discord timestamps, with a fresh membership refresh and no private schedule details. The bot stores IANA timezones and local weekly windows so seasonal offset changes follow the member's timezone. Members who leave the server lose that server's availability; unlinking an OpenFront account preserves recurring availability. Removing the bot from a server clears its availability records. Private menus are bound to their owner, server, channel and original message and expire in ten minutes.
+`/availability action:suggest` publishes counts and viewer-local Discord timestamps, with a fresh membership refresh and no private schedule details. The bot stores IANA timezones and local weekly windows so seasonal offset changes follow the member's timezone. Members who leave the server lose that server's availability; unlinking an OpenFront account preserves recurring availability. Removing the bot from a server clears its availability records. Private menus are bound to their owner, server, channel and original message and expire in ten minutes.
 
 Suggestions are planning aids and do not create events or enroll participants. If no session fits all saved schedules, reduce duration or ask members to broaden their windows. The Members intent must permit the current roster refresh.
 
@@ -284,13 +284,13 @@ Event creation, editing, cancellation, squad management and private suggestion d
 
 Events publish through the shared delivery worker. The saved draft exists before the bot posts; a successful post is bound to that exact revision and message. Public signup controls work only on that canonical message. Other views link back to it. Card updates coalesce pending changes and edit the saved message rather than posting another event.
 
-Use `/event edit` to inspect paused or uncertain publication jobs. Correct missing channel permissions before retrying a paused delivery. A post with an uncertain outcome is marked **Needs review**, and the shared worker checks recent bot messages for its recovery marker before any retry. A successful Discord post whose database binding fails also requires review; automatic ticks do not blindly post duplicates. Draft changes remain locked while publication is unresolved. Do not remove the marker manually during reconciliation.
+Use `/event action:edit` to inspect paused or uncertain publication jobs. Correct missing channel permissions before retrying a paused delivery. A post with an uncertain outcome is marked **Needs review**, and the shared worker checks recent bot messages for its recovery marker before any retry. A successful Discord post whose database binding fails also requires review; automatic ticks do not blindly post duplicates. Draft changes remain locked while publication is unresolved. Do not remove the marker manually during reconciliation.
 
 Member departure removes active signups and marks reserve promotion due; unlinking an OpenFront account preserves unrelated event signups. Server removal clears that server's events/signups. The worker promotes present reserves, sends opted-in reminders, closes signups at the start and marks ended events finished. Bounded retention cleanup removes events and signups strictly after ninety days from the actual end or cancellation; active drafts remain saved. Use the publication recovery guidance above for paused or uncertain jobs. See [event scheduling and delivery](architecture.md#event-scheduling-and-delivery) for worker budgets and retention limits.
 
 ## Newcomer follow-up
 
-Members enroll themselves through `/onboarding status`, choosing a configured clan explicitly when more than one exists. Officers inspect a member with `/onboarding status user:@Member` or review `/onboarding queue`; both views remain private and use the community manager/officer/leader access rules. Roles and mappings are refreshed on each privileged command or button, including before releasing results from remote profile lookups.
+Members enroll themselves through `/onboarding action:status`, choosing a configured clan explicitly when more than one exists. Officers inspect a member with `/onboarding action:status user:@Member` or review `/onboarding action:queue`; both views remain private and use the community manager/officer/leader access rules. Roles and mappings are refreshed on each privileged command or button, including before releasing results from remote profile lookups.
 
 The queue contains only enrolled current human members and paginates ten at a time. One fresh roster establishes accurate current-member page counts; a final request checks only the displayed members and officer. Each page looks up at most ten linked profiles and never requests profiles for unlinked members. Navigation and Refresh have a ten-second cooldown. A membership, identity, enrollment or access change during lookup rejects stale results and asks the officer to reopen.
 
@@ -302,14 +302,14 @@ The access rules above come from `src/access.ts`; configuration validation from 
 
 ## Wheel preset administration
 
-Wheel management uses the community manager/officer/leader role rules. `/wheel presets`, `/wheel add`, `/wheel edit` and `/wheel remove` always open private controls. Each privileged action refreshes membership, rereads mapped roles and rejects stale revisions. The ordinary-reply privacy setting does not make these forms public. Preset removal requires an explicit confirmation; edits and enable/disable choices require **Save preset**.
+Wheel management uses the community manager/officer/leader role rules. `/wheel action:presets`, `/wheel action:add`, `/wheel action:edit` and `/wheel action:remove` always open private controls. Each privileged action refreshes membership, rereads mapped roles and rejects stale revisions. The ordinary-reply privacy setting does not make these forms public. Preset removal requires an explicit confirmation; edits and enable/disable choices require **Save preset**.
 
 A preset is a complete compatible hosting package. Free For All must leave teams as `none`; Team requires a numeric team count or Duos, Trios, Quads, or Humans Vs Nations. Bots allow 0–400; nations allow `default`, `disabled`, or 1–400. Humans Vs Nations requires nations enabled even with zero bots. Normal/Compact map sizes, the four explicit supported maps and supported unit names are validated before preview/save. Extend these catalogs through a reviewed source change.
 
 Each guild starts with six editable presets once. Removing all of them intentionally leaves an empty wheel; disabled/empty wheels give actionable officer guidance. Server removal clears presets and their initialization marker. Existing public spins have their own message lifetime. An officer's private draft button snapshots the chosen map/settings/instructions and cannot publish or enroll members automatically.
 ## Milestone announcements
 
-Open `/milestones configure` with Manage Server or the configured manager role. Announcements default to off. Choose a server text or announcement channel where the bot has View Channel, Send Messages, Embed Links and Read Message History, review the games/wins thresholds, enable announcements and Save. Channel selection and toggles are drafts until saved. Each privileged action freshly checks membership and configuration access, including after destination validation.
+Open `/milestones action:configure` with Manage Server or the configured manager role. Announcements default to off. Choose a server text or announcement channel where the bot has View Channel, Send Messages, Embed Links and Read Message History, review the games/wins thresholds, enable announcements and Save. Channel selection and toggles are drafts until saved. Each privileged action freshly checks membership and configuration access, including after destination validation.
 
 The default public Team lifetime thresholds are games 10/50/100/250/500 and wins 1/10/25/50/100. Each metric accepts zero to ten ascending, unique positive integers; blank disables that metric. Existing earned cards remain privately visible when thresholds or announcements are disabled. Baselines and newly introduced thresholds initialize quietly; later crossings combine into one card per observed member check. An approval role alone is not current OpenFront clan membership.
 
@@ -317,13 +317,13 @@ Use the private delivery diagnostics and **Retry / reconcile** controls after fi
 
 ## Shared bingo administration
 
-Community managers and configured clan officers/leaders manage `/bingo create`, `/bingo review` and `/bingo reset`; existing `/clan`, `/config` and `/debug` permissions are unchanged. Creation resumes the opener's own private draft. Review all 24 definitions, destination and optional UTC closing instant before publishing. After publication, definition changes require an explicitly confirmed reset. Reset archives the old board and cancels its pending publication/update/completion jobs; a replacement publication failure remains a recoverable draft.
+Community managers and configured clan officers/leaders manage `/bingo action:create`, `/bingo action:review` and `/bingo action:reset`; existing `/clan`, `/config` and `/debug` permissions are unchanged. Creation resumes the opener's own private draft. Review all 24 definitions, destination and optional UTC closing instant before publishing. After publication, definition changes require an explicitly confirmed reset. Reset archives the old board and cancels its pending publication/update/completion jobs; a replacement publication failure remains a recoverable draft.
 
-Members claim manual cells privately using a cell number, explanation and optional HTTPS evidence. The bot never fetches the evidence URL. Review ten claims per page, choose a claim to read the full submission, and record approve/reject with a reason. A rejected prior approval recomputes the cell/lines and writes an audit reason. Repeated pending member/cell claims share one ID. Public cards expose only Pending/completion state, not submitters' explanations or evidence. Full challenge labels remain available with `/bingo view cell:…`.
+Members claim manual cells privately using a cell number, explanation and optional HTTPS evidence. The bot never fetches the evidence URL. Review ten claims per page, choose a claim to read the full submission, and record approve/reject with a reason. A rejected prior approval recomputes the cell/lines and writes an audit reason. Repeated pending member/cell claims share one ID. Public cards expose only Pending/completion state, not submitters' explanations or evidence. Full challenge labels remain available with `/bingo action:view cell:…`.
 
 Game objectives depend on enabled and healthy player history, configured tags, retained eligible public Team games and freshly fetched current human membership. Approval roles alone do not provide game evidence. Cards show observed/incomplete coverage and retention limits; partial refreshes and roster outages withhold stale automatic counts/lines. Manual work remains available with collection disabled. Availability objectives include unlinked current humans. Losing/regaining a line does not announce it twice; an explicit reset creates a new namespace.
 
-Unpublished draft recovery uses `/bingo create`; active-board delivery diagnostics use `/bingo review`. Correct channel permissions before **Retry / reconcile**. Both flows refresh officer access. Preserve existing bot recovery markers for uncertain accepted sends; the shared worker reconciles recent messages before binding the original publication. Private sessions expire after ten minutes and stale board/claim controls require reopening. Member departure removes pending claims; archived boards/claims are cleaned in bounded batches after 90 days. Published Discord cards have their own lifetime.
+Unpublished draft recovery uses `/bingo action:create`; active-board delivery diagnostics use `/bingo action:review`. Correct channel permissions before **Retry / reconcile**. Both flows refresh officer access. Preserve existing bot recovery markers for uncertain accepted sends; the shared worker reconciles recent messages before binding the original publication. Private sessions expire after ten minutes and stale board/claim controls require reopening. Member departure removes pending claims; archived boards/claims are cleaned in bounded batches after 90 days. Published Discord cards have their own lifetime.
 
 ## Friendly dice duels
 
@@ -339,8 +339,8 @@ Member departure removes pending consent and participant slots, retaining only m
 
 1. Configure manager and clan rank mappings. Community officers may manage events, wheel presets, onboarding queues and bingo; milestone destination/enablement requires Manage Server or manager role. Verify both kinds of access with the intended member roles.
 2. Use server text/announcement destinations with View Channel, Send Messages, Embed Links and Read Message History. Event and bingo drafts use their command channel; inspect the draft and explicitly publish. A wheel draw only suggests settings for a human to host.
-3. Members save their own local weekly availability and open `/onboarding status` to enroll. Suggestions show counts, and event signup remains separate from attendance. Reminders default off; officers choose a lead and each confirmed member opts in on the public card.
-4. Announcements start disabled. Save a destination and thresholds in `/milestones configure` to opt in. Initial counters and newly configured thresholds baseline silently; polling uses current public Team profile totals and its own deletion-health gate, independently of match collection.
+3. Members save their own local weekly availability and open `/onboarding action:status` to enroll. Suggestions show counts, and event signup remains separate from attendance. Reminders default off; officers choose a lead and each confirmed member opts in on the public card.
+4. Announcements start disabled. Save a destination and thresholds in `/milestones action:configure` to opt in. Initial counters and newly configured thresholds baseline silently; polling uses current public Team profile totals and its own deletion-health gate, independently of match collection.
 5. For automatic bingo game cells, enable player history and collection in `/config` and ensure the deletion feed is healthy. Only retained post-board observations count. Manual claims and current-human availability submissions work with collection off. Partial scans hide automatic progress until a fresh generation completes.
 6. Review event management, milestone configuration, or bingo draft/review delivery status after permission failures. Correct access, reopen expired menus and deliberately **Retry / reconcile**. Preserve bot recovery markers. Needs review means an accepted send may exist; do not create another post to guess its outcome. Existing duel **Refresh** recovers a saved result without rerolling.
 
@@ -351,11 +351,11 @@ Unlink/replacement deletes account-derived milestone/bingo evidence and resets o
 A member with Manage Server or the configured manager role runs:
 
 ```text
-/lobby configure enabled:true channel:#lobby-alerts
+/lobby action:configure enabled:true channel:#lobby-alerts
 ```
 
-The bot needs View Channel, Send Messages, Embed Links and Read Message History in that ordinary server text channel. Members must be able to view it to receive fallback pings. Alerts start disabled, and watches require a configured enabled server. Changing settings stops existing searches; members explicitly restart with `/lobby resume`.
+The bot needs View Channel, Send Messages, Embed Links and Read Message History in that ordinary server text channel. Members must be able to view it to receive fallback pings. Alerts start disabled, and watches require a configured enabled server. Changing settings stops existing searches; members explicitly restart with `/lobby action:resume`.
 
-Members save their own filters with `/lobby watch name:World-teams map:World mode:Team min_players:20`. Results go to DMs first. If DMs are blocked, the bot mentions only that member in the fallback channel and tells them to enable DMs from server members. No role-wide pings or extra Message Content/Reaction intents are needed; continuation uses a button.
+Members save their own filters with `/lobby action:watch name:World-teams map:World mode:Team min_players:20`. Results go to DMs first. If DMs are blocked, the bot mentions only that member in the fallback channel and tells them to enable DMs from server members. No role-wide pings or extra Message Content/Reaction intents are needed; continuation uses a button.
 
-Every alert pauses searching until its owner clicks Continue searching within 180 seconds after delivery. Silence stops the search and keeps filters. `/lobby configure` without inputs privately shows delivery diagnostics and feed status. Fix channel/DM permissions, then ask the affected member to resume; a review-held lobby is not automatically resent.
+Every alert pauses searching until its owner clicks Continue searching within 180 seconds after delivery. Silence stops the search and keeps filters. `/lobby action:configure` without inputs privately shows delivery diagnostics and feed status. Fix channel/DM permissions, then ask the affected member to resume; a review-held lobby is not automatically resent.

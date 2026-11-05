@@ -4,6 +4,7 @@ import { LobbyStore, type Notification } from "./store.js";
 import { alertMessage } from "./messages.js";
 interface Feed {
   snapshot(): LobbySnapshot | null;
+  getLobby(source: string, id: string): Lobby | null;
 }
 class BudgetExhausted extends Error {}
 const errorCode = (e: unknown) =>
@@ -53,11 +54,7 @@ export class LobbyWorker {
   }
   private current(n: Notification): Lobby | null {
     if (this.stopped || !this.store.valid(n)) return null;
-    const snapshot = this.feed.snapshot();
-    if (!snapshot || this.now() - snapshot.observedAt >= 30000) return null;
-    const lobby = snapshot.lobbies.find(
-      (l) => l.id === n.lobby.id && l.source === n.lobby.source,
-    );
+    const lobby = this.feed.getLobby(n.lobby.source, n.lobby.id);
     return lobby &&
       this.store
         .rules(n.guild, n.user)

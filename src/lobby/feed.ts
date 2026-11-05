@@ -4,7 +4,7 @@ import {
   MAPS,
   MODES as GAME_MODES,
 } from "./vendor/codec.js";
-import { normalizeLobby, type LobbySnapshot } from "./model.js";
+import { normalizeLobby, type Lobby, type LobbySnapshot } from "./model.js";
 export { SUPPORTED_BUILD, MAPS };
 export const MODES: string[] = [...GAME_MODES, "Humans Vs Nations"] as string[];
 export const CATEGORIES = ["ffa", "team", "special", "hosted"];
@@ -26,6 +26,7 @@ interface Options {
 /** One shared broadcast connection. Unsupported deployments fail closed until the codec is updated. */
 export class LobbyFeed {
   private current: LobbySnapshot | null = null;
+  private readonly lobbyIndex = new Map<string, Lobby>();
   private ws: WebSocket | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private stopped = true;
@@ -43,6 +44,13 @@ export class LobbyFeed {
       ? structuredClone(this.current)
       : null;
   }
+  /** Fresh point lookup; normalized lobbies contain only scalar fields. */
+  getLobby(source: string, id: string): Lobby | null {
+    if (!this.current || this.now() - this.current.observedAt >= 30_000)
+      return null;
+    const lobby = this.lobbyIndex.get(JSON.stringify([source, id]));
+    return lobby ? { ...lobby } : null;
+  }
   accept(message: any, source: string): void {
     try {
       if (!message || !Number.isSafeInteger(message.serverTime))
@@ -50,6 +58,7 @@ export class LobbyFeed {
       const now = this.now();
       if (message.type === "full") {
         this.current = null;
+        this.lobbyIndex.clear();
         if (!compatible(message.gitCommit))
           throw new Error(
             "Unsupported OpenFront lobby build; regenerate the pinned codec.",
@@ -95,10 +104,17 @@ export class LobbyFeed {
           })),
         };
       } else throw new Error("Invalid lobby frame type");
+      this.lobbyIndex.clear();
+      for (const lobby of this.current.lobbies) {
+        const key = JSON.stringify([lobby.source, lobby.id]);
+        // Match Array.find's first-duplicate behavior used by delivery checks.
+        if (!this.lobbyIndex.has(key)) this.lobbyIndex.set(key, lobby);
+      }
       this.status = "Connected";
       this.failures = 0;
     } catch (e) {
       this.current = null;
+      this.lobbyIndex.clear();
       throw e;
     }
   }
@@ -112,6 +128,7 @@ export class LobbyFeed {
     this.stopped = true;
     this.generation++;
     this.current = null;
+    this.lobbyIndex.clear();
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.controller?.abort();
@@ -128,6 +145,7 @@ export class LobbyFeed {
   }
   private schedule(error: unknown): void {
     this.current = null;
+    this.lobbyIndex.clear();
     this.status =
       error instanceof Error
         ? error.message.slice(0, 180)

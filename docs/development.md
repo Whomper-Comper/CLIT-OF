@@ -16,6 +16,8 @@ Read the [architecture](architecture.md) before changing persistence, identity, 
 
 ## Toolchain and local setup
 
+The [Oracle ARM runbook](oracle-arm.md) explains the ANT compatibility gate, existing Node fallback and offline CPU/RSS workload. `node tools/check-runtime.mjs` makes no external requests and imports no bot configuration. `.github/workflows/verify.yml` runs isolated Node verification on Linux x64 and ARM64 without deployment credentials for pull requests, manual dispatch and pushes to main or feature branches.
+
 The package requires Node.js **22.13.0 or newer**. It uses Node's built-in `node:sqlite` `DatabaseSync`; installing a separate SQLite npm driver is unnecessary. `package.json` declares ESM (`"type": "module"`). TypeScript targets ES2022, uses strict checking and `NodeNext` module/module resolution, and emits from `src/` to `dist/`. Source imports use `.js` extensions so compiled imports resolve correctly. Tests are JavaScript ESM `.mjs` files that import the compiled `dist/` modules.
 
 Install locked dependencies from the repository root:
@@ -82,10 +84,13 @@ After verification, inspect the actual changed files and report which commands r
 
 ## Test inventory
 
-There are **55 test files** under `test/` in the documented source tree: the 24 existing suites below, 23 community suites, and eight lobby suites in the [community inventory](#community-regression-inventory-and-performance-evidence). This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
+The suites below cover foundation, community and lobby behavior. Cross-cutting command, runtime and clan-batch checks are included alongside them. This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
 
 | File | Behaviors protected |
 | --- | --- |
+| `test/runtime-compatibility.test.mjs` | Isolated runtime preflight without bot configuration, disk database paths, credentials or external services; real CLI rejects a SQLite implementation missing ordered statement iteration |
+| `test/command-actions.test.mjs` | Seven flat action-choice schemas, required/irrelevant action inputs, zero/false values, permissions and legacy registered-subcommand compatibility |
+| `test/clan-sync-batch.test.mjs` | Shared initial rosters, profile cache/expiry, overlapping clan locks, per-clan timestamps/final membership checks, clone-returning role writes and real targeted command page/tag scopes with authoritative refresh/failure behavior |
 | `test/access-config.test.mjs` | Explicit manager/debug roles; owner/admin boundaries; configuration/history menus; pagination and component limits; revisions, permission revocation after awaits, expired/busy sessions, conflicting edits, final report guards and batched affected-member selection for Save/removal |
 | `test/api-reporting.test.mjs` | Coalesced/cloned/expired/fresh caches and generation ordering; response validation; exact profile/building arithmetic; graph alignment; coverage and fresh doctor diagnostics; statistics modes |
 | `test/backups.test.mjs` | Consistent WAL-inclusive snapshots; pre-migration contents; per-database rotation; invalid/new/in-memory database handling; process-owned deployment readiness |
@@ -194,7 +199,7 @@ Choose affected feature suites while iterating; run `npm test` once when ready f
 | `test/community-integration.test.mjs` | Actual runtime signup/checklist/availability evidence, deletion across guilds/account isolation, milestone disable, maximum cards/lists and indexed mixed-history diagnostics with real private pagination |
 | `test/final-review-regressions.test.mjs` | Event final-roster permission/session guards, availability draft validation, event list cap, cooldown expiry-scan counts/exact boundaries/clock changes/atomic capacity, milestone cooldown and in-flight sharing |
 
-`test/bot.test.mjs` also asserts exactly 16 unique commands, the unchanged `sides`/`count` dice interface and all seven Guild contexts. `test/interaction-router.test.mjs` exercises the actual central dispatcher and InteractionCreate listener across every community public/private prefix, malformed/forged bindings, valid bingo/milestones/duel controls and legacy fallthrough. The fixture substitutes only Discord/API boundaries; state transitions and query plans use real SQLite.
+`test/bot.test.mjs` also asserts exactly 16 unique commands, the unchanged `sides`/`count` dice interface and all seven community Guild contexts. `test/interaction-router.test.mjs` exercises the actual central dispatcher and InteractionCreate listener across every community public/private prefix, malformed/forged bindings, valid bingo/milestones/duel controls and legacy fallthrough. Its real Discord interaction objects also exercise config channel select/change/clear/Save and injected acknowledgement/redraw failures. `access-config` verifies staged redraw failures, committed-write recovery and repeated saves with legacy column ordering. The fixture substitutes only Discord/API boundaries; state transitions and query plans use real SQLite.
 
 Retain count/plan evidence for optimizations rather than adding wall-clock thresholds. Committed [architecture measurements](architecture.md#local-performance-evidence) preserve earlier local observations: availability Intl calls 93,810 → 46,905 for 129 zones/258 members (1.2649s → 0.5511s representative); event participant rows 10,001 → 20 + two aggregate rows; 1,000 settings queries 1,001 → 1 (12-iteration median 8.9947ms → 1.7075ms, p95 30.0878ms → 2.4469ms). The final diagnostics fixture seeds 12,000 mixed rows, returns 11 instead of 10,000 guild rows, and proves indexed order without a temporary sort. Later-page OFFSET cost is proportional to preceding matching diagnostics.
 

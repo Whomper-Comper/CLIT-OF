@@ -131,8 +131,13 @@ export class HistoryStore {
     return this.db.prepare("SELECT weekly_since FROM history_settings WHERE guild_id=?").get(guild)?.weekly_since as string | null ?? null;
   }
   getClanMatches(guild: string, tag: string, start: string, end: string): OpenFrontClanSession[] {
-    return this.db.prepare(`SELECT payload FROM history_clan_matches WHERE guild_id=? AND clan_tag=? AND game_start>=? AND game_start<? ORDER BY game_start DESC,game_id`)
-      .all(guild,tag.trim().toUpperCase(),start,end).map(row => JSON.parse(String(row.payload)) as OpenFrontClanSession);
+    return [...this.iterateClanMatches(guild,tag,start,end)];
+  }
+  /** Consume synchronously; never retain an active SQLite iterator across an await. */
+  *iterateClanMatches(guild: string, tag: string, start: string, end: string): IterableIterator<OpenFrontClanSession> {
+    const rows = this.db.prepare(`SELECT payload FROM history_clan_matches WHERE guild_id=? AND clan_tag=? AND game_start>=? AND game_start<? ORDER BY game_start DESC,game_id`)
+      .iterate(guild,tag.trim().toUpperCase(),start,end);
+    for (const row of rows) yield JSON.parse(String(row.payload)) as OpenFrontClanSession;
   }
   upsertClanMatches(guild: string, tag: string, matches: OpenFrontClanSession[]) {
     const normalized = tag.trim().toUpperCase();
@@ -144,9 +149,14 @@ export class HistoryStore {
     });
   }
   getPlayerMatches(guild: string, start: string, end: string): StoredPlayerSession[] {
-    return this.db.prepare(`SELECT public_id,discord_id,payload FROM history_player_matches WHERE guild_id=? AND game_start>=? AND game_start<? ORDER BY game_start DESC,game_id`)
-      .all(guild,start,end).map(row => ({ ...JSON.parse(String(row.payload)) as OpenFrontPlayerSession,
-        public_id: String(row.public_id), discord_id: String(row.discord_id) }));
+    return [...this.iteratePlayerMatches(guild,start,end)];
+  }
+  /** Consume synchronously; never retain an active SQLite iterator across an await. */
+  *iteratePlayerMatches(guild: string, start: string, end: string): IterableIterator<StoredPlayerSession> {
+    const rows = this.db.prepare(`SELECT public_id,discord_id,payload FROM history_player_matches WHERE guild_id=? AND game_start>=? AND game_start<? ORDER BY game_start DESC,game_id`)
+      .iterate(guild,start,end);
+    for (const row of rows) yield { ...JSON.parse(String(row.payload)) as OpenFrontPlayerSession,
+      public_id: String(row.public_id), discord_id: String(row.discord_id) };
   }
   upsertPlayerMatches(guild: string, publicId: string, discordId: string, matches: OpenFrontPlayerSession[]) {
     if (this.isDeleted(publicId)) return;

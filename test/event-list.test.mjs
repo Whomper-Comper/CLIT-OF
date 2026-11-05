@@ -9,7 +9,7 @@ const draft = (f, extra = {}) => ({ guildId: 'g', channelId: 'c', creatorId: 'u'
   squads: [], reminderMinutes: 0, ...extra });
 function interaction(f, page = null) {
   return { guild: f.guild, guildId: 'g', channelId: 'c', user: { id: 'u' },
-    options: { getSubcommand: () => 'list', getInteger: () => page },
+    options: { getSubcommand: () => 'list', getInteger: name => name === 'page' ? page : null },
     async deferReply(payload) { this.deferred = payload; },
     async editReply(payload) { this.output = payload; return { id: 'private' }; } };
 }
@@ -49,7 +49,7 @@ test('event list reads only ten published payloads per page while preserving its
       returned = 0; decoded = 0; queries = [];
       const i = interaction(f, page); await command.execute(i);
       const embed = i.output.embeds[0].toJSON();
-      assert.deepEqual([...embed.description.matchAll(/\/event view id:([^\s]+)/g)].map(m => m[1]),
+      assert.deepEqual([...embed.description.matchAll(/\/event action:view id:([^\s]+)/g)].map(m => m[1]),
         expected.slice((page - 1) * 10, page * 10));
       assert.equal(embed.footer.text, 'Page ' + page + '/10');
       assert.equal(i.deferred.flags, MessageFlags.Ephemeral);
@@ -77,7 +77,7 @@ test('event list preserves empty and partial final pages and rejects unavailable
     await assert.rejects(command.execute(interaction(f, 2)), /existing event page/i);
     for (let n = 0; n < 11; n++) publish(f, { title: 'Published ' + n, startAt: f.now() + 3600000 + n });
     const last = interaction(f, 2); await command.execute(last);
-    assert.equal(last.output.embeds[0].toJSON().description.match(/\/event view/g).length, 1);
+    assert.equal(last.output.embeds[0].toJSON().description.match(/\/event action:view/g).length, 1);
     assert.equal(last.output.embeds[0].toJSON().footer.text, 'Page 2/2');
     await assert.rejects(command.execute(interaction(f, 3)), /existing event page/i);
   } finally { await f.close(); }

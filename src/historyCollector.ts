@@ -254,7 +254,7 @@ export class HistoryCollector {
         throw new Error("Weekly recap channel requires View Channel, Send Messages, Embed Links and Read Message History.");
       const marker = `Report ${delivery.nonce}`;
       if (delivery.attempts > 0) {
-        const recent = await channel.messages.fetch({limit:100});
+        const recent = await channel.messages.fetch({limit:100,cache:false});
         if (this.stopping) return;
         const prior = recent.find(message=>message.author.id === this.client.user?.id && message.embeds.some(embed=>embed.footer?.text.includes(marker)));
         if (prior) { this.db.history.finishDelivery(delivery,prior.id); return; }

@@ -78,6 +78,8 @@ function assertComponentLimits(payload) {
   }
   assert.ok(embedCharacters <= 6000, "configuration must fit Discord's combined embed limit");
   const json = rows(payload);
+  const customIds = json.flatMap(row => row.components.map(component => component.custom_id));
+  assert.equal(new Set(customIds).size, customIds.length, "each visible control must have its own custom ID");
   assert.ok(json.length <= 5, "Discord permits at most five action rows");
   for (const row of json) {
     assert.ok(row.components.length >= 1 && row.components.length <= 5);
@@ -89,6 +91,38 @@ function assertComponentLimits(payload) {
     }
   }
 }
+
+for (const legacyOrder of [false, true]) test(`a newly saved clan can be edited, saved again and removed with ${legacyOrder ? "legacy" : "current"} column order`, async t => {
+  const f = fixture();
+  if (legacyOrder) {
+    // The supported migration adds join_role_id after the original columns.
+    const readConfig = db.getGuildClanConfig.bind(db);
+    t.mock.method(db, "getGuildClanConfig", (...args) => {
+      const config = readConfig(...args);
+      if (!config) return null;
+      const { join_role_id, ...originalColumns } = config;
+      return { ...originalColumns, join_role_id };
+    });
+  }
+  t.mock.method(openfrontApi, "getClanInfo", async () => ({ tag: "TEST", name: "Test", description: "" }));
+  const { id } = await open(f);
+  await action(f, id, "new");
+  await action(f, id, "details", "modal", [], {
+    fields: { getTextInputValue: name => name === "tag" ? "TEST" : "10" },
+  });
+  await action(f, id, "member_role_id", "role", [ids.member]);
+  const first = await action(f, id, "save");
+  assert.equal(error(first), "");
+  assert.ok(db.getGuildClanConfig(f.guild.id, "TEST"));
+  await action(f, id, "log_channel_id", "channel", [ids.logs]);
+  const second = await action(f, id, "save");
+  assert.equal(error(second), "", "a saved draft must compare equal regardless of SQLite column order");
+  assert.equal(db.getGuildClanConfig(f.guild.id, "TEST").log_channel_id, ids.logs);
+  await action(f, id, "delete");
+  const removed = await action(f, id, "remove");
+  assert.equal(error(removed), "");
+  assert.equal(db.getGuildClanConfig(f.guild.id, "TEST"), null);
+});
 
 test("all clan access checks require the selected role even for an administrator or server owner", async () => {
   const f = fixture({ owner: true, manageGuild: true }), i = command(f);
@@ -257,7 +291,8 @@ test("configuration menus stay within Discord limits and paginate more than 25 c
   for (let n = 0; n < 27; n++) db.setGuildClanConfig(savedConfig(f, { clan_tag: `T${String(n).padStart(2, "0")}` }));
   const { i, id } = await open(f);
   assertComponentLimits(i.output);
-  assert.equal(components(i.output).find((c) => c.type === 3).options.length, 25);
+  const clans = await action(f, id, "clans");
+  assert.equal(components(clans.output).find((c) => c.type === 3).options.length, 25);
   const next = await action(f, id, "next");
   assertComponentLimits(next.output);
   assert.equal(components(next.output).find((c) => c.type === 3).options.length, 2);
@@ -509,4 +544,119 @@ for (const change of ['identity', 'departure']) test(`configuration coverage wit
   const result = await action(f, id, 'coverage');
   assert.equal(result.followups.some(value => value.embeds?.length), false);
   assert.match(error(result), /membership|identit.*changed/i);
+});
+
+test("configuration home links focused pages and access saves are explicit", async () => {
+  const f = fixture(), { i, id } = await open(f);
+  const links = components(i.output).map(c => c.custom_id.split(":").at(-1));
+  for (const name of ["clans", "access_page", "history", "diagnostics"]) assert.ok(links.includes(name), name);
+  assert.equal(components(i.output).some(c => c.type === 6), false);
+  for (const name of ["clans", "access_page", "diagnostics"]) {
+    const page = await action(f, id, name);
+    assertComponentLimits(page.output);
+    assert.ok(components(page.output).some(c => c.label === "Back"));
+  }
+  const access = await action(f, id, "access_page");
+  assert.ok(components(access.output).filter(c => c.type === 6).every(c => /immediately/.test(c.placeholder)));
+});
+
+for (const setting of ["log_channel_id", "history_channel"]) test(`${setting} visibly confirms staged select and clear, and discards a failed redraw`, async (t) => {
+  const f = fixture();
+  db.setGuildClanConfig(savedConfig(f));
+  const { id } = await open(f);
+  if (setting === "history_channel") await action(f, id, "history");
+  else { await action(f, id, "clan", "string", ["TEST"]); await action(f, id, "logs"); }
+  const selected = await action(f, id, setting, "channel", [ids.logs]);
+  assert.match(selected.output.embeds[0].toJSON().description, /unsaved/i);
+  const failures = [];
+  t.mock.method(console, "warn", (...args) => failures.push(args));
+  const failed = await action(f, id, setting, "channel", [], {
+    editReply: async () => { throw Object.assign(new Error("secret-token https://discord.com/api/webhooks/private"), { code: 50035, requestBody: "private" }); },
+  });
+  assert.match(error(failed), /try again|unexpected/i);
+  const page = await action(f, id, setting === "history_channel" ? "history_collect" : "logs");
+  const channel = components(page.output).find(c => c.type === 8);
+  assert.equal(channel.default_values[0].id, ids.logs, "failed redraw must not silently clear the draft");
+  const cleared = await action(f, id, setting, "channel", []);
+  assert.match(cleared.output.embeds[0].toJSON().description, /cleared.*unsaved/i);
+  assert.equal(components(cleared.output).find(c => c.type === 8).default_values?.length ?? 0, 0);
+  assert.equal(failures.length, 1);
+  const diagnostic = failures[0][1];
+  assert.equal(diagnostic.action, setting);
+  assert.equal(diagnostic.stage, "redraw");
+  assert.equal(diagnostic.code, 50035);
+  assert.equal(diagnostic.deferred, true);
+  assert.doesNotMatch(JSON.stringify(failures), /secret-token|webhooks|requestBody|private/);
+});
+
+for (const save of ["save", "history_save", "access", "debug_access"]) test(`${save} retains committed session state when redraw fails`, async (t) => {
+  const f = fixture({ manageGuild: true });
+  db.setGuildClanConfig(savedConfig(f));
+  const { id } = await open(f);
+  t.mock.method(console, "warn", () => {});
+  t.mock.method(openfrontApi, "getClanInfo", async () => ({ tag: "TEST", name: "Test" }));
+  if (save === "save") {
+    await action(f, id, "clan", "string", ["TEST"]);
+    await action(f, id, "log_channel_id", "channel", [ids.logs]);
+  } else if (save === "history_save") {
+    await action(f, id, "history"); await action(f, id, "history_channel", "channel", [ids.logs]);
+  }
+  const kind = save.endsWith("access") ? "role" : "button";
+  const target = save === "history_save" ? db.history : db;
+  const method = { save: "setGuildClanConfig", history_save: "saveSettings", access: "setManagerRole", debug_access: "setDebugRole" }[save];
+  const write = target[method].bind(target);
+  let writes = 0;
+  t.mock.method(target, method, (...args) => { writes++; return write(...args); });
+  const failed = await action(f, id, save, kind, [ids.replacement], {
+    editReply: async () => { throw Object.assign(new Error("invalid payload"), { code: 50035 }); },
+  });
+  assert.equal(writes, 1, "failed redraw/recovery must not repeat the committed write");
+  assert.match(error(failed), /saved.*reopen/i);
+  if (save === "save") assert.equal(db.getGuildClanConfig(f.guild.id, "TEST").log_channel_id, ids.logs);
+  const again = await action(f, id, save, kind, [ids.replacement]);
+  assert.equal(error(again), "", "committed snapshot/revision must survive redraw failure");
+  assert.ok(again.output, "busy lock must be released");
+});
+
+test("failed acknowledgement logs safe timing, contains recovery failure and releases busy", async (t) => {
+  const f = fixture(), { id } = await open(f), failures = [];
+  t.mock.method(console, "warn", (...args) => failures.push(args));
+  const before = f.calls();
+  await assert.doesNotReject(action(f, id, "clans", "button", [], {
+    createdTimestamp: Date.now() - 3500,
+    deferUpdate: async () => { throw Object.assign(new Error("secret expired"), { code: 10062 }); },
+    reply: async () => { throw new Error("secret recovery"); },
+  }));
+  assert.equal(f.calls(), before, "failed acknowledgement must not fetch access or mutate");
+  assert.equal(failures.length, 2);
+  assert.equal(failures[0][1].stage, "acknowledgement");
+  assert.equal(failures[0][1].code, 10062);
+  assert.ok(failures[0][1].interactionAgeMs >= 3500);
+  assert.equal(failures[1][1].stage, "recovery");
+  assert.doesNotMatch(JSON.stringify(failures), /secret/);
+  assert.ok((await action(f, id, "clans")).output);
+});
+
+test("config acknowledges before a slow refreshed access check", async () => {
+  const f = fixture(), { id } = await open(f), i = component(f, id, "clans");
+  const fetch = f.guild.members.fetch;
+  f.guild.members.fetch = async options => { assert.equal(i.deferred, true); return fetch(options); };
+  await handleConfigInteraction(i);
+  assert.ok(i.output);
+});
+
+test("opening config logs safe failure fields and never forwards a raw error to the central event", async t => {
+  const f = fixture(), i = command(f), failures = [];
+  t.mock.method(console, "warn", (...args) => failures.push(args));
+  i.editReply = async () => { throw Object.assign(new Error("secret-token private webhook URL"), { code: 50035 }); };
+  await assert.rejects(configCommand.execute(i), error => {
+    assert.equal(error.constructor.name, "CommandError");
+    assert.doesNotMatch(error.message, /secret-token|webhook/);
+    return true;
+  });
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0][1].action, "open");
+  assert.equal(failures[0][1].stage, "redraw");
+  assert.equal(failures[0][1].code, 50035);
+  assert.doesNotMatch(JSON.stringify(failures), /secret-token|webhook/);
 });

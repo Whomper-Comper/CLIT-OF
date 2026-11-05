@@ -4,6 +4,8 @@ A standalone Discord bot for connecting Discord and OpenFront accounts, synchron
 
 The bot uses TypeScript, discord.js 14, and Node.js built-in SQLite. It requires **Node.js 22.13.0 or newer**. The desktop control panel is maintained separately.
 
+For the Oracle Linux ARM migration and ANT compatibility gate, use the [Oracle ARM runbook](docs/oracle-arm.md). ANT 16.5 currently fails the required SQLite capability check; the supported fallback remains Node.
+
 ## Documentation
 
 Start with the guide for your role. The detailed references describe the implementation in this repository, including its limits; they do not certify a live deployment or upstream API availability.
@@ -15,6 +17,7 @@ Start with the guide for your role. The detailed references describe the impleme
 | [Server administration](docs/server-administration.md) | First configuration, access roles, clan role mappings, approvals, synchronization, diagnostics, and configuration drafts |
 | [Statistics and history](docs/statistics-and-history.md) | Filters, lifetime counters, buildings, partial coverage, observed Elo, collection, weekly recaps, and retention |
 | [Installation and operations](docs/operations.md) | Discord application setup, environment variables, Windows/Linux installation, PM2, deployment, backups, recovery, and troubleshooting |
+| [Oracle Linux ARM](docs/oracle-arm.md) | ANT capability gate, Node fallback, architecture checks, offline measurement, single-process migration and rollback |
 | [Architecture](docs/architecture.md) | Runtime flows, source map, database tables, queues, identity rules, caching, sessions, and reliability boundaries |
 | [Development](docs/development.md) | Local workflow, test inventory, targeted checks, and extending commands, settings, and data collection |
 | [Agent guidance](AGENTS.md) | Shared instructions for AI agents working locally or from GitHub |
@@ -97,7 +100,7 @@ For source development, use `npm run dev`. Keep one active bot process against a
 ### 4. Configure your server in Discord
 
 1. Someone with **Manage Server** opens `/config`.
-2. Select a **config role** (it saves immediately), and assign it to clan managers.
+2. Open **Access**, select a **config role** (it saves immediately), and assign it to clan managers.
 3. Hold that role yourself before running other `/clan` actions.
 4. Configure a clan and its member role through the GUI or `/clan action:setup`.
 5. Ask members to verify with `/link`, then run a sync and inspect `/clan action:doctor`.
@@ -115,7 +118,7 @@ The role and tag are examples. The [administration guide](docs/server-administra
 
 ## Command overview
 
-Discord commands below use named options. `/clan` is one command with an `action` choice, for example `/clan action:recent`; its actions are not separate subcommands.
+Discord commands below use named options. Multi-action commands use a required `action` choice: for example `/clan action:recent`, `/bingo action:view`, and `/event action:list`. This also applies to `/availability`, `/onboarding`, `/wheel`, `/milestones`, `/lobby`, and `/debug`.
 
 | Command | Purpose |
 |---|---|
@@ -140,7 +143,7 @@ See the [complete command reference](docs/commands.md) for every input and actio
 
 The registry contains 16 commands: the original eight, seven community commands, and the server-only lobby command. Community officers use the manager role or configured clan officer/leader roles; milestone announcement settings require configuration access (Manage Server or manager role). Existing clan/debug access stays independent.
 
-For community setup, configure clan mappings, check destination permissions, then create an event or bingo draft in its intended channel. Availability, onboarding, wheel and duels need no collection toggle. Milestone announcements start disabled; enable and Save in `/milestones configure`. Automatic bingo game cells require enabled player-history collection and healthy deletion synchronization; manual claims and availability evidence remain usable independently. Events display Discord timestamps in each reader's local time, reminders are opt-in, and duels save their rolls before displaying results. See [community setup and recovery](docs/server-administration.md#community-release-setup).
+For community setup, configure clan mappings, check destination permissions, then create an event or bingo draft in its intended channel. Availability, onboarding, wheel and duels need no collection toggle. Milestone announcements start disabled; enable and Save in `/milestones action:configure`. Automatic bingo game cells require enabled player-history collection and healthy deletion synchronization; manual claims and availability evidence remain usable independently. Events display Discord timestamps in each reader's local time, reminders are opt-in, and duels save their rolls before displaying results. See [community setup and recovery](docs/server-administration.md#community-release-setup).
 
 ### Identity examples
 

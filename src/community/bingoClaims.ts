@@ -59,7 +59,7 @@ export class BingoClaims {
       const board = this.boards.getActive(guildId);
       if (!claim || !board || claim.board_id !== board.id || claim.revision !== expectedRevision ||
           !officerId || typeof approve !== 'boolean' || typeof reason !== 'string' || !reason.trim() || reason.length > 1000 || !Number.isSafeInteger(now)) {
-        throw new CommandError('Claim changed or is unavailable. Reopen /bingo review and supply an audit reason.');
+        throw new CommandError('Claim changed or is unavailable. Reopen /bingo action:review and supply an audit reason.');
       }
       if (approve || claim.status === 'approved') {
         this.boards.setManualApproval(guildId, board.id, board.revision, Number(claim.cell_index), approve, officerId, reason, now);

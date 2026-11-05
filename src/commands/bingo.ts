@@ -1,3 +1,4 @@
+import { commandAction } from './action.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, InteractionContextType, ModalBuilder,
   SlashCommandBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle,
   type ChatInputCommandInteraction, type Interaction } from 'discord.js';
@@ -27,13 +28,13 @@ export function createBingoCommand(dependencies: Dependencies = {}) {
   const store = database.community.bingo;
   const active = (guildId: string) => {
     const board = store.getActive(guildId);
-    if (!board) throw new CommandError('No active bingo board. Ask an officer to use /bingo create.');
+    if (!board) throw new CommandError('No active bingo board. Ask an officer to use /bingo action:create.');
     return board;
   };
   const fresh = (expected: BingoBoard) => {
     const board = store.get(expected.guildId, expected.id);
     if (!board || board.status === 'archived' || board.revision !== expected.revision || board.messageId !== expected.messageId || board.status !== expected.status) {
-      throw new CommandError('Bingo board changed. Reopen /bingo view or your private menu.');
+      throw new CommandError('Bingo board changed. Reopen /bingo action:view or your private menu.');
     }
     return board;
   };
@@ -90,26 +91,26 @@ export function createBingoCommand(dependencies: Dependencies = {}) {
   }
   return {
     data: new SlashCommandBuilder().setName('bingo').setDescription('Shared server challenges and private claims').setContexts(InteractionContextType.Guild)
-      .addSubcommand(s => s.setName('view').setDescription('View the shared server board')
-        .addIntegerOption(o => o.setName('cell').setDescription('Read a full challenge description').setMinValue(1).setMaxValue(25)))
-      .addSubcommand(s => s.setName('create').setDescription('Create or resume a private board draft (officers)'))
-      .addSubcommand(s => s.setName('claim').setDescription('Submit a private manual challenge claim')
-        .addIntegerOption(o => o.setName('cell').setDescription('Cell number 1–25').setRequired(true).setMinValue(1).setMaxValue(25))
-        .addStringOption(o => o.setName('explanation').setDescription('Explain completion').setRequired(true).setMaxLength(1000))
-        .addStringOption(o => o.setName('evidence').setDescription('Optional HTTPS evidence URL (never fetched)').setMaxLength(500)))
-      .addSubcommand(s => s.setName('review').setDescription('Review or revoke claims privately (officers)')
-        .addIntegerOption(o => o.setName('page').setDescription('Claim page').setMinValue(1).setMaxValue(10000)))
-      .addSubcommand(s => s.setName('reset').setDescription('Preview and explicitly confirm replacement (officers)')),
+      .addStringOption(o => o.setName('action').setDescription('Choose the bingo action').setRequired(true)
+        .addChoices(...['view', 'create', 'claim', 'review', 'reset'].map(value => ({ name: value, value }))))
+      .addIntegerOption(o => o.setName('cell').setDescription('View/claim: cell number 1–25').setMinValue(1).setMaxValue(25))
+      .addStringOption(o => o.setName('explanation').setDescription('Claim: explain completion').setMaxLength(1000))
+      .addStringOption(o => o.setName('evidence').setDescription('Claim: optional HTTPS evidence URL (never fetched)').setMaxLength(500))
+      .addIntegerOption(o => o.setName('page').setDescription('Review: claim page').setMinValue(1).setMaxValue(10000)),
 
     async execute(i: ChatInputCommandInteraction): Promise<void> {
       if (!i.guild || !i.guildId || !i.channelId) throw new CommandError('Use /bingo in a server.');
+      const sub = commandAction(i.options, {
+        view: { allowed: ['cell'] }, create: {},
+        claim: { allowed: ['cell', 'explanation', 'evidence'], required: ['cell', 'explanation'] },
+        review: { allowed: ['page'] }, reset: {},
+      });
       await i.deferReply(privateReply);
-      const sub = i.options.getSubcommand();
       if (['create', 'review', 'reset'].includes(sub)) await requireCommunityOfficer(i.guild, i.user.id, database);
       if (sub === 'create' || sub === 'reset') {
         const old = store.getActive(i.guildId);
-        if (sub === 'create' && old) throw new CommandError('A board is already active. Use /bingo reset to confirm replacement.');
-        if (sub === 'reset' && !old) throw new CommandError('No active board to reset. Use /bingo create.');
+        if (sub === 'create' && old) throw new CommandError('A board is already active. Use /bingo action:reset to confirm replacement.');
+        if (sub === 'reset' && !old) throw new CommandError('No active board to reset. Use /bingo action:create.');
         const draft = store.draft(i.guildId, i.user.id) ?? store.createDraft(i.guildId, i.channelId, defaultBingoObjectives(), null, now(), i.user.id);
         await openDraft(i, draft, sub === 'reset' ? { id: old!.id, revision: old!.revision } : undefined);
         return;
@@ -131,7 +132,7 @@ export function createBingoCommand(dependencies: Dependencies = {}) {
         const s = session(i, 'bingo-review', { boardId: board.id, revision: board.revision });
         const embed = new EmbedBuilder().setTitle('Bingo claims · Private').setDescription(claims.map(claim => `Cell ${claim.cell + 1} · ${claim.status}\n${safe(claim.explanation).slice(0, 180)}${claim.evidenceUrl ? `\n${safe(claim.evidenceUrl).slice(0, 160)}` : ''}`).join('\n\n') || 'No claims on this page.');
         if (jobs.length) embed.addFields({ name: 'Delivery status', value: jobs.map(job => `${job.kind}: ${job.status}${job.lastError ? ` · ${safe(job.lastError).slice(0, 55)}` : ''}`).join('\n').slice(0, 1024) });
-        const message = await i.editReply({ content: `Private claim review · Page ${page}. Reopen /bingo review page:${page + 1} for older claims.`,
+        const message = await i.editReply({ content: `Private claim review · Page ${page}. Reopen /bingo action:review page:${page + 1} for older claims.`,
           embeds: [embed],
           components: [...(claims.length ? [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder()
             .setCustomId(`bingomenu:${s.id}:choose`).setPlaceholder('Choose a claim to review or revoke')
@@ -161,10 +162,10 @@ export function createBingoCommand(dependencies: Dependencies = {}) {
       if (!i.guild || !i.guildId || !i.channelId) throw new CommandError('Use /bingo in a server.');
       if (i.customId.startsWith('bingo:')) {
         const parts = i.customId.split(':');
-        if (parts.length !== 4 || !/^\d+$/.test(parts[3]) || !i.isButton()) throw new CommandError('Invalid bingo control. Reopen /bingo view.');
+        if (parts.length !== 4 || !/^\d+$/.test(parts[3]) || !i.isButton()) throw new CommandError('Invalid bingo control. Reopen /bingo action:view.');
         const [, id, action, revision] = parts;
         const board = active(i.guildId);
-        if (id !== board.id || Number(revision) !== board.revision) throw new CommandError('Board changed. Reopen /bingo view.');
+        if (id !== board.id || Number(revision) !== board.revision) throw new CommandError('Board changed. Reopen /bingo action:view.');
         assertCommunityBinding(board, i);
         if (action === 'refresh') {
           await i.deferReply(privateReply);
@@ -174,7 +175,7 @@ export function createBingoCommand(dependencies: Dependencies = {}) {
         } else if (action === 'claim') {
           const s = session(i, 'bingo-claim', { boardId: board.id, revision: board.revision, publicMessageId: board.messageId }, board.messageId);
           await i.showModal(modal(s, 'Claim a manual bingo cell', [['cell', 'Cell number 1–25', '', 2], ['explanation', 'Explain completion', '', 1000], ['evidence', 'HTTPS evidence URL (- for none)', '-', 500]]));
-        } else throw new CommandError('Invalid bingo action. Reopen /bingo view.');
+        } else throw new CommandError('Invalid bingo action. Reopen /bingo action:view.');
         return true;
       }
       const parts = i.customId.split(':');
@@ -188,11 +189,11 @@ export function createBingoCommand(dependencies: Dependencies = {}) {
       const board = store.get(i.guildId, data.boardId);
       if (!board || board.status === 'archived' || board.revision !== data.revision) throw new CommandError('Board changed. Reopen /bingo.');
       if (s.kind === 'bingo-claim') {
-        if (!i.isModalSubmit() || action !== 'save') throw new CommandError('Reopen /bingo claim.');
+        if (!i.isModalSubmit() || action !== 'save') throw new CommandError('Reopen /bingo action:claim.');
         await member(i);
         recheckSession();
         const current = fresh(board);
-        if (current.messageId !== data.publicMessageId) throw new CommandError('Board changed. Reopen /bingo view.');
+        if (current.messageId !== data.publicMessageId) throw new CommandError('Board changed. Reopen /bingo action:view.');
         const evidence = i.fields.getTextInputValue('evidence').trim();
         const claim = store.claim(i.guildId, board.id, Number(i.fields.getTextInputValue('cell')) - 1, i.user.id,
           i.fields.getTextInputValue('explanation'), evidence === '-' ? null : evidence, now());
@@ -206,9 +207,9 @@ export function createBingoCommand(dependencies: Dependencies = {}) {
       fresh(board);
       if (s.kind === 'bingo-review' && i.isButton() && action === 'retry') {
         const job = store.deliveryJobs(i.guildId, board.id).find(j => ['paused', 'failed', 'needs_review'].includes(j.status));
-        if (!job) throw new CommandError('No recoverable delivery. Reopen /bingo review.');
+        if (!job) throw new CommandError('No recoverable delivery. Reopen /bingo action:review.');
         database.community.deliveries.retry(i.guildId, job.id, job.revision, now());
-        await i.update({ content: 'Delivery retry/reconciliation queued. Reopen /bingo review for current diagnostics.', embeds: [], components: [] });
+        await i.update({ content: 'Delivery retry/reconciliation queued. Reopen /bingo action:review for current diagnostics.', embeds: [], components: [] });
         return true;
       }
       if (s.kind === 'bingo-draft' && i.isButton()) {
@@ -217,7 +218,7 @@ export function createBingoCommand(dependencies: Dependencies = {}) {
           await i.update(draftMenu(s, board));
         } else if (action === 'retry') {
           const job = store.deliveryJobs(i.guildId, board.id).find(j => ['paused', 'failed', 'needs_review'].includes(j.status));
-          if (!job) throw new CommandError('No recoverable delivery. Reopen /bingo create.');
+          if (!job) throw new CommandError('No recoverable delivery. Reopen /bingo action:create.');
           database.community.deliveries.retry(i.guildId, job.id, job.revision, now());
           await i.update(draftMenu(s, board));
         } else if (action === 'edit') {
@@ -235,14 +236,14 @@ export function createBingoCommand(dependencies: Dependencies = {}) {
         store.editDraft(i.guildId, board.id, board.revision,
           parseChallenges(`${i.fields.getTextInputValue('challenges')}\n${i.fields.getTextInputValue('remaining')}`), closingDate(closing), now());
         sessions.delete(id);
-        await i.reply({ content: 'Saved all 24 definitions. Reopen /bingo create (or /bingo reset) to preview and explicitly publish.', ...privateReply });
+        await i.reply({ content: 'Saved all 24 definitions. Reopen /bingo action:create (or /bingo action:reset) to preview and explicitly publish.', ...privateReply });
         return true;
       }
       if (s.kind === 'bingo-review' && i.isStringSelectMenu() && action === 'choose') {
         if (i.values.length !== 1) throw new CommandError('Choose one claim.');
         const [claimId, revision] = i.values[0].split(':');
         const claim = store.findClaim(i.guildId, board.id, claimId);
-        if (!claim || claim.revision !== Number(revision)) throw new CommandError('Claim changed. Reopen /bingo review.');
+        if (!claim || claim.revision !== Number(revision)) throw new CommandError('Claim changed. Reopen /bingo action:review.');
         const child = session(i, 'bingo-decision', { ...data, claimId, claimRevision: claim.revision }, s.messageId);
         await i.showModal(modal(child, `Review cell ${claim.cell + 1}`, [['explanation', 'Submitted explanation (read before deciding)', claim.explanation, 1000],
           ['evidence', 'Submitted evidence URL (never fetched)', claim.evidenceUrl ?? '-', 500],

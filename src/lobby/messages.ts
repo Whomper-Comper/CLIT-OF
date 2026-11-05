@@ -31,7 +31,7 @@ export function alertMessage(
     (fallback
       ? `<@${n.user}>, a matching OpenFront lobby is available. I couldn't DM you. Enable direct messages from server members in this server's Privacy Settings to receive future lobby alerts privately.\n\n`
       : "") +
-    `Want me to keep searching? Click **Continue searching** within **3 minutes**, otherwise I'll stop.${deadline === null ? "" : ` Deadline: <t:${deadline}:R>.`}\nUse /lobby resume in the server to restart later.`;
+    `Want me to keep searching? Click **Continue searching** within **3 minutes**, otherwise I'll stop.${deadline === null ? "" : ` Deadline: <t:${deadline}:R>.`}\nUse /lobby action:resume in the server to restart later.`;
   return {
     content,
     embeds: [details],

@@ -23,7 +23,17 @@ export function clanDraft(config: GuildClanConfig): ClanDraft {
 
 // Background sync timestamps do not count as configuration edits.
 export function configSnapshot(config: GuildClanConfig | null): string {
-  return JSON.stringify(config ? clanDraft(config) : null);
+  // SELECT * follows physical column order, including columns appended by legacy
+  // migrations. Compare the same fields in a stable order for drafts and rows.
+  return JSON.stringify(config ? {
+    clan_tag: config.clan_tag,
+    member_role_id: config.member_role_id,
+    officer_role_id: config.officer_role_id,
+    leader_role_id: config.leader_role_id,
+    join_role_id: config.join_role_id,
+    log_channel_id: config.log_channel_id,
+    sync_interval_mins: config.sync_interval_mins,
+  } : null);
 }
 
 export function draftErrors(draft: ClanDraft): string[] {
