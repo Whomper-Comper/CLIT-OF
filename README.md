@@ -6,6 +6,8 @@ The bot uses TypeScript, discord.js 14, and Node.js built-in SQLite. It requires
 
 For the Oracle Linux ARM migration and ANT compatibility gate, use the [Oracle ARM runbook](docs/oracle-arm.md). ANT 16.5 currently fails the required SQLite capability check; the supported fallback remains Node.
 
+**Architecture/version note:** the same bot code supports Linux x86-64 and ARM64 under Node; install the runtime and dependencies for the destination architecture. There is no separate ARM feature version. ANT has not been enabled, and the published performance measurements are local Node/Windows x64 results, not ANT or Oracle ARM benchmarks. See the [verified compatibility matrix](docs/oracle-arm.md#version-and-architecture-compatibility) for tested versions and limits.
+
 ## Documentation
 
 Start with the guide for your role. The detailed references describe the implementation in this repository, including its limits; they do not certify a live deployment or upstream API availability.

@@ -4,6 +4,21 @@ The migration default is **Oracle Linux 9 on a 64-bit Ampere/aarch64 VM with 6 G
 
 ## Runtime decision
 
+### Version and architecture compatibility
+
+There is **one bot codebase for x86-64 and ARM64**, not separate feature versions. CPU architecture determines which runtime executable and native dependencies to install; an x86-64 executable does not run natively on ARM64, or vice versa. Install dependencies on each destination with `npm ci` rather than transferring `node_modules` between architectures.
+
+| Runtime / platform | Verified status | Meaning for hosting |
+| --- | --- | --- |
+| Node.js 22.13.0 or newer | Required API floor declared by the project; Linux CI uses the patched Node 22 line | Supported runtime; use an architecture-matched, maintained build |
+| Linux x86-64 + Node 22 | Full regression suite and runtime gate passed | Same bot features and persistence format as ARM64 |
+| Linux ARM64 + Node 22 | Full regression suite and runtime gate passed on Ubuntu 24.04 ARM64 | Supports the ARM architecture; Oracle Linux deployment and live Discord smoke checks remain separate |
+| Windows x64 + Node 26.4.0 | Local regression and offline performance measurements passed | Benchmark environment, not a requirement to upgrade the Oracle host to Node 26 |
+| ANT 16.5.c41757b4.0, Windows x64 | Runtime gate failed resolving `node:sqlite` | Cannot replace Node for this bot in the tested configuration |
+| ANT on Linux ARM64 / other versions | Not executed or certified by this work | Repeat the gate and full compatibility checks; do not infer support from another architecture or version |
+
+**Performance disclaimer:** published RAM/query/render measurements compare bot implementations on Windows x64 under Node, not ANT versus Node or ARM versus x86. No ANT speedup or Oracle ARM throughput improvement was measured. More RAM and a different CPU do not guarantee a particular latency or CPU improvement. Run the same workload on the destination before making host-performance claims.
+
 ANT is the preferred candidate runtime, subject to an explicit compatibility gate. Run the probe with the candidate executable from the repository root:
 
 ```sh
