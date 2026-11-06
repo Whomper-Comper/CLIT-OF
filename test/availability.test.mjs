@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { MessageFlags } from 'discord.js';
 import { DatabaseSync } from 'node:sqlite';
-import { communityFixture } from './helpers/community.mjs';
+import { communityFixture, legacyCommandOptions } from './helpers/community.mjs';
 const { createAvailabilityCommand } = await import('../dist/commands/availability.js');
 const { CommunitySessions } = await import('../dist/community/sessions.js');
 const { CommunityStore } = await import('../dist/community/store.js');
@@ -10,7 +10,7 @@ const { createEventCommand } = await import('../dist/commands/event.js');
 const draft = (extra={}) => ({ guildId:'g', discordId:'u', timezone:'UTC', windows:[{id:'w',weekday:0,startMinute:600,endMinute:720}], ...extra });
 function interaction(f, sub, values={}, user='u') {
   return { guild:f.guild,guildId:'g',channelId:'c',user:{id:user},
-    options:{getSubcommand:()=>sub,getString:key=>values[key]??null,getInteger:key=>values[key]??null,getUser:key=>values[key]??null},
+    options:legacyCommandOptions(sub,values),
     async deferReply(p){this.deferred=p;}, async reply(p){this.output=p;return {id:'m'};},async editReply(p){this.output=p;return {id:'m'};},async followUp(p){this.privateOutput=p;return{id:'suggestion-private'};} };
 }
 

@@ -12,37 +12,37 @@ Use this guide to get a server from initial configuration to its first clan nigh
 
 | Feature | Enablement |
 | --- | --- |
-| Milestone announcements | Open `/milestones configure`, select a destination, choose thresholds, enable announcements and explicitly **Save**. Announcements start disabled. Initial observations baseline existing achievements silently. |
+| Milestone announcements | Open `/milestones action:configure`, select a destination, choose thresholds, enable announcements and explicitly **Save**. Announcements start disabled. Initial observations baseline existing achievements silently. |
 | Automatic bingo game cells | Enable player history and collection in `/config`, configure clan tags, and check deletion synchronization health. Only retained eligible observations count. Manual cells and availability contributions remain usable with collection off. |
 
 Changing milestone destinations or settings requires **Manage Server** or the configured manager role. Existing `/clan` and `/debug` permissions retain their separate rules.
 
 ## Run a first clan night
 
-1. Ask members to use `/availability set` to save their usual weekday, local start/end time and IANA timezone, such as `America/Bahia` or `Europe/London`. Raw schedules stay private to the member and authorized officers.
-2. Run `/availability suggest`. Suggestions cover the next 14 days and show overlap counts and Discord timestamps in each reader's local time. The default session is 120 minutes; choose 30–240 minutes when needed.
-3. An officer can use the private draft button on a suggestion. Alternatively, run `/event create` with a title, local start (`YYYY-MM-DD HH:mm`) and IANA timezone. Choose a date within the next 365 days. For a repeated daylight-saving time, provide the requested explicit UTC offset; nonexistent local times are rejected.
+1. Ask members to use `/availability action:set` to save their usual weekday, local start/end time and IANA timezone, such as `America/Bahia` or `Europe/London`. Raw schedules stay private to the member and authorized officers.
+2. Run `/availability action:suggest`. Suggestions cover the next 14 days and show overlap counts and Discord timestamps in each reader's local time. The default session is 120 minutes; choose 30–240 minutes when needed.
+3. An officer can use the private draft button on a suggestion. Alternatively, run `/event action:create` with a title, local start (`YYYY-MM-DD HH:mm`) and IANA timezone. Choose a date within the next 365 days. For a repeated daylight-saving time, provide the requested explicit UTC offset; nonexistent local times are rejected.
 4. Review the interpreted time and event details. The defaults are 20 places and 120 minutes. Officers may edit the total capacity and named squads before publication; squad capacities must add up to the total.
 5. Choose a reminder lead of 15, 30 or 60 minutes if wanted, then explicitly publish the event. Members join from the canonical public card and choose a squad when required. Full squads/events use ordered reserve lists; eligible reserves are promoted when a place opens.
 6. Ask confirmed members who want a reminder to opt in using the card's **Reminder** control. Reminders default off and mention only currently eligible, confirmed, opted-in participants. Signups close at the event start.
 
-Use `/event list` to discover published events, `/event view id:…` to find the canonical card, and `/event edit id:…` for officer management. A signup is a commitment to attend, not proof of attendance.
+Use `/event action:list` to discover published events, `/event action:view id:…` to find the canonical card, and `/event action:edit id:…` for officer management. A signup is a commitment to attend, not proof of attendance.
 
 ## Help newcomers get started
 
-Ask a newcomer to open `/onboarding status`; if several clans are configured, select the intended clan. The private checklist guides them through linking, actual clan membership, availability and their first confirmed event signup.
+Ask a newcomer to open `/onboarding action:status`; if several clans are configured, select the intended clan. The private checklist guides them through linking, actual clan membership, availability and their first confirmed event signup.
 
 The **approval role** means someone is waiting for an in-game invitation. It does not prove that they have joined the OpenFront clan. Unavailable upstream membership is shown as unknown rather than treated as a completed or failed step.
 
-Officers use `/onboarding queue` to review enrolled members who need help. Members enroll by opening their checklist; the queue is private and shows ten members per page.
+Officers use `/onboarding action:queue` to review enrolled members who need help. Members enroll by opening their checklist; the queue is private and shows ten members per page.
 
 ## Add challenges and shared goals
 
 | Activity | Member workflow | Officer workflow |
 | --- | --- | --- |
-| Challenge wheel | `/wheel spin` selects a complete curated package and one of its allowed maps. | Use `/wheel presets`, `/wheel add`, `/wheel edit` or `/wheel remove`. Review and explicitly save changes. An officer's private draft button copies a spin into an unpublished event. |
-| Milestones | `/milestones view` privately shows earned and upcoming public Team milestones for the current linked account. | Configure opt-in announcements and inspect delivery diagnostics in `/milestones configure`. Newly added thresholds also baseline silently. |
-| Shared bingo | `/bingo view` shows the shared board; use `cell` to read a full challenge. Submit manual claims with `/bingo claim` or the public claim button. | `/bingo create` opens a private 24-challenge draft. Review and publish explicitly. Use `/bingo review` to approve/reject claims with a reason; `/bingo reset` requires confirmation and replaces the board. |
+| Challenge wheel | `/wheel action:spin` selects a complete curated package and one of its allowed maps. | Use `/wheel action:presets`, `/wheel action:add`, `/wheel action:edit` or `/wheel action:remove`. Review and explicitly save changes. An officer's private draft button copies a spin into an unpublished event. |
+| Milestones | `/milestones action:view` privately shows earned and upcoming public Team milestones for the current linked account. | Configure opt-in announcements and inspect delivery diagnostics in `/milestones action:configure`. Newly added thresholds also baseline silently. |
+| Shared bingo | `/bingo action:view` shows the shared board; use `cell` to read a full challenge. Submit manual claims with `/bingo action:claim` or the public claim button. | `/bingo action:create` opens a private 24-challenge draft. Review and publish explicitly. Use `/bingo action:review` to approve/reject claims with a reason; `/bingo action:reset` requires confirmation and replaces the board. |
 | Dice duel | `/duel opponent:@member` invites another current human member. Only the opponent accepts/declines; only the challenger cancels. | No officer setup or OpenFront account link is required. |
 
 Wheel settings are suggestions for a human OpenFront host; the bot does not create a game lobby. The supported catalog is deliberate, and the presets do not promise competitive balance.
@@ -59,9 +59,9 @@ Duels save two independent D6 rolls before displaying the result. Repeated accep
 | --- | --- |
 | An expired private menu or changed revision | Reopen the command and work from the current saved state. Private community menus expire after ten minutes. |
 | Missing channel permissions | Correct the bot's destination permissions before retrying. |
-| Event delivery failure | Reopen `/event edit id:…` and inspect the management diagnostics. |
-| Milestone delivery failure | Open `/milestones configure`, select the delivery and use **Retry / reconcile**. |
-| Bingo publication/update failure | Use `/bingo create` for an unpublished draft or `/bingo review` for an active board, then inspect delivery diagnostics. |
+| Event delivery failure | Reopen `/event action:edit id:…` and inspect the management diagnostics. |
+| Milestone delivery failure | Open `/milestones action:configure`, select the delivery and use **Retry / reconcile**. |
+| Bingo publication/update failure | Use `/bingo action:create` for an unpublished draft or `/bingo action:review` for an active board, then inspect delivery diagnostics. |
 | A saved duel result failed to display | Use **Refresh** on the existing card. The saved rolls and activation deadline are reused. |
 | Automatic bingo cells show refreshing/unavailable | Check history settings, collection/deletion health and current membership; allow the bounded scan to complete. Manual work remains available. |
 
@@ -87,6 +87,6 @@ In a test server, check the member and officer views separately: save availabili
 
 ## Find a live lobby
 
-A manager enables `/lobby configure enabled:true channel:#lobby-alerts`. Members save preferences with `/lobby watch`, using map, mode, category and/or current player-count bounds. The bot sends a DM when all selected conditions match. If Discord blocks the DM, it pings the member in the fallback channel with instructions to enable DMs.
+A manager enables `/lobby action:configure enabled:true channel:#lobby-alerts`. Members save preferences with `/lobby action:watch`, using map, mode, category and/or current player-count bounds. The bot sends a DM when all selected conditions match. If Discord blocks the DM, it pings the member in the fallback channel with instructions to enable DMs.
 
-Click **Continue searching** within three minutes of each delivered alert to keep watching. Without a click, searching stops while saved filters remain. `/lobby resume` restarts and `/lobby stop` stops immediately. `/lobby list` shows saved filters, current state and feed availability. See [lobby commands](commands.md#live-openfront-lobby-alerts) and [feed maintenance](operations.md#lobby-feed-operations).
+Click **Continue searching** within three minutes of each delivered alert to keep watching. Without a click, searching stops while saved filters remain. `/lobby action:resume` restarts and `/lobby action:stop` stops immediately. `/lobby action:list` shows saved filters, current state and feed availability. See [lobby commands](commands.md#live-openfront-lobby-alerts) and [feed maintenance](operations.md#lobby-feed-operations).

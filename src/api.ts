@@ -89,6 +89,7 @@ interface ApiOptions { cacheTtlMs?: number; maxCacheEntries?: number; now?: () =
 export class OpenFrontApi {
   private base: string;
   private cache = new Map<string, CacheEntry>();
+  private nextCacheExpiry = Infinity;
   private pending = new Map<string, Promise<unknown>>();
   private generations = new Map<string, number>();
   private generation = 0;
@@ -105,7 +106,13 @@ export class OpenFrontApi {
   /** Public reads share in-flight work and short-lived results. Verification must use fresh. */
   private async publicRead<T>(key: string, load: () => Promise<T>, options: PublicReadOptions): Promise<T> {
     const now = this.now();
-    for (const [id, entry] of this.cache) if (entry.expires <= now) this.cache.delete(id);
+    if (now >= this.nextCacheExpiry) {
+      this.nextCacheExpiry = Infinity;
+      for (const [id, entry] of this.cache) {
+        if (entry.expires <= now) this.cache.delete(id);
+        else this.nextCacheExpiry = Math.min(this.nextCacheExpiry, entry.expires);
+      }
+    }
     if (!options.fresh) {
       const cached = this.cache.get(key);
       if (cached) return structuredClone(cached.value as T);
@@ -120,7 +127,10 @@ export class OpenFrontApi {
     const task = load().then((value) => {
       if (this.generations.get(key) === generation && this.cacheTtlMs && this.maxCacheEntries) {
         while (this.cache.size >= this.maxCacheEntries) this.cache.delete(this.cache.keys().next().value!);
-        this.cache.set(key, { value: structuredClone(value), expires: this.now() + this.cacheTtlMs });
+        const expires = this.now() + this.cacheTtlMs;
+        this.cache.set(key, { value: structuredClone(value), expires });
+        // Clock rollback can make a new result expire before every retained key.
+        this.nextCacheExpiry = Math.min(this.nextCacheExpiry, expires);
       }
       return value;
     });

@@ -44,7 +44,7 @@ interface ValidationContext {
   identities: Map<string, boolean>;
 }
 const DAY = 86_400_000;
-const changed = () => new CommandError('This bingo board or its evidence changed. Reopen /bingo view and refresh.');
+const changed = () => new CommandError('This bingo board or its evidence changed. Reopen /bingo action:view and refresh.');
 
 export function defaultBingoObjectives(): BingoObjective[] {
   const objectives: BingoObjective[] = [];
@@ -221,7 +221,7 @@ export class BingoStore {
       if (replace) {
         if (!active || active.id !== replace.id || active.revision !== replace.revision) throw changed();
         this.archive(guildId, active.id, active.revision, now);
-      } else if (active) throw new CommandError('Use /bingo reset to explicitly confirm replacement.');
+      } else if (active) throw new CommandError('Use /bingo action:reset to explicitly confirm replacement.');
       new DeliveryStore(this.sql).enqueue({ key: `bingo:${board.id}:publish:${revision}`, guildId,
         channelId: board.channelId, kind: 'bingo_publish', subjectId: board.id, revision, dueAt: now, part: 0 });
     });

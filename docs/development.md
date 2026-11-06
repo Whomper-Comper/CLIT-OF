@@ -16,6 +16,8 @@ Read the [architecture](architecture.md) before changing persistence, identity, 
 
 ## Toolchain and local setup
 
+The [Oracle ARM runbook](oracle-arm.md) explains the selected Node runtime, architecture checks and offline CPU/RSS workload. `node tools/check-runtime.mjs` makes no external requests and imports no bot configuration. `.github/workflows/verify.yml` runs isolated Node verification on Linux x64 and ARM64 without deployment credentials.
+
 The package requires Node.js **22.13.0 or newer**. It uses Node's built-in `node:sqlite` `DatabaseSync`; installing a separate SQLite npm driver is unnecessary. `package.json` declares ESM (`"type": "module"`). TypeScript targets ES2022, uses strict checking and `NodeNext` module/module resolution, and emits from `src/` to `dist/`. Source imports use `.js` extensions so compiled imports resolve correctly. Tests are JavaScript ESM `.mjs` files that import the compiled `dist/` modules.
 
 Install locked dependencies from the repository root:
@@ -82,7 +84,7 @@ After verification, inspect the actual changed files and report which commands r
 
 ## Test inventory
 
-There are **55 test files** under `test/` in the documented source tree: the 24 existing suites below, 23 community suites, and eight lobby suites in the [community inventory](#community-regression-inventory-and-performance-evidence). This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
+There are **58 test files** under `test/`: the original 55 plus command-action, runtime-compatibility and report-filter suites. This is a file inventory, not a claimed execution/pass count. Several files generate cases in loops, so the current test runner summary is the authority for executed case counts.
 
 | File | Behaviors protected |
 | --- | --- |
@@ -101,6 +103,9 @@ There are **55 test files** under `test/` in the documented source tree: the 24 
 | `test/history-collection.test.mjs` | Opt-in settings; deduplication/coverage; batched job inventory counts/plans, preserved checkpoints/backoff, replacement/deletion/scope/rollback; bounded rotation; unlink/settings/shutdown races; deletion gaps; weekly DST and delivery reconciliation |
 | `test/history-improvements.test.mjs` | Atomic page and rating batches; indexed account/identity cleanup; repeatable index migration; streamed batched coverage; captured-clock Elo retention, latest-hour association rules and tombstones; leaderboard identity filtering and batch counts; one-query settings listing |
 | `test/history-reports.test.mjs` | Bounded one-day recent-clan scans, deduplication and partial labels; numeric/graph agreement; current-link/historical-tag weekly rankings and incomplete coverage; batched recap coverage and reuse of clan payloads |
+| `test/history-report-filter.test.mjs` | Exact identity pairs filtered before payload decoding; indexed time selection; duplicate/escaped bindings, guild scope, canonical corrections, half-open bounds, empty inventory and compatible unfiltered reads |
+| `test/runtime-compatibility.test.mjs` | Credential-free runtime capability probe; failures remain isolated across capability groups and raw errors/private paths stay out of output |
+| `test/command-actions.test.mjs` | All seven flat action schemas, missing/unknown/prototype-named actions, irrelevant/required inputs before side effects, null-safe false/zero handling, legacy parsing, private replies, officer access and DST validation |
 | `test/identity-lookup-race.test.mjs` | Whois and statistics reject changed identity bindings after profile/analytics requests and during later controls, while standalone public-ID lookups remain available |
 | `test/interaction-router.test.mjs` | Interaction event contains expired reply/follow-up failures; acknowledged components preserve their original message; unknown slash commands and deferred errors receive controlled responses |
 | `test/player-analytics.test.mjs` | Inclusive period boundaries, future/incomplete games, map normalization and scope separation; duplicate/cursor loops; later API failure, bounded scans and early period-boundary exit |
@@ -113,7 +118,7 @@ There are **55 test files** under `test/` in the documented source tree: the 24 
 
 ## Adding or changing a command
 
-1. Put the handler and `SlashCommandBuilder` definition in `src/commands/`, following the shared command shape. Add it to `commands` in `src/commands/index.ts`; runtime routing and registration both consume this list. Avoid a second independently maintained registration definition.
+1. Put the handler and `SlashCommandBuilder` definition in `src/commands/`, following the shared command shape. Add it to `commands` in `src/commands/index.ts`; runtime routing and registration both consume this list. Avoid a second independently maintained registration definition. For action families, use `actions.ts` to share the action inventory between the required choice and per-action required/optional input rules. Keep union inputs optional in the slash schema and validate them synchronously before replies, permission lookups, cooldowns or state changes. Legacy subcommand payloads remain supported during registration rollout; `test/helpers/community.mjs` supplies a real Discord option resolver for those fixtures.
 2. Decide whether the action needs a guild, cached guild membership, manager role, explicit debug role or identity ownership. Apply the existing access helper that matches the action. Manage Server is a recovery/bootstrap right for configuration, not a blanket replacement for the clan or debug role.
 3. Validate simple input and apply appropriate throttling before expensive work. Defer before slow membership/API work. Use `privateReply` for identity verification, configuration and debug; only use the configurable ordinary reply helper where exposing that command's result is intended. Disable mention parsing on output.
 4. Use `CommandError` for expected actionable failures and the centralized error formatter. Keep raw API/database errors and credentials out of replies. Let the outer interaction boundary contain unexpected failures, including failures of the error reply itself.

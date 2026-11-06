@@ -470,7 +470,7 @@ export class LobbyStore {
       !this.settings(n.guild).enabled
     )
       throw new CommandError(
-        "This continuation has expired or was already used. Use /lobby resume in the server.",
+        "This continuation has expired or was already used. Use /lobby action:resume in the server.",
       );
     this.sql
       .prepare(

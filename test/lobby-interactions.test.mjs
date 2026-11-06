@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { MessageFlags, ChannelType } from "discord.js";
-import { communityFixture } from "./helpers/community.mjs";
+import { communityFixture, legacyCommandOptions } from "./helpers/community.mjs";
 import { createLobbyCommand } from "../dist/commands/lobby.js";
 function interaction(f, sub, values = {}) {
   const replies = [];
@@ -12,13 +12,7 @@ function interaction(f, sub, values = {}) {
     user: { id: "u" },
     channelId: "c",
     replies,
-    options: {
-      getSubcommand: () => sub,
-      getString: (n) => values[n] ?? null,
-      getInteger: (n) => values[n] ?? null,
-      getBoolean: (n) => values[n] ?? null,
-      getChannel: (n) => values[n] ?? null,
-    },
+    options: legacyCommandOptions(sub, values),
     reply: async (p) => replies.push(p),
     deferReply: async (p) => replies.push(p),
     editReply: async (p) => replies.push(p),

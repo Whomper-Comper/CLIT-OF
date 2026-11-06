@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { MessageFlags } from 'discord.js';
 import { milestoneFixture, enable, profile } from './helpers/milestones.mjs';
+import { legacyCommandOptions } from './helpers/community.mjs';
 import { createMilestonesCommand } from '../dist/commands/milestones.js';
 import { CommunitySessions } from '../dist/community/sessions.js';
 
@@ -10,7 +11,7 @@ function command(f) {
 }
 function interaction(f, sub, user = 'u') {
   return { guild: f.guild, guildId: 'g', channelId: 'c', user: { id: user },
-    options: { getSubcommand: () => sub },
+    options: legacyCommandOptions(sub),
     async deferReply(p) { this.deferred = p; },
     async editReply(p) { this.output = p; return { id: 'm' }; },
   };

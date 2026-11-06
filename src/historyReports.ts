@@ -5,6 +5,7 @@ import { OpenFrontClanSession } from "./historyTypes.js";
 import { alignedBarChart } from "./commands/statsGraph.js";
 import { CommandError, label, pageOf, profileLink, shortText } from "./commands/support.js";
 import { winRate } from "./playerStats.js";
+import { humanMemberLinks } from "./memberLinks.js";
 
 const day = 86_400_000;
 export type HistoryView = "numbers" | "graphs" | "both";
@@ -43,13 +44,23 @@ export async function loadRecentClanMatches(tag: string, days = 7, now = Date.no
     complete, start: new Date(start).toISOString(), end: new Date(end).toISOString(), requests };
 }
 
+/** Consume canonical rows once, optionally collecting distinct games across clans. */
+function summarizeClanMatches(rows: Iterable<OpenFrontClanSession>, gameIds?: Set<string>) {
+  let games = 0, wins = 0, turnout = 0, peakTurnout = 0, score = 0;
+  for (const row of rows) {
+    gameIds?.add(row.gameId);
+    games++;
+    if (row.hasWon) wins++;
+    turnout += row.clanPlayerCount;
+    peakTurnout = Math.max(peakTurnout, row.clanPlayerCount);
+    score += row.score;
+  }
+  return { games, wins, losses: games - wins, averageTurnout: games ? turnout / games : 0, peakTurnout, score };
+}
+
 export function clanAnalysis(rows: OpenFrontClanSession[]) {
-  const unique = [...new Map(rows.map(row => [row.gameId, row])).values()];
-  const wins = unique.filter(row => row.hasWon).length;
-  return { games: unique.length, wins, losses: unique.length - wins,
-    averageTurnout: unique.length ? unique.reduce((total, row) => total + row.clanPlayerCount, 0) / unique.length : 0,
-    peakTurnout: unique.reduce((peak, row) => Math.max(peak, row.clanPlayerCount), 0),
-    score: unique.reduce((total, row) => total + row.score, 0) };
+  const unique = new Map(rows.map(row => [row.gameId, row]));
+  return summarizeClanMatches(unique.values());
 }
 
 export function renderClanRecent(tag: string, sample: ClanHistorySample, page = 1, view: HistoryView = "both"): EmbedBuilder {
@@ -77,42 +88,51 @@ export function renderClanRecent(tag: string, sample: ClanHistorySample, page = 
 export async function buildWeeklyReport(guild: Guild, start: string, end: string): Promise<EmbedBuilder> {
   const settings = db.history.getSettings(guild.id), configs = db.getGuildConfigs(guild.id);
   const members = await guild.members.fetch();
-  const links = db.getEffectiveLinks(guild.id).filter(link => members.has(link.discord_id) && !members.get(link.discord_id)!.user.bot);
+  const links = humanMemberLinks(db.getEffectiveLinks(guild.id), members);
   const validIds = new Map(links.map(link => [link.openfront_id, link]));
   const tags = new Set(configs.map(config => config.clan_tag.toUpperCase()));
-  const clanRows = configs.map(config => ({ config, rows: db.history.getClanMatches(guild.id, config.clan_tag, start, end) }));
-  const allRows = clanRows.flatMap(clan => clan.rows);
+  const gameIds = new Set<string>();
+  let clanWins = 0, clanLosses = 0;
+  const clanStats = configs.map(config => {
+    // The store yields one canonical row per clan/game, including any correction.
+    const stats = summarizeClanMatches(db.history.iterateClanMatches(guild.id, config.clan_tag, start, end), gameIds);
+    clanWins += stats.wins;
+    clanLosses += stats.losses;
+    return { config, stats };
+  });
   const clanCoverage = db.history.getCoverageBySubject(guild.id, "clan", configs.map(config => config.clan_tag), start, end);
   const completeClans = [...clanCoverage.values()].filter(coverage => coverage.complete).length;
-  const players = new Map<string, { games: Set<string>; wins: Set<string> }>();
+  const players = new Map<string, { games: number; wins: number }>();
   const deletionCheck = Date.parse(db.history.getMeta("deletions_last_success") ?? "");
   const deletionsFresh = Number.isFinite(deletionCheck) && Date.now() - deletionCheck < day;
   const rankingsEnabled = settings.player_history_enabled === 1;
   let incomplete = 0;
-  for (const row of deletionsFresh && rankingsEnabled ? db.history.getPlayerMatches(guild.id, start, end) : []) {
+  for (const row of deletionsFresh && rankingsEnabled ? db.history.iteratePlayerMatches(guild.id, start, end,
+    links.map(link => ({ publicId: link.openfront_id, discordId: link.discord_id }))) : []) {
     const link = validIds.get(row.public_id);
     if (!link || link.discord_id !== row.discord_id || !row.clanTag || !tags.has(row.clanTag.trim().toUpperCase()) || row.gameType.toLowerCase() !== "public" || row.gameMode.toLowerCase() !== "team") continue;
     if (!row.gameEnd) { incomplete++; continue; }
-    const entry = players.get(row.public_id) ?? { games: new Set<string>(), wins: new Set<string>() };
-    entry.games.add(row.gameId);
-    if (row.hasWon) entry.wins.add(row.gameId);
+    // The store's (guild_id,public_id,game_id) primary key has already applied
+    // corrections/deduplication; player aggregates need no retained game IDs.
+    const entry = players.get(row.public_id) ?? { games: 0, wins: 0 };
+    entry.games++;
+    if (row.hasWon) entry.wins++;
     players.set(row.public_id, entry);
   }
-  const ranked = [...players].sort((a, b) => b[1].wins.size - a[1].wins.size || b[1].games.size - a[1].games.size || a[0].localeCompare(b[0]));
-  const bestRates = ranked.filter(([, entry]) => entry.games.size >= 3).sort((a, b) => b[1].wins.size / b[1].games.size - a[1].wins.size / a[1].games.size || b[1].games.size - a[1].games.size);
+  const ranked = [...players].sort((a, b) => b[1].wins - a[1].wins || b[1].games - a[1].games || a[0].localeCompare(b[0]));
+  const bestRates = ranked.filter(([, entry]) => entry.games >= 3).sort((a, b) => b[1].wins / b[1].games - a[1].wins / a[1].games || b[1].games - a[1].games);
   const playerCoverage = deletionsFresh && rankingsEnabled
     ? db.history.getCoverageBySubject(guild.id, "player", links.map(link => link.openfront_id), start, end) : new Map();
   const completePlayers = [...playerCoverage.values()].filter(coverage => coverage.complete).length;
   const embed = new EmbedBuilder().setTitle("OpenFront weekly clan recap").setColor(completeClans === configs.length && (!rankingsEnabled || completePlayers === links.length) ? 0x3b82f6 : 0xf59e0b)
-    .setDescription(`<t:${Math.floor(Date.parse(start) / 1000)}:f> to <t:${Math.floor(Date.parse(end) / 1000)}:f>\n**${new Set(allRows.map(row => row.gameId)).size}** distinct recorded games across **${configs.length}** configured clan(s).`);
-  for (const { config, rows } of clanRows.slice(0, 8)) {
-    const stats = clanAnalysis(rows);
+    .setDescription(`<t:${Math.floor(Date.parse(start) / 1000)}:f> to <t:${Math.floor(Date.parse(end) / 1000)}:f>\n**${gameIds.size}** distinct recorded games across **${configs.length}** configured clan(s).`);
+  for (const { config, stats } of clanStats.slice(0, 8)) {
     embed.addFields({ name: `[${label(config.clan_tag)}]`, value: `${stats.games} recorded games · ${stats.wins} wins · ${stats.losses} losses · ${winRate(BigInt(stats.wins), BigInt(stats.games))}\nPeak tagged turnout ${stats.peakTurnout} · average ${stats.averageTurnout.toFixed(1)} · API score sum ${stats.score.toFixed(2)}`, inline: true });
   }
-  const performer = ([id, entry]: typeof ranked[number]) => `${profileLink(id, shortText(validIds.get(id)?.openfront_username || id, 32))} — **${entry.wins.size}** wins / **${entry.games.size}** appearances (${winRate(BigInt(entry.wins.size), BigInt(entry.games.size))})`;
+  const performer = ([id, entry]: typeof ranked[number]) => `${profileLink(id, shortText(validIds.get(id)?.openfront_username || id, 32))} — **${entry.wins}** wins / **${entry.games}** appearances (${winRate(BigInt(entry.wins), BigInt(entry.games))})`;
   embed.addFields({ name: "Most recorded wins · linked server members", value: ranked.slice(0, 5).map(performer).join("\n") || (!rankingsEnabled ? "Player history and rankings are disabled in /config." : deletionsFresh ? "No eligible player sessions were collected." : "Player rankings are withheld until the daily deleted-account check succeeds.") },
     { name: "Best recorded win fraction · at least 3 games", value: bestRates.slice(0, 3).map(performer).join("\n") || "No player has at least three collected games." },
-    { name: "Clan result entries", value: alignedBarChart([{ name: "Wins", value: BigInt(allRows.filter(row => row.hasWon).length) }, { name: "Losses", value: BigInt(allRows.filter(row => !row.hasWon).length) }]) },
+    { name: "Clan result entries", value: alignedBarChart([{ name: "Wins", value: BigInt(clanWins) }, { name: "Losses", value: BigInt(clanLosses) }]) },
     { name: "Collection coverage", value: `${completeClans}/${configs.length} clans${rankingsEnabled ? ` and ${completePlayers}/${links.length} current linked members` : " (player rankings disabled)"} have a fully checked window. ${completeClans < configs.length || (rankingsEnabled && completePlayers < links.length) ? "Coverage is partial; missing records can change rankings." : "All configured sources were checked for this window."}${configs.length > 8 ? ` Only the first 8 clan breakdowns are displayed; totals include all ${configs.length}.` : ""}\nRankings use stable linked accounts, completed public Team sessions and the clan tag recorded at game time. ${incomplete} record(s) without an end timestamp were excluded. This is not a tournament qualification system.` });
   return embed.setFooter({ text: shortText(`Weekly schedule zone: ${settings.timezone} · ${settings.collection_enabled ? "Automatic collection enabled" : "Automatic collection disabled"}`, 200) });
 }

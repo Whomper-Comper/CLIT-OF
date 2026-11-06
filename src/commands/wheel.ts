@@ -13,6 +13,13 @@ import { spinWheel } from '../community/wheel.js';
 import type { EventDraftInput } from '../community/events.js';
 import { createEventDraft } from './event.js';
 import { wheelButton, wheelCard, wheelModal, wheelPreview, wheelSettings, readWheelForm, type WheelEditor } from './wheelForms.js';
+import { actionOption, commandAction, type CommandActions } from './actions.js';
+
+const ACTIONS = {
+  spin: {}, presets: {}, add: {},
+  edit: { optional: ['id'] },
+  remove: { optional: ['id'] },
+} satisfies CommandActions;
 
 interface Dependencies {
   db?: BotDatabase;
@@ -33,7 +40,7 @@ export function createWheelCommand(dependencies: Dependencies = {}) {
   }
   function current(p: WheelPreset): WheelPreset {
     const saved = store.list(p.guildId).find(value => value.id === p.id);
-    if (!saved || saved.revision !== p.revision) throw new CommandError('Preset changed or removed. Reopen /wheel presets.');
+    if (!saved || saved.revision !== p.revision) throw new CommandError('Preset changed or removed. Reopen /wheel action:presets.');
     return saved;
   }
   async function showEditor(i: ChatInputCommandInteraction, p: WheelPreset, remove: boolean) {
@@ -44,16 +51,11 @@ export function createWheelCommand(dependencies: Dependencies = {}) {
   return {
     data: new SlashCommandBuilder().setName('wheel').setDescription('Spin curated map and hosting settings packages')
       .setContexts(InteractionContextType.Guild)
-      .addSubcommand(sub => sub.setName('spin').setDescription('Draw one compatible map and complete settings package'))
-      .addSubcommand(sub => sub.setName('presets').setDescription('Manage presets privately (officers)'))
-      .addSubcommand(sub => sub.setName('add').setDescription('Create and preview a new preset (officers)'))
-      .addSubcommand(sub => sub.setName('edit').setDescription('Edit a preset (officers)')
-        .addStringOption(option => option.setName('id').setDescription('Preset ID, or omit to choose from a menu').setMaxLength(100)))
-      .addSubcommand(sub => sub.setName('remove').setDescription('Confirm removal of a preset (officers)')
-        .addStringOption(option => option.setName('id').setDescription('Preset ID, or omit to choose from a menu').setMaxLength(100))),
+      .addStringOption(actionOption(ACTIONS))
+      .addStringOption(option => option.setName('id').setDescription('Edit/remove: preset ID, or omit to choose from a menu').setMaxLength(100)),
     async execute(i: ChatInputCommandInteraction): Promise<void> {
       if (!i.guild || !i.guildId || !i.channelId) throw new CommandError('Use /wheel in a server.');
-      const sub = i.options.getSubcommand();
+      const sub = commandAction(i.options, ACTIONS);
       if (sub === 'spin') {
         if (!cooldowns.take(i.user.id, 5000, now())) throw new CommandError('Please wait five seconds before spinning again.');
         await i.deferReply();
@@ -85,7 +87,7 @@ export function createWheelCommand(dependencies: Dependencies = {}) {
       const id = i.options.getString('id');
       if (id) {
         const preset = presets.find(p => p.id === id);
-        if (!preset) throw new CommandError('Preset unavailable in this server. Reopen /wheel presets.');
+        if (!preset) throw new CommandError('Preset unavailable in this server. Reopen /wheel action:presets.');
         await showEditor(i, preset, sub === 'remove');
         return;
       }
@@ -97,7 +99,7 @@ export function createWheelCommand(dependencies: Dependencies = {}) {
           .addOptions(presets.slice(offset, offset + 25).map(p => ({ label: p.name, value: p.id, description: `${p.enabled ? 'Enabled' : 'Disabled'} · Revision ${p.revision}` })))));
       }
       const message = await i.editReply({ embeds: [new EmbedBuilder().setTitle('Wheel presets · Private')
-        .setDescription(presets.length ? 'Choose a preset to preview and edit. Use /wheel add to create one.' : 'No presets remain. Use /wheel add to create a complete hosting package.')
+        .setDescription(presets.length ? 'Choose a preset to preview and edit. Use /wheel action:add to create one.' : 'No presets remain. Use /wheel action:add to create a complete hosting package.')
         .addFields({ name: 'Supported disabled units', value: escapeMarkdown(SUPPORTED_UNITS.join(', ')) })], components, allowedMentions: { parse: [] } });
       sessions.bind(session.id, message.id);
     },
@@ -106,11 +108,11 @@ export function createWheelCommand(dependencies: Dependencies = {}) {
       if (!(i.isButton() || i.isStringSelectMenu() || i.isModalSubmit())) return false;
       if (!i.guild || !i.guildId || !i.channelId) throw new CommandError('Use /wheel in a server.');
       const [, id, action, extra] = i.customId.split(':');
-      if (!id || !action || extra) throw new CommandError('Reopen /wheel presets.');
+      if (!id || !action || extra) throw new CommandError('Reopen /wheel action:presets.');
       const binding = { guildId: i.guildId, channelId: i.channelId, messageId: i.message?.id ?? null };
       const session = sessions.get(id, i.user.id, binding, now());
       if (session.kind === 'wheel-draft') {
-        if (action !== 'draft' || !i.isButton()) throw new CommandError('Reopen /wheel spin.');
+        if (action !== 'draft' || !i.isButton()) throw new CommandError('Reopen /wheel action:spin.');
         // The shared draft opener refreshes officer membership immediately before writing.
         await (dependencies.createDraft ?? createEventDraft)(i, structuredClone(session.data as Partial<EventDraftInput>), () => {
           sessions.get(id, i.user.id, binding, now());
@@ -123,19 +125,19 @@ export function createWheelCommand(dependencies: Dependencies = {}) {
       // Authorization awaits the network; recheck session revocation/expiry afterward.
       sessions.get(id, i.user.id, binding, now());
       if (session.kind === 'wheel-picker') {
-        if (!/^pick[01]$/.test(action) || !i.isStringSelectMenu()) throw new CommandError('Reopen /wheel presets.');
+        if (!/^pick[01]$/.test(action) || !i.isStringSelectMenu()) throw new CommandError('Reopen /wheel action:presets.');
         const p = store.list(i.guildId).find(preset => preset.id === i.values[0]);
-        if (!p) throw new CommandError('Preset changed or unavailable. Reopen /wheel presets.');
+        if (!p) throw new CommandError('Preset changed or unavailable. Reopen /wheel action:presets.');
         session.kind = 'wheel-editor';
         session.data = { preset: p, expected: p.revision, remove: (session.data as Picker).remove } satisfies WheelEditor;
         await i.update(wheelPreview(session));
         return true;
       }
-      if (session.kind !== 'wheel-editor' && session.kind !== 'wheel-form') throw new CommandError('Reopen /wheel presets.');
+      if (session.kind !== 'wheel-editor' && session.kind !== 'wheel-form') throw new CommandError('Reopen /wheel action:presets.');
       const data = session.data as WheelEditor;
       if (data.expected > 0) current(data.preset);
       if (session.kind === 'wheel-form') {
-        if (!/^apply-(basics|hosting|options)$/.test(action) || !i.isModalSubmit() || !i.isFromMessage()) throw new CommandError('Reopen /wheel presets.');
+        if (!/^apply-(basics|hosting|options)$/.test(action) || !i.isModalSubmit() || !i.isFromMessage()) throw new CommandError('Reopen /wheel action:presets.');
         const updated = validateWheelPreset(readWheelForm(data.preset, action.slice(6), key => i.fields.getTextInputValue(key)));
         const preview = newSession(i, 'wheel-editor', { ...data, preset: updated }, binding.messageId);
         sessions.delete(id);
@@ -143,12 +145,12 @@ export function createWheelCommand(dependencies: Dependencies = {}) {
         await i.update(wheelPreview(preview));
         return true;
       }
-      if (!i.isButton()) throw new CommandError('Reopen /wheel presets.');
+      if (!i.isButton()) throw new CommandError('Reopen /wheel action:presets.');
       if (data.remove) {
-        if (action !== 'remove') throw new CommandError('Reopen /wheel remove.');
+        if (action !== 'remove') throw new CommandError('Reopen /wheel action:remove.');
         store.remove(i.guildId, data.preset.id, data.expected);
         sessions.delete(id);
-        await i.update({ content: 'Preset removed. Use /wheel presets for fresh controls.', embeds: [], components: [], allowedMentions: { parse: [] } });
+        await i.update({ content: 'Preset removed. Use /wheel action:presets for fresh controls.', embeds: [], components: [], allowedMentions: { parse: [] } });
         return true;
       }
       if (['basics', 'hosting', 'options'].includes(action)) {
@@ -160,8 +162,8 @@ export function createWheelCommand(dependencies: Dependencies = {}) {
       } else if (action === 'save') {
         store.save(data.preset, data.expected);
         sessions.delete(id);
-        await i.update({ content: 'Preset saved. Use /wheel presets for fresh controls.', embeds: [], components: [], allowedMentions: { parse: [] } });
-      } else throw new CommandError('Reopen /wheel presets.');
+        await i.update({ content: 'Preset saved. Use /wheel action:presets for fresh controls.', embeds: [], components: [], allowedMentions: { parse: [] } });
+      } else throw new CommandError('Reopen /wheel action:presets.');
       return true;
     },
   };

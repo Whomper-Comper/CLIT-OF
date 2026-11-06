@@ -1,8 +1,20 @@
-import { Collection } from 'discord.js';
+import { Collection, CommandInteractionOptionResolver } from 'discord.js';
 process.env.DB_PATH = ':memory:';
 process.env.DISCORD_TOKEN = 'test';
 process.env.CLIENT_ID = 'test';
 const { BotDatabase } = await import('../../dist/db.js');
+
+/** Real Discord option parsing for commands registered before the action-choice transition. */
+export function legacyCommandOptions(action, values = {}) {
+  const options = Object.entries(values).filter(([, value]) => value != null).map(([name, value]) => {
+    if (name === 'user' || name === 'channel') {
+      const resolved = typeof value === 'object' ? value : { id: value };
+      return { name, type: name === 'user' ? 6 : 7, value: resolved.id, [name]: resolved };
+    }
+    return { name, value, type: typeof value === 'boolean' ? 5 : typeof value === 'number' ? 4 : 3 };
+  });
+  return new CommandInteractionOptionResolver(null, [{ name: action, type: 1, options }], {});
+}
 
 // Only Discord/API boundaries are fake; stores and worker transitions use real SQLite.
 export function communityFixture() {

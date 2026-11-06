@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { communityFixture } from './helpers/community.mjs';
+import { communityFixture, legacyCommandOptions } from './helpers/community.mjs';
 import { milestoneFixture, profile } from './helpers/milestones.mjs';
 import { createEventCommand } from '../dist/commands/event.js';
 import { createAvailabilityCommand } from '../dist/commands/availability.js';
@@ -135,7 +135,7 @@ test('public event list filters drafts before its 100 record cap', async () => {
     store.publish('g', e.id, 1, 'public');
     for (let n = 0; n < 105; n++) store.createDraft({ ...draft(f), title: 'Hidden draft', startAt: f.now() + 7200000 + n }, f.now());
     const command = createEventCommand({ db: f.db, now: f.now });
-    const i = interaction(f, { options: { getSubcommand: () => 'list', getInteger: () => null } });
+    const i = interaction(f, { options: legacyCommandOptions('list') });
     const before = snapshot(f);
     await command.execute(i);
     assert.match(JSON.stringify(i.output), /Visible event/);
@@ -227,7 +227,7 @@ test('milestone opens and different valid menus share foreground cooldown and in
   const f = milestoneFixture();
   try {
     const command = createMilestonesCommand({ db: f.db, api: f.api, now: f.now, sessions: new CommunitySessions() });
-    const open = () => interaction(f, { options: { getSubcommand: () => 'view' } });
+    const open = () => interaction(f, { options: legacyCommandOptions('view') });
     const refresh = i => interaction(f, { customId: i.output.components[0].components[2].data.custom_id });
     const first = open(); await command.execute(first);
     const before = snapshot(f);
@@ -269,7 +269,7 @@ test('milestone foreground gate follows both members and accounts across guild m
   const f = milestoneFixture();
   try {
     const command = createMilestonesCommand({ db: f.db, api: f.api, now: f.now, sessions: new CommunitySessions() });
-    const open = extra => interaction(f, { options: { getSubcommand: () => 'view' }, ...extra });
+    const open = extra => interaction(f, { options: legacyCommandOptions('view'), ...extra });
     await command.execute(open());
     f.addMember('v');
     f.db.linkGuildUser('h', 'admin', 'v', 'player', null);
@@ -291,7 +291,7 @@ test('a blocked shared-account refresh does not consume another member cooldown'
   const f = milestoneFixture();
   try {
     const command = createMilestonesCommand({ db: f.db, api: f.api, now: f.now, sessions: new CommunitySessions() });
-    const open = extra => interaction(f, { options: { getSubcommand: () => 'view' }, ...extra });
+    const open = extra => interaction(f, { options: legacyCommandOptions('view'), ...extra });
     await command.execute(open());
     f.addMember('v');
     f.db.linkGuildUser('h', 'admin', 'v', 'player', null);
@@ -310,7 +310,7 @@ test('a suppressed milestone refresh still rejects source revocation during ackn
   try {
     const sessions = new CommunitySessions();
     const command = createMilestonesCommand({ db: f.db, api: f.api, now: f.now, sessions });
-    const open = interaction(f, { options: { getSubcommand: () => 'view' } });
+    const open = interaction(f, { options: legacyCommandOptions('view') });
     await command.execute(open);
     const id = open.output.components[0].components[2].data.custom_id;
     const i = interaction(f, { customId: id, async deferUpdate() { sessions.delete(id.split(':')[1]); } });

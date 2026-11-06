@@ -1,0 +1,34 @@
+name: Verify Linux architectures
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Node 22 / ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked architecture-specific dependencies
+        run: npm ci --include=dev
+      - name: Check required runtime capabilities without credentials
+        run: node tools/check-runtime.mjs
+      - name: Build and run isolated regression tests
+        run: npm test
+        env:
+          DB_PATH: ':memory:'

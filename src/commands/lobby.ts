@@ -13,6 +13,16 @@ import { requireConfigAccess } from "../access.js";
 import { CommandError, privateReply } from "./support.js";
 import { CATEGORIES, MAPS, MODES, lobbyFeed } from "../lobby/feed.js";
 import { normalize } from "../lobby/model.js";
+import { actionOption, commandAction, type CommandActions } from './actions.js';
+
+const FILTERS = ['map', 'mode', 'category', 'min_players', 'max_players'] as const;
+const ACTIONS = {
+  watch: { required: ['name'], optional: FILTERS },
+  list: { optional: ['page'] },
+  remove: { required: ['id'] },
+  resume: {}, stop: {},
+  configure: { optional: ['enabled', 'channel'] },
+} satisfies CommandActions;
 export function createLobbyCommand(
   database: BotDatabase = db,
   options: { now?: () => number; feed?: { status: string } } = {},
@@ -37,115 +47,17 @@ export function createLobbyCommand(
         "Get DMs when an OpenFront lobby matches your preferences",
       )
       .setContexts(InteractionContextType.Guild)
-      .addSubcommand((s) =>
-        s
-          .setName("watch")
-          .setDescription(
-            "Save a filter and start searching (DM first, server ping if blocked)",
-          )
-          .addStringOption((o) =>
-            o
-              .setName("name")
-              .setDescription("A name for this saved filter")
-              .setRequired(true)
-              .setMaxLength(60),
-          )
-          .addStringOption((o) =>
-            o
-              .setName("map")
-              .setDescription("Exact OpenFront map")
-              .setAutocomplete(true)
-              .setMaxLength(100),
-          )
-          .addStringOption((o) =>
-            o
-              .setName("mode")
-              .setDescription("Game mode")
-              .addChoices(...MODES.map((value) => ({ name: value, value }))),
-          )
-          .addStringOption((o) =>
-            o
-              .setName("category")
-              .setDescription("Public lobby category")
-              .addChoices(
-                ...CATEGORIES.map((value) => ({ name: value, value })),
-              ),
-          )
-          .addIntegerOption((o) =>
-            o
-              .setName("min_players")
-              .setDescription(
-                "Minimum currently connected players (not lobby capacity)",
-              )
-              .setMinValue(0)
-              .setMaxValue(1000),
-          )
-          .addIntegerOption((o) =>
-            o
-              .setName("max_players")
-              .setDescription(
-                "Maximum currently connected players (not lobby capacity)",
-              )
-              .setMinValue(0)
-              .setMaxValue(1000),
-          ),
-      )
-      .addSubcommand((s) =>
-        s
-          .setName("list")
-          .setDescription(
-            "Privately view your saved filters, search state and feed status",
-          )
-          .addIntegerOption((o) =>
-            o
-              .setName("page")
-              .setDescription("Page of saved filters (five per page)")
-              .setMinValue(1)
-              .setMaxValue(2),
-          ),
-      )
-      .addSubcommand((s) =>
-        s
-          .setName("remove")
-          .setDescription("Remove one of your saved filters")
-          .addStringOption((o) =>
-            o
-              .setName("id")
-              .setDescription("Rule ID from /lobby list")
-              .setRequired(true)
-              .setMaxLength(64),
-          ),
-      )
-      .addSubcommand((s) =>
-        s
-          .setName("resume")
-          .setDescription("Restart searching with your saved filters"),
-      )
-      .addSubcommand((s) =>
-        s
-          .setName("stop")
-          .setDescription(
-            "Stop searching and invalidate your current alert button",
-          ),
-      )
-      .addSubcommand((s) =>
-        s
-          .setName("configure")
-          .setDescription(
-            "Managers: configure fallback channel or inspect delivery diagnostics",
-          )
-          .addBooleanOption((o) =>
-            o
-              .setName("enabled")
-              .setDescription("Enable or disable lobby alerts for this server"),
-          )
-          .addChannelOption((o) =>
-            o
-              .setName("channel")
-              .setDescription("Fallback channel when a DM is blocked")
-              .addChannelTypes(ChannelType.GuildText),
-          ),
-      ),
+      .addStringOption(actionOption(ACTIONS))
+      .addStringOption(o => o.setName('name').setDescription('Watch: a name for this saved filter').setMaxLength(60))
+      .addStringOption(o => o.setName('map').setDescription('Watch: exact OpenFront map').setAutocomplete(true).setMaxLength(100))
+      .addStringOption(o => o.setName('mode').setDescription('Watch: game mode').addChoices(...MODES.map(value => ({ name: value, value }))))
+      .addStringOption(o => o.setName('category').setDescription('Watch: public lobby category').addChoices(...CATEGORIES.map(value => ({ name: value, value }))))
+      .addIntegerOption(o => o.setName('min_players').setDescription('Watch: minimum connected players (not lobby capacity)').setMinValue(0).setMaxValue(1000))
+      .addIntegerOption(o => o.setName('max_players').setDescription('Watch: maximum connected players (not lobby capacity)').setMinValue(0).setMaxValue(1000))
+      .addIntegerOption(o => o.setName('page').setDescription('List: page of saved filters (five per page)').setMinValue(1).setMaxValue(2))
+      .addStringOption(o => o.setName('id').setDescription('Remove: rule ID from /lobby action:list').setMaxLength(64))
+      .addBooleanOption(o => o.setName('enabled').setDescription('Configure: enable or disable lobby alerts for this server'))
+      .addChannelOption(o => o.setName('channel').setDescription('Configure: fallback channel when a DM is blocked').addChannelTypes(ChannelType.GuildText)),
     async autocomplete(i: AutocompleteInteraction): Promise<void> {
       const focused = i.options.getFocused(true);
       const result =
@@ -162,9 +74,12 @@ export function createLobbyCommand(
     async execute(i: ChatInputCommandInteraction): Promise<void> {
       if (!i.guild || !i.guildId)
         throw new CommandError("Use /lobby in a server.");
-      const sub = i.options.getSubcommand(),
+      const sub = commandAction(i.options, ACTIONS),
         guild = i.guildId,
         user = i.user.id;
+      if (sub === 'watch' && FILTERS.every(name => i.options.get(name)?.value == null)) {
+        throw new CommandError('Choose at least one lobby filter: map, mode, category or player count.');
+      }
       const reply = (content: string) =>
         i.reply({ content, ...privateReply, allowedMentions: { parse: [] } });
       if (sub === "configure") {
@@ -213,7 +128,7 @@ export function createLobbyCommand(
         // Read the revision again after lookups: avoid replacing another manager's settings.
         if (store.settings(guild).revision !== current.revision)
           throw new CommandError(
-            "Lobby settings changed. Reopen /lobby configure.",
+            "Lobby settings changed. Reopen /lobby action:configure.",
           );
         const saved = store.configure(
           guild,
@@ -222,7 +137,7 @@ export function createLobbyCommand(
           now(),
         );
         await i.editReply({
-          content: `Lobby alerts ${saved.enabled ? "enabled" : "disabled"}. Fallback channel: ${saved.channel ? `<#${saved.channel}>` : "not configured"}. Existing searches stopped; members can use /lobby resume.`,
+          content: `Lobby alerts ${saved.enabled ? "enabled" : "disabled"}. Fallback channel: ${saved.channel ? `<#${saved.channel}>` : "not configured"}. Existing searches stopped; members can use /lobby action:resume.`,
           allowedMentions: { parse: [] },
         });
         return;
@@ -247,7 +162,7 @@ export function createLobbyCommand(
           now(),
         );
         await reply(
-          `Saved **${escapeMarkdown(rule.name!)}** and started searching. I'll DM you first; blocked DMs cause a public fallback ping in the configured channel. Each alert gives you 3 minutes to click Continue searching, otherwise searching stops. Use /lobby list to see your filters.`,
+          `Saved **${escapeMarkdown(rule.name!)}** and started searching. I'll DM you first; blocked DMs cause a public fallback ping in the configured channel. Each alert gives you 3 minutes to click Continue searching, otherwise searching stops. Use /lobby action:list to see your filters.`,
         );
         return;
       }
@@ -275,22 +190,22 @@ export function createLobbyCommand(
                     .map((x) => escapeMarkdown(String(x)))
                     .join(" · ")}\n\`${r.id}\``,
               )
-              .join("\n\n") || "No saved filters. Use /lobby watch.") +
-            `\n\nPage ${page}/${pages}. Counts mean currently connected players. /lobby resume restarts; /lobby stop stops.`,
+              .join("\n\n") || "No saved filters. Use /lobby action:watch.") +
+            `\n\nPage ${page}/${pages}. Counts mean currently connected players. /lobby action:resume restarts; /lobby action:stop stops.`,
         );
         return;
       }
       if (sub === "remove") {
         store.remove(guild, user, i.options.getString("id", true), now());
         await reply(
-          "Filter removed. Your search keeps its current state. Use /lobby resume if you want to restart searching.",
+          "Filter removed. Your search keeps its current state. Use /lobby action:resume if you want to restart searching.",
         );
         return;
       }
       if (sub === "stop") {
         store.stop(guild, user, now());
         await reply(
-          "Searching stopped. Your saved filters remain; use /lobby resume to restart.",
+          "Searching stopped. Your saved filters remain; use /lobby action:resume to restart.",
         );
         return;
       }
@@ -309,12 +224,12 @@ export function createLobbyCommand(
       if (!("customId" in i) || !i.customId.startsWith("lobby:")) return false;
       if (!i.isButton())
         throw new CommandError(
-          "This lobby alert control is invalid. Use /lobby resume in the server.",
+          "This lobby alert control is invalid. Use /lobby action:resume in the server.",
         );
       const match = /^lobby:continue:([a-f0-9-]{36})$/.exec(i.customId);
       if (!match)
         throw new CommandError(
-          "This lobby alert control is invalid. Use /lobby resume in the server.",
+          "This lobby alert control is invalid. Use /lobby action:resume in the server.",
         );
       const n = store.notification(match[1]);
       if (!n || n.user !== i.user.id)

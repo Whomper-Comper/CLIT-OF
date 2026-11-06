@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { MessageFlags } from 'discord.js';
-import { communityFixture } from './helpers/community.mjs';
+import { communityFixture, legacyCommandOptions } from './helpers/community.mjs';
 const domain = await import('../dist/community/onboarding.js');
 const commands = await import('../dist/commands/onboarding.js');
 const { CommunitySessions } = await import('../dist/community/sessions.js');
@@ -70,12 +70,7 @@ function interaction(f, sub, values = {}, user = 'u') {
     guildId: 'g',
     channelId: 'c',
     user: { id: user },
-    options: {
-      getSubcommand: () => sub,
-      getString: k => values[k] ?? null,
-      getInteger: k => values[k] ?? null,
-      getUser: k => values[k] ?? null
-    },
+    options: legacyCommandOptions(sub, values),
     async deferReply(p) {
       this.deferred = p;
     },

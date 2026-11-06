@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { communityFixture } from './helpers/community.mjs';
+import { communityFixture, legacyCommandOptions } from './helpers/community.mjs';
 import { milestoneFixture } from './helpers/milestones.mjs';
 import { CommunityStore } from '../dist/community/store.js';
 import { DeliveryStore } from '../dist/community/deliveries.js';
@@ -206,7 +206,7 @@ test('maximum event, bingo, duel and milestone cards serialize within every Disc
     assertDiscordLimits(renderDuel({ ...duel, status: 'resolved', challengerRoll: 6, opponentRoll: 6 }));
     const command = createMilestonesCommand({ db: f.db, api: f.api, now: f.now, sessions: new CommunitySessions() });
     const i = { guild: f.guild, guildId: 'g', channelId: 'c', user: { id: 'manager' },
-      options: { getSubcommand: () => 'configure' }, async deferReply() {},
+      options: legacyCommandOptions('configure'), async deferReply() {},
       async editReply(payload) { assertDiscordLimits(payload); return { id: 'private' }; } };
     await command.execute(i);
     const preset = { ...STARTER_PRESETS[0], name: '_'.repeat(80), instructions: '_'.repeat(1000),
@@ -238,8 +238,7 @@ test('full availability, onboarding, event and wheel lists serialize their real 
     async function execute(command, sub, values = {}, user = 'manager') {
       let output;
       await command.execute({ guild: f.guild, guildId: 'g', channelId: 'c', user: { id: user },
-        options: { getSubcommand: () => sub, getInteger: key => values[key] ?? null,
-          getString: key => values[key] ?? null, getUser: key => values[key] ?? null },
+        options: legacyCommandOptions(sub, values),
         async deferReply() {}, async editReply(payload) {
           assertDiscordLimits(payload);
           output = JSON.parse(JSON.stringify(payload));
@@ -252,7 +251,7 @@ test('full availability, onboarding, event and wheel lists serialize their real 
     const queue = await execute(createOnboardingCommand(dependencies), 'queue');
     assert.equal(queue.embeds[0].fields.length, 10);
     const events = await execute(createEventCommand(dependencies), 'list', { page: 10 });
-    assert.equal(events.embeds[0].description.match(/\/event view/g).length, 10);
+    assert.equal(events.embeds[0].description.match(/\/event action:view/g).length, 10);
     const wheel = await execute(createWheelCommand(dependencies), 'presets');
     assert.deepEqual(wheel.components.map(r => r.components[0].options.length), [25, 25]);
   } finally { await f.close(); }
@@ -304,7 +303,7 @@ test('actual milestone configuration uses bounded diagnostics and preserves exac
     f.db.community.deliveries.list = () => { throw Error('unbounded guild history read'); };
     const c = createMilestonesCommand({ db: f.db, api: f.api, now: f.now, sessions: new CommunitySessions() });
     const i = { guild: f.guild, guildId: 'g', channelId: 'c', user: { id: 'manager' },
-      options: { getSubcommand: () => 'configure' }, async deferReply() {},
+      options: legacyCommandOptions('configure'), async deferReply() {},
       async editReply(payload) { this.output = payload; return { id: 'private' }; } };
     await c.execute(i);
     const control = (payload, label) => payload.components.flatMap(r => r.toJSON().components).find(b => b.label === label);

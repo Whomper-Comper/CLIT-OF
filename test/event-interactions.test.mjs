@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { MessageFlags } from 'discord.js';
-import { communityFixture } from './helpers/community.mjs';
+import { communityFixture, legacyCommandOptions } from './helpers/community.mjs';
 const events=await import('../dist/commands/event.js').catch(()=>({}));
 const { CommunitySessions }=await import('../dist/community/sessions.js');
 const { CommunityService }=await import('../dist/community/service.js');
 const delivery=await import('../dist/community/eventDelivery.js').catch(()=>({}));
 const input=(f,extra={})=>({guildId:'g',channelId:'c',creatorId:'u',title:'Team night',description:'Play',startAt:f.now()+3600000,durationMinutes:120,capacity:2,squads:[],reminderMinutes:0,...extra});
-function interaction(f,sub,values={}){return {guild:f.guild,guildId:'g',channelId:'c',user:{id:'u'},options:{getSubcommand:()=>sub,getString:k=>values[k]??null,getInteger:k=>values[k]??null},async deferReply(p){this.deferred=p;},async editReply(p){this.output=p;return{id:'private'};},async reply(p){this.output=p;return{id:'private'};},async fetchReply(){return{id:'private'};}};}
+function interaction(f,sub,values={}){return {guild:f.guild,guildId:'g',channelId:'c',user:{id:'u'},options:legacyCommandOptions(sub,values),async deferReply(p){this.deferred=p;},async editReply(p){this.output=p;return{id:'private'};},async reply(p){this.output=p;return{id:'private'};},async fetchReply(){return{id:'private'};}};}
 function control(f,id,extra={}){return {...interaction(f,''),customId:id,message:{id:'private'},isButton:()=>true,isStringSelectMenu:()=>false,isModalSubmit:()=>false,async update(p){this.output=p;},async deferUpdate(){this.deferred=true;},async showModal(p){this.modal=p;},...extra};}
 const button=(payload,text)=>payload.components.flatMap(x=>x.components).find(x=>x.data.label===text).data.custom_id;
 function setup(f){f.addMember('u',['manager']);f.db.setManagerRole('g','manager');return events.createEventCommand({db:f.db,now:f.now,sessions:new CommunitySessions()});}

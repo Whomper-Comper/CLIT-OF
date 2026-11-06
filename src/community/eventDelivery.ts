@@ -29,44 +29,38 @@ export async function prepareEventDelivery(job: DeliveryJob, guild: Guild, db: B
     return event;
   };
   let event = current();
-  if (!event) {
+  if (!event || event.status !== 'scheduled' || !event.messageId || !event.reminderMinutes || event.startAt <= now) {
     return null;
   }
-  if (job.kind === 'event_reminder') {
-    if (event.status !== 'scheduled' || !event.messageId || !event.reminderMinutes || event.startAt <= now) {
-      return null;
-    }
-    const candidates = store.reminderRecipients(job).filter(id => /^\d{17,20}$/.test(id));
-    if (!candidates.length) {
-      return null;
-    }
-    if (tick && !tick.takeRequest()) {
-      throw new CommunityBudgetExhaustedError('Event membership budget exhausted.');
-    }
-    // An array requests these members from Discord, bypassing single-member cache reads.
-    const members = await guild.members.fetch({ user: candidates, withPresences: false });
-    event = current();
-    const checkedAt = tick?.currentTime?.() ?? now;
-    if (!event || event.status !== 'scheduled' || event.startAt <= checkedAt) {
-      return null;
-    }
-    const users = store.reminderRecipients(job).filter(id => members.has(id) && !members.get(id)!.user.bot);
-    if (!users.length) {
-      return null;
-    }
-    return {
-      payload: {
-        content: `**${safe(event.title)}** starts <t:${Math.floor(event.startAt / 1000)}:R>.\n${users.map(id => `<@${id}>`).join(' ')}`,
-        allowedMentions: {
-          parse: [],
-          users,
-          roles: [],
-          repliedUser: false
-        },
-      }
-    };
+  const candidates = store.reminderRecipients(job).filter(id => /^\d{17,20}$/.test(id));
+  if (!candidates.length) {
+    return null;
   }
-  return null;
+  if (tick && !tick.takeRequest()) {
+    throw new CommunityBudgetExhaustedError('Event membership budget exhausted.');
+  }
+  // An array requests these members from Discord, bypassing single-member cache reads.
+  const members = await guild.members.fetch({ user: candidates, withPresences: false });
+  event = current();
+  const checkedAt = tick?.currentTime?.() ?? now;
+  if (!event || event.status !== 'scheduled' || event.startAt <= checkedAt) {
+    return null;
+  }
+  const users = store.reminderRecipients(job).filter(id => members.has(id) && !members.get(id)!.user.bot);
+  if (!users.length) {
+    return null;
+  }
+  return {
+    payload: {
+      content: `**${safe(event.title)}** starts <t:${Math.floor(event.startAt / 1000)}:R>.\n${users.map(id => `<@${id}>`).join(' ')}`,
+      allowedMentions: {
+        parse: [],
+        users,
+        roles: [],
+        repliedUser: false
+      },
+    }
+  };
 }
 export function registerEventWork(service: CommunityService, client: Client, db: BotDatabase): void {
   for (const kind of ['event_publish', 'event_update', 'event_reminder']) {

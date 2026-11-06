@@ -55,6 +55,7 @@ test("an unsent match can be alerted after a feed outage recovers", async () => 
   const client = { guilds: { cache: new Map([["g", guild]]) } };
   const feed = {
     snapshot: () => available ? { observedAt: now, lobbies: [lobby] } : null,
+    getLobby: (source, id) => available && source === lobby.source && id === lobby.id ? { ...lobby } : null,
   };
   const worker = new LobbyWorker(client, store, feed, { now: () => now });
   await worker.tick();
@@ -92,7 +93,7 @@ test("cancelling while a send is in flight preserves uncertain outcome protectio
   const worker = new LobbyWorker(
     { guilds: { cache: new Map() } },
     store,
-    { snapshot: () => null },
+    { snapshot: () => null, getLobby: () => null },
     { now: () => now },
   );
   await worker.tick();
@@ -134,7 +135,8 @@ test("removing the matching rule during a send preserves the delivered continuat
   const worker = new LobbyWorker(
     client,
     store,
-    { snapshot: () => ({ observedAt: now, lobbies: [lobby] }) },
+    { snapshot: () => ({ observedAt: now, lobbies: [lobby] }),
+      getLobby: (source, id) => source === lobby.source && id === lobby.id ? { ...lobby } : null },
     { now: () => now },
   );
   const running = worker.tick();

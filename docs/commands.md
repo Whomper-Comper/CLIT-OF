@@ -23,14 +23,15 @@ This reference describes the commands registered by `src/commands/index.ts` and 
 - [Newcomer onboarding](#newcomer-onboarding)
 - [Community command option schema](#community-command-option-schema)
 - [Curated challenge wheel](#curated-challenge-wheel)
+- [Live OpenFront lobby alerts](#live-openfront-lobby-alerts)
 
 ## Entering commands
 
 Type `/` in Discord, choose the bot's command, then fill in Discord's named input fields. Examples below use `option:value` to describe those fields. Select users, roles and channels through Discord's picker; example names such as `@Alice`, `@ClanManager`, and `#clan-log` are illustrative.
 
-`/clan` has one required **action option**, not slash subcommands: use `/clan action:sync`, not `/clan sync`. Likewise use `/debug action:status`. Discord can show a friendly label for a choice while its underlying value is the value documented here.
+`/clan`, `/debug`, `/bingo`, `/availability`, `/event`, `/onboarding`, `/wheel`, `/milestones`, and `/lobby` have one required **action option**. Use `/bingo action:view` or `/clan action:sync`. For `/bingo`, `/availability`, `/event`, `/onboarding`, `/wheel`, `/milestones` and `/lobby`, missing required inputs and inputs belonging to another action produce a private actionable error before work begins. Clan/debug input behavior is described in their own sections. Discord can show a friendly label for a choice while its underlying value is the value documented here. Existing subcommand registrations remain accepted during rollout, but new registrations use action choices; guild and global registrations must be updated separately.
 
-There are fifteen registered commands: `/link`, `/unlink`, `/whois`, `/stats`, `/clan`, `/config`, `/debug`, `/dice`, `/availability`, `/event`, `/onboarding`, `/wheel`, `/milestones`, `/bingo`, and `/duel`. `/config`, `/clan`, `/debug`, `/availability`, `/event`, `/onboarding`, `/wheel`, `/milestones`, `/bingo`, and `/duel` are explicitly server-only. The other builders do not declare a server-only context; availability outside servers also depends on the application's installation and Discord command contexts. In a DM, identity lookups use verified bot-wide links, not server approvals.
+There are sixteen registered commands: `/link`, `/unlink`, `/whois`, `/stats`, `/clan`, `/config`, `/debug`, `/dice`, `/availability`, `/event`, `/onboarding`, `/wheel`, `/milestones`, `/bingo`, `/duel`, and `/lobby`. `/config`, `/clan`, `/debug`, `/availability`, `/event`, `/onboarding`, `/wheel`, `/milestones`, `/bingo`, `/duel`, and `/lobby` are explicitly server-only. The other builders do not declare a server-only context; availability outside servers also depends on the application's installation and Discord command contexts. In a DM, identity lookups use verified bot-wide links, not server approvals.
 
 ### Accepted identity inputs
 
@@ -135,15 +136,15 @@ Elo stores actual observed public ratings, not estimates from wins/losses. One s
 ## `/availability`
 
 ```text
-/availability set day:Friday start:23:00 end:01:00 timezone:America/Bahia
-/availability view
-/availability view user:@Alice page:2
-/availability clear window:ID_FROM_VIEW
-/availability clear
-/availability suggest duration:120
+/availability action:set day:Friday start:23:00 end:01:00 timezone:America/Bahia
+/availability action:view
+/availability action:view user:@Alice page:2
+/availability action:clear window:ID_FROM_VIEW
+/availability action:clear
+/availability action:suggest duration:120
 ```
 
-Save up to 14 weekly windows of 30 minutes to 12 hours, including overnight windows. Times use local `HH:mm` and weekdays; a timezone is required on the first save and reused afterward. Changing timezone changes how all your local windows project. A matching weekday/start/end replaces the same window; supply its `window` ID to replace it with different times. Zero-length windows are invalid. `/availability clear` without a window removes all your recurring availability.
+Save up to 14 weekly windows of 30 minutes to 12 hours, including overnight windows. Times use local `HH:mm` and weekdays; a timezone is required on the first save and reused afterward. Changing timezone changes how all your local windows project. A matching weekday/start/end replaces the same window; supply its `window` ID to replace it with different times. Zero-length windows are invalid. `/availability action:clear` without a window removes all your recurring availability.
 
 Set, view, clear, and editing controls are private. View pages show seven windows, with owner-bound edit/delete controls that expire after ten minutes. Editing opens local day/time/timezone fields; the modal labels Monday as 0 through Sunday as 6. Reopen view after a change from another session. Only configured community managers, mapped clan officers, and mapped clan leaders can view another member's raw schedule. This access does not alter existing clan/config/debug permissions.
 
@@ -179,21 +180,19 @@ Acceptance freshly checks both memberships and saves two independent cryptograph
 /config
 ```
 
-No options. Opens a private, invoker-only server menu for 10 minutes. Manage Server permission or the configured manager role is required. The menu shows access roles, debug/private-reply settings, configured clan count and pending/retrying role jobs.
+No options. Opens a private, invoker-only server menu for 10 minutes. Manage Server permission or the configured manager role is required. The home page shows a compact configured-clan and pending/retrying-job summary with focused settings pages.
 
-| Home control | Behavior |
+| Page / control | Behavior |
 | --- | --- |
-| Set config role | Select one normal server role; saves immediately |
-| Set debug role | Select one normal role; saves immediately; clearing disables `/debug` |
-| Clan selector | Opens a saved clan draft; up to 25 clans per menu page |
-| New clan | Opens a new unsaved draft |
-| Previous / Next | Navigates the home clan selector |
-| Diagnostics | Private doctor report, first report page |
-| Link coverage | Private coverage report, first report page |
-| Match history / weekly recap | Opens history/recap draft settings |
+| Clans | Choose a saved clan or New clan; Previous/Next pages contain up to 25 clans |
+| Access | Select normal config/debug roles; both selectors save immediately; clearing debug disables `/debug` |
+| History & recaps | Opens history/recap draft settings with explicit Save |
+| Diagnostics | Doctor and link-coverage reports plus current reply/error settings |
 | Close | Ends the session |
 
-For a clan draft, use **Tag / sync interval**, **Clan roles**, and **Log channel**, then **Save**. Optional role/channel selectors can be cleared. Existing clan tags cannot be renamed in place. **Back to clans** or **Cancel** discards that clan draft. **Delete** opens a separate confirmation; **Confirm removal** queues obsolete-role cleanup and **Keep clan** returns to editing.
+Clan editing groups settings into **General**, **Roles**, and **Logging**, with a visible saved/unsaved marker and explicit **Save**. Optional role/channel selectors can be cleared. Selecting or clearing a log destination confirms an unsaved draft change; no destination is persisted until Save. Back from a focused editor retains its draft; leaving the clan editor with Cancel discards it. Existing clan tags cannot be renamed in place. **Delete** opens a separate confirmation; **Confirm removal** queues obsolete-role cleanup and **Keep clan** returns to editing.
+
+If Discord rejects a draft redraw, that unsaved change is not retained invisibly. A successful database Save remains committed even if the following reply fails; recovery explains the saved outcome when Discord still accepts a private message. An expired interaction token can prevent every response: reopen `/config` and check the safe host-side config diagnostic rather than repeatedly clicking an old control.
 
 History settings expose **Clan history**, **Player history / Elo**, **Collect**, **Weekly**, a destination text-channel selector and **Timing / retention**. They are drafts until **Save**. Timing bounds: collection every 5–1440 minutes, retention 14–365 days, weekly day 0 (Sunday) through 6 (Saturday), hour 0–23 and a valid IANA time zone. New-server defaults: clan/player history on, collection/weekly off, no channel, 15-minute polling, 90-day retention, Monday at 12:00 UTC. Enabling Weekly enables collection; disabling collection disables Weekly; clearing the destination disables Weekly. A selected recap channel must allow view/send/embed/read-history permissions even when validating a draft that has Weekly off.
 
@@ -327,29 +326,29 @@ IDs are strings. A stored OpenFront username can be `null`. Server approvals use
 
 ## Team events
 
-`/event create` opens an officer's private draft. Supply a title, `start` as `YYYY-MM-DD HH:mm`, and an IANA `timezone` such as `America/Bahia`. Repeated daylight-saving times require an explicit `offset` such as `-04:00`; nonexistent local times are rejected. Check the interpreted date, UTC offset and Discord timestamp before selecting **Publish**. Defaults are 20 seats and 120 minutes; supported limits are 1–100 seats, 15–720 minutes, and a start within the next 365 days.
+`/event action:create` opens an officer's private draft. Supply a title, `start` as `YYYY-MM-DD HH:mm`, and an IANA `timezone` such as `America/Bahia`. Repeated daylight-saving times require an explicit `offset` such as `-04:00`; nonexistent local times are rejected. Check the interpreted date, UTC offset and Discord timestamp before selecting **Publish**. Defaults are 20 seats and 120 minutes; supported limits are 1–100 seats, 15–720 minutes, and a start within the next 365 days.
 
-`/event list` displays up to 100 recent/upcoming records in pages of ten. `/event view id:…` provides the link to the canonical public signup card. Use that card's **Join**, **Withdraw**, **Choose squad**, **Reminder**, pagination and **Refresh** controls. Full events or squads place members on a stable first-in reserve list; repeated Join keeps the original queue position. Signups close at the start instant.
+`/event action:list` displays up to 100 recent/upcoming records in pages of ten. `/event action:view id:…` provides the link to the canonical public signup card. Use that card's **Join**, **Withdraw**, **Choose squad**, **Reminder**, pagination and **Refresh** controls. Full events or squads place members on a stable first-in reserve list; repeated Join keeps the original queue position. Signups close at the start instant.
 
-Officers use `/event edit id:…` for private detail editing, squad configuration, member moves and delivery status. Squad lines use `id | name | capacity`, one per line (up to 20); capacities must sum to total event capacity. **Edit squads** saves its total event capacity and squad limits together, so occupied squads can grow or shrink while preserving confirmed seats. A single `-` clears unoccupied squads. Occupied squads cannot be removed, and capacity cannot fall below confirmed occupancy. `/event cancel id:…` closes the event and queues an update of its public card.
+Officers use `/event action:edit id:…` for private detail editing, squad configuration, member moves and delivery status. Squad lines use `id | name | capacity`, one per line (up to 20); capacities must sum to total event capacity. **Edit squads** saves its total event capacity and squad limits together, so occupied squads can grow or shrink while preserving confirmed seats. A single `-` clears unoccupied squads. Occupied squads cannot be removed, and capacity cannot fall below confirmed occupancy. `/event action:cancel id:…` closes the event and queues an update of its public card.
 
-An officer running `/availability suggest` receives private **Draft session** buttons alongside the public count/timestamp suggestions. These create unpublished, empty event drafts; they never sign up members or expose their private schedules. Private menus belong to their opener and expire after ten minutes.
+An officer running `/availability action:suggest` receives private **Draft session** buttons alongside the public count/timestamp suggestions. These create unpublished, empty event drafts; they never sign up members or expose their private schedules. Private menus belong to their opener and expire after ten minutes.
 
 Reminder preferences are opt-in and default off. Choose a 15/30/60-minute lead (default 0/off); only opted-in, currently confirmed members receive a mention. The worker skips reminders discovered after the start, revalidates membership and promotes eligible reserves when seats open. Cancelled/finished events and signups retire after 90 days. Discord timestamps render in each reader's local time.
 
 ## Newcomer onboarding
 
-`/onboarding status` opens your private four-step checklist and enrolls you for the selected clan. Use `clan:MARS` to select a configured clan; selection is required when several clans are configured. The checklist shows your effective account link, fresh OpenFront clan membership, saved availability, and confirmed event signup. A server-approved link is labeled **server-only**, and an approval role means **Waiting** for an invitation rather than membership. Unavailable membership data shows **Unknown** with retry guidance.
+`/onboarding action:status` opens your private four-step checklist and enrolls you for the selected clan. Use `clan:MARS` to select a configured clan; selection is required when several clans are configured. The checklist shows your effective account link, fresh OpenFront clan membership, saved availability, and confirmed event signup. A server-approved link is labeled **server-only**, and an approval role means **Waiting** for an invitation rather than membership. Unavailable membership data shows **Unknown** with retry guidance.
 
-Save availability with `/availability set` and find an event with `/event list`. A reserve place, withdrawn signup or cancelled event does not complete the event step. A confirmed future signup or retained past signup does; this records signup, not attendance. Past signup evidence expires with the event's 90-day retention eligibility even while cleanup is draining older rows.
+Save availability with `/availability action:set` and find an event with `/event action:list`. A reserve place, withdrawn signup or cancelled event does not complete the event step. A confirmed future signup or retained past signup does; this records signup, not attendance. Past signup evidence expires with the event's 90-day retention eligibility even while cleanup is draining older rows.
 
-Community officers can use `/onboarding status user:@Member clan:MARS` for private inspection without enrolling that member. `/onboarding queue page:1` privately shows enrolled current members ten at a time, their next step and waiting/unknown guidance. Only linked members on the displayed page require profile lookups. **Previous**, **Next**, and **Refresh** reread current state, recheck officer access and allow one action per ten seconds. Private menus belong to their opener, server, channel and original message and expire after ten minutes. Onboarding remains private regardless of ordinary-reply debug settings.
+Community officers can use `/onboarding action:status user:@Member clan:MARS` for private inspection without enrolling that member. `/onboarding action:queue page:1` privately shows enrolled current members ten at a time, their next step and waiting/unknown guidance. Only linked members on the displayed page require profile lookups. **Previous**, **Next**, and **Refresh** reread current state, recheck officer access and allow one action per ten seconds. Private menus belong to their opener, server, channel and original message and expire after ten minutes. Onboarding remains private regardless of ordinary-reply debug settings.
 
 ## Statistic milestones
 
-`/milestones view` privately shows your linked account's earned and upcoming public Team lifetime milestones. Initial observations and newly added thresholds earn quietly. Refresh retries unavailable statistics; saved earned cards remain visible during an upstream outage or when announcements are off. Current OpenFront clan membership is required to save a new observation; a Discord approval role alone does not qualify.
+`/milestones action:view` privately shows your linked account's earned and upcoming public Team lifetime milestones. Initial observations and newly added thresholds earn quietly. Refresh retries unavailable statistics; saved earned cards remain visible during an upstream outage or when announcements are off. Current OpenFront clan membership is required to save a new observation; a Discord approval role alone does not qualify.
 
-`/milestones configure` is private and requires Manage Server or the configured manager role. Select a text or announcement channel, optionally edit up to ten ascending unique positive integer thresholds for each metric, enable announcements, and press **Save**. Either threshold list may be empty; both empty pauses automatic profile polling. Draft changes do not apply until saved. Private menus expire after ten minutes and bind their owner, server, channel and message. Every configuration action refreshes access; a changed saved revision requires Refresh or reopening the menu.
+`/milestones action:configure` is private and requires Manage Server or the configured manager role. Select a text or announcement channel, optionally edit up to ten ascending unique positive integer thresholds for each metric, enable announcements, and press **Save**. Either threshold list may be empty; both empty pauses automatic profile polling. Draft changes do not apply until saved. Private menus expire after ten minutes and bind their owner, server, channel and message. Every configuration action refreshes access; a changed saved revision requires Refresh or reopening the menu.
 
 The configuration menu lists failed, paused and uncertain deliveries ten at a time. Choose a delivery and use **Retry / reconcile** after correcting permissions. Uncertain sends search for the original bot message before completing; an unproven outcome remains available for review instead of automatically posting a duplicate. Saving any milestone setting cancels unsent jobs from the previous settings revision. Earned milestones remain available in your private view.
 
@@ -378,49 +377,49 @@ All seven community commands are server-only. The complete option schema below s
 
 | Action | Options and defaults |
 | --- | --- |
-| `/availability set` | `day` required (Monday–Sunday / 0–6), `start`/`end` required (`HH:mm`), `timezone` required on first save then reused, `window` to replace an existing ID |
-| `/availability view` | `user` defaults to self (other members require community officer access); `page` 1–2, default 1 |
-| `/availability clear` | `window` optional; omission clears all own windows |
-| `/availability suggest` | `duration` 30–240 minutes, default 120 |
-| `/event create` | `title` required (100 chars), `start` required (`YYYY-MM-DD HH:mm`), `timezone` required (IANA); `offset` for folds; `description` default empty (1000 chars); `capacity` 1–100 default 20; `duration` 15–720 default 120; `reminder` 0/15/30/60 default 0 |
-| `/event list` | `page` 1–10, default 1; published records only |
-| `/event view`, `/event edit`, `/event cancel` | `id` required; edit/cancel/create require community officer access |
-| `/onboarding status` | `clan` (32 chars) required when several configured clans exist; `user` defaults to self, another member requires officer access |
-| `/onboarding queue` | Officer-only; `page` starts at 1, default 1, ten enrolled current members per page |
-| `/wheel spin`, `/wheel presets`, `/wheel add` | No slash options; presets/add require officer access |
-| `/wheel edit`, `/wheel remove` | Officer-only; `id` optional (100 chars), omission opens chooser |
-| `/milestones view`, `/milestones configure` | No slash options; configure requires Manage Server or configured manager role |
-| `/bingo view` | `cell` 1–25 optional; omission shows whole board privately |
-| `/bingo create`, `/bingo reset` | Officer-only, no slash options; draft destination is the channel where create runs, reset uses the active board's destination |
-| `/bingo claim` | `cell` required 1–25, `explanation` required (1000 chars), `evidence` optional (HTTPS, 500 chars) |
-| `/bingo review` | Officer-only; `page` 1–10000, default 1 |
+| `/availability action:set` | `day` required (Monday–Sunday / 0–6), `start`/`end` required (`HH:mm`), `timezone` required on first save then reused, `window` to replace an existing ID |
+| `/availability action:view` | `user` defaults to self (other members require community officer access); `page` 1–2, default 1 |
+| `/availability action:clear` | `window` optional; omission clears all own windows |
+| `/availability action:suggest` | `duration` 30–240 minutes, default 120 |
+| `/event action:create` | `title` required (100 chars), `start` required (`YYYY-MM-DD HH:mm`), `timezone` required (IANA); `offset` for folds; `description` default empty (1000 chars); `capacity` 1–100 default 20; `duration` 15–720 default 120; `reminder` 0/15/30/60 default 0 |
+| `/event action:list` | `page` 1–10, default 1; published records only |
+| `/event action:view`, `/event action:edit`, `/event action:cancel` | `id` required; edit/cancel/create require community officer access |
+| `/onboarding action:status` | `clan` (32 chars) required when several configured clans exist; `user` defaults to self, another member requires officer access |
+| `/onboarding action:queue` | Officer-only; `page` starts at 1, default 1, ten enrolled current members per page |
+| `/wheel action:spin`, `/wheel action:presets`, `/wheel action:add` | No action-specific inputs; presets/add require officer access |
+| `/wheel action:edit`, `/wheel action:remove` | Officer-only; `id` optional (100 chars), omission opens chooser |
+| `/milestones action:view`, `/milestones action:configure` | No action-specific inputs; configure requires Manage Server or configured manager role |
+| `/bingo action:view` | `cell` 1–25 optional; omission shows whole board privately |
+| `/bingo action:create`, `/bingo action:reset` | Officer-only, no action-specific inputs; draft destination is the channel where create runs, reset uses the active board's destination |
+| `/bingo action:claim` | `cell` required 1–25, `explanation` required (1000 chars), `evidence` optional (HTTPS, 500 chars) |
+| `/bingo action:review` | Officer-only; `page` 1–10000, default 1 |
 | `/duel` | `opponent` required, a different current human member; no OpenFront link required |
 
 Community officers hold the configured manager role or a configured clan officer/leader role. This does not grant legacy clan/debug access. Configuration permission is Manage Server or manager role. Public outputs are event cards, count-only overlap suggestions, wheel spins, opted-in milestone announcements, published bingo boards and duels. Availability details, onboarding, drafts/settings, bingo claims/review and access errors are private. All private community menus share a 200-session, ten-minute bound and validate their owner and saved context.
 
 ## Curated challenge wheel
 
-`/wheel spin` publicly draws one enabled complete hosting package and then one map from that package. Settings are never randomized separately. The card includes the selected map, mode/teams, difficulty, bots/nations, map size, disabled units, gold/troop donations, spawn, infinite resources, instant build and hosting instructions. These are compatible suggested settings for a human OpenFront host; competitive balance is not guaranteed. Each member may spin once per five seconds.
+`/wheel action:spin` publicly draws one enabled complete hosting package and then one map from that package. Settings are never randomized separately. The card includes the selected map, mode/teams, difficulty, bots/nations, map size, disabled units, gold/troop donations, spawn, infinite resources, instant build and hosting instructions. These are compatible suggested settings for a human OpenFront host; competitive balance is not guaranteed. Each member may spin once per five seconds.
 
-Officers use `/wheel presets` to choose a package, `/wheel add` to create one, `/wheel edit [id]` to edit and `/wheel remove [id]` to confirm removal. Omitting the ID opens a private chooser. **Edit basics**, **Edit hosting**, and **Edit options** open ordinary five-field forms; use comma-separated maps/disabled units and yes/no options. Review the complete private preview and press **Save preset** explicitly. **Enable/Disable preset** changes the preview until saved. Allowed maps are World, Europe, Black Sea and Caribbean; the chooser lists supported units. Names allow 80 characters and instructions 1000. Each guild permits 50 presets and each package up to ten distinct supported maps.
+Officers use `/wheel action:presets` to choose a package, `/wheel action:add` to create one, `/wheel action:edit [id]` to edit and `/wheel action:remove [id]` to confirm removal. Omitting the ID opens a private chooser. **Edit basics**, **Edit hosting**, and **Edit options** open ordinary five-field forms; use comma-separated maps/disabled units and yes/no options. Review the complete private preview and press **Save preset** explicitly. **Enable/Disable preset** changes the preview until saved. Allowed maps are World, Europe, Black Sea and Caribbean; the chooser lists supported units. Names allow 80 characters and instructions 1000. Each guild permits 50 presets and each package up to ten distinct supported maps.
 
-Six editable starters appear once per guild: Classic clan teams, Squad skirmish, Naval night, Conventional warfare, Friendly free-for-all, and Humans versus nations. Removing every preset does not restore them; `/wheel add` creates a replacement. Disabling every preset makes spins ask an officer to enable or add a package.
+Six editable starters appear once per guild: Classic clan teams, Squad skirmish, Naval night, Conventional warfare, Friendly free-for-all, and Humans versus nations. Removing every preset does not restore them; `/wheel action:add` creates a replacement. Disabling every preset makes spins ask an officer to enable or add a package.
 
-Officer spinners receive a separate private **Create event draft** button. It copies the exact selected settings and instructions into an unpublished event draft; later preset edits/removals do not change that copy. Review the proposed date in event management before publishing. No members are automatically signed up. Private wheel controls belong to their opener, server, channel and original private message, expire after ten minutes, and recheck current officer access. Reopen `/wheel presets` after a stale revision.
+Officer spinners receive a separate private **Create event draft** button. It copies the exact selected settings and instructions into an unpublished event draft; later preset edits/removals do not change that copy. Review the proposed date in event management before publishing. No members are automatically signed up. Private wheel controls belong to their opener, server, channel and original private message, expire after ten minutes, and recheck current officer access. Reopen `/wheel action:presets` after a stale revision.
 
 ## Shared server bingo
 
-`/bingo view` privately shows the current shared 5×5 board and links to its canonical public message. The public card shows five numbered rows, current completion/progress and completed lines, with **Refresh** and **Claim a cell**. Long labels are shortened on the card; `/bingo view cell:14` reads the full immutable challenge. The center (13) is free.
+`/bingo action:view` privately shows the current shared 5×5 board and links to its canonical public message. The public card shows five numbered rows, current completion/progress and completed lines, with **Refresh** and **Claim a cell**. Long labels are shortened on the card; `/bingo action:view cell:14` reads the full immutable challenge. The center (13) is free.
 
-Officers use `/bingo create` to create or resume their own private draft in the command's channel. **Edit challenges** opens two groups of twelve definitions, in `kind | target | description` format, and an optional closing instant in `YYYY-MM-DDTHH:mm:ssZ` UTC format (`-` means no closing date). Supported kinds are `appearances`, `wins`, `contributors`, `shared_game`, `availability`, and `manual`. Targets are 1–1,000,000; manual targets must be 1, descriptions at most 160 characters. Edit all 24 definitions before explicitly pressing **Publish board**. Publication is queued and definitions freeze once published. Boards never reset automatically. `/bingo reset` previews a replacement and requires **Confirm reset**, which archives the old board and queues the replacement.
+Officers use `/bingo action:create` to create or resume their own private draft in the command's channel. **Edit challenges** opens two groups of twelve definitions, in `kind | target | description` format, and an optional closing instant in `YYYY-MM-DDTHH:mm:ssZ` UTC format (`-` means no closing date). Supported kinds are `appearances`, `wins`, `contributors`, `shared_game`, `availability`, and `manual`. Targets are 1–1,000,000; manual targets must be 1, descriptions at most 160 characters. Edit all 24 definitions before explicitly pressing **Publish board**. Publication is queued and definitions freeze once published. Boards never reset automatically. `/bingo action:reset` previews a replacement and requires **Confirm reset**, which archives the old board and queues the replacement.
 
-`/bingo claim cell:14 explanation:… [evidence:https://…]` submits a private manual claim. The public **Claim a cell** button opens the same private form. A repeated pending claim from the same person for the same cell returns the existing claim. Automatic cells and the center reject manual claims. Explanations allow 1000 characters and evidence URLs 500; evidence must use HTTPS and is stored as text without being fetched. Claims close at the optional board closing instant.
+`/bingo action:claim cell:14 explanation:… [evidence:https://…]` submits a private manual claim. The public **Claim a cell** button opens the same private form. A repeated pending claim from the same person for the same cell returns the existing claim. Automatic cells and the center reject manual claims. Explanations allow 1000 characters and evidence URLs 500; evidence must use HTTPS and is stored as text without being fetched. Claims close at the optional board closing instant.
 
-Officers use `/bingo review [page:1]` to inspect ten claims at a time. Choose a claim to read its full explanation/evidence, enter `approve` or `reject`, and give an audit reason. Rejecting an approved claim revokes the cell approval. Decisions and explanations remain private. Private controls bind their owner, server, channel, message and board/claim revision and expire after ten minutes; reopen after a change. Each privileged action refreshes officer access. Collection-disabled and unavailable game tracking still allow manual claims and review.
+Officers use `/bingo action:review [page:1]` to inspect ten claims at a time. Choose a claim to read its full explanation/evidence, enter `approve` or `reject`, and give an audit reason. Rejecting an approved claim revokes the cell approval. Decisions and explanations remain private. Private controls bind their owner, server, channel, message and board/claim revision and expire after ten minutes; reopen after a change. Each privileged action refreshes officer access. Collection-disabled and unavailable game tracking still allow manual claims and review.
 
 Automatic progress uses retained observed public Team sessions and current linked humans/configured clan tags, plus current humans' availability submissions after board creation. A full fresh scan may take several ticks; automatic cells and mixed lines show refreshing until it completes. Cards label disabled/unavailable collection, incomplete coverage and the retention horizon. Existing progress can decrease after corrections, retention, unlink or departure. A lost/regained line announces only once per board. Refresh queues a card update; it does not fetch OpenFront profiles.
 
-Paused/failed/uncertain deliveries appear in `/bingo create` for unpublished drafts and `/bingo review` for active boards. **Retry / reconcile** rechecks officer access and deliberately retries after permissions are corrected. An uncertain accepted post is reconciled using its existing bot recovery marker; an unproven outcome stays reviewable without an automatic duplicate publication.
+Paused/failed/uncertain deliveries appear in `/bingo action:create` for unpublished drafts and `/bingo action:review` for active boards. **Retry / reconcile** rechecks officer access and deliberately retries after permissions are corrected. An uncertain accepted post is reconciled using its existing bot recovery marker; an unproven outcome stays reviewable without an automatic duplicate publication.
 
 ## Live OpenFront lobby alerts
 
@@ -428,19 +427,19 @@ Paused/failed/uncertain deliveries appear in `/bingo create` for unpublished dra
 
 | Action | Inputs and behavior |
 | --- | --- |
-| `/lobby configure` | Managers inspect enabled state, fallback destination, feed status, and up to five delivery diagnostics. Optional `enabled` and `channel` update settings; channel must be an ordinary server text channel. Changes stop existing searches. |
-| `/lobby watch` | Required `name` (1–60 characters); optional `map` (autocomplete), `mode`, `category`, `min_players`, `max_players`. At least one filter is required. Save at most ten rules. Saving starts/restarts your search. |
-| `/lobby list [page:1]` | Private search state, feed status, and saved rules/IDs; five rules per page. |
-| `/lobby remove id:…` | Remove your rule without restarting a stopped search or bypassing a pending response. Removing the last rule stops searching. |
-| `/lobby stop` | Stop your search while retaining filters. |
-| `/lobby resume` | Restart with saved filters. |
+| `/lobby action:configure` | Managers inspect enabled state, fallback destination, feed status, and up to five delivery diagnostics. Optional `enabled` and `channel` update settings; channel must be an ordinary server text channel. Changes stop existing searches. |
+| `/lobby action:watch` | Required `name` (1–60 characters); optional `map` (autocomplete), `mode`, `category`, `min_players`, `max_players`. At least one filter is required. Save at most ten rules. Saving starts/restarts your search. |
+| `/lobby action:list [page:1]` | Private search state, feed status, and saved rules/IDs; five rules per page. |
+| `/lobby action:remove id:…` | Remove your rule without restarting a stopped search or bypassing a pending response. Removing the last rule stops searching. |
+| `/lobby action:stop` | Stop your search while retaining filters. |
+| `/lobby action:resume` | Restart with saved filters. |
 
 All selected fields in a rule must match; different rules are alternatives. Map matching is exact after trimming/case normalization. Counts are **currently connected players**, not capacity, bots, or team size, and must be integers from 0 to 1000. Modes include Free For All, Team, and Humans Vs Nations. Categories are ffa, team, special, and hosted. Full, restricted, started, stale, or lobbies without capacity or a start window are excluded. A missing map or mode fails a rule that requests that field; a rule that does not request it can still match.
 
 The bot tries a DM first. Discord's confirmed blocked-DM rejection triggers a ping in the configured server channel, including instructions to enable direct messages from server members. Saving/resuming opts into that fallback. Only the affected player is mentioned. Network failures with an uncertain send outcome stop the search for manager review rather than risking a duplicate public ping.
 
-Each delivered alert has a **Continue searching** button. Searching pauses while delivery/your answer is pending. Click within **three minutes after successful delivery** to continue; otherwise searching stops. The deadline survives restarts and cannot be extended by repeat clicks. Only the intended player can use the button, even in a public fallback. A started/vanished lobby does not remove your ability to continue searching. Saved rules survive timeout; use `/lobby resume`. The same lobby does not alert you again after resuming.
+Each delivered alert has a **Continue searching** button. Searching pauses while delivery/your answer is pending. Click within **three minutes after successful delivery** to continue; otherwise searching stops. The deadline survives restarts and cannot be extended by repeat clicks. Only the intended player can use the button, even in a public fallback. A started/vanished lobby does not remove your ability to continue searching. Saved rules survive timeout; use `/lobby action:resume`. The same lobby does not alert you again after resuming.
 
 A candidate that becomes unavailable before any send can be selected again if it later matches. Confirmed or uncertain sends retain duplicate protection. Before a fallback ping, the bot checks the member's current access to the channel; if access has been lost, delivery stops for review.
 
-Live monitoring requires a compatible pinned OpenFront lobby build and access to public discovery/WebSockets. `/lobby list` shows feed availability; it does not claim that an unavailable feed is searching successfully. See [operations](operations.md#lobby-feed-operations).
+Live monitoring requires a compatible pinned OpenFront lobby build and access to public discovery/WebSockets. `/lobby action:list` shows feed availability; it does not claim that an unavailable feed is searching successfully. See [operations](operations.md#lobby-feed-operations).

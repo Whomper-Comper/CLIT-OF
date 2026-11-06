@@ -9,7 +9,7 @@ process.env.CLIENT_ID = "test";
 const { BotDatabase, db: singleton } = await import("../dist/db.js");
 const { HistoryCollector } = await import("../dist/historyCollector.js");
 const { weeklyPeriod } = await import("../dist/historySchedule.js");
-const { EmbedBuilder } = await import("discord.js");
+const { EmbedBuilder, Client, MessageManager } = await import("discord.js");
 after(()=>singleton.close());
 const DAY = 86_400_000;
 const clanConfig = (guild,tag) => ({guild_id:guild,clan_tag:tag,member_role_id:"role",officer_role_id:null,leader_role_id:null,
@@ -479,17 +479,24 @@ test("weekly schedule follows local Monday weeks and DST instead of the host tim
   assert.deepEqual(weeklyPeriod({weekly_day:1,weekly_hour:9,timezone:"America/New_York"},Date.parse("2026-11-02T15:00:00Z")),{
     scheduledAt:"2026-11-02T14:00:00.000Z",start:"2026-10-26T04:00:00.000Z",end:"2026-11-02T05:00:00.000Z"});
 });
-test("weekly recap delivery persists one report with deterministic nonce and reconciles an interrupted acknowledgement",async()=> {
+test("weekly recap delivery persists one report and recovers without caching scanned messages",async(t)=> {
   const f=fixture({now:Date.now(),budget:1,collector:{buildWeeklyReport:async()=>new EmbedBuilder().setDescription("Partial public Team coverage")}});
+  const discord = new Client({intents:[]});
   try {
     let settings=f.db.history.getSettings("guild");
     settings=f.db.history.saveSettings("guild",{...settings,weekly_enabled:1,channel_id:"123",timezone:"UTC",weekly_day:1,weekly_hour:9},settings.revision);
     const next=weeklyPeriod(settings,Date.now()+8*DAY);
     f.setNow(Date.parse(next.scheduledAt)+60_000);
     const messages=new Map();messages.find=fn=>[...messages.values()].find(fn);
-    let sends=0,failAcknowledgement=true;
+    let sends=0,scans=0,failAcknowledgement=true;
+    const manager=new MessageManager({id:"123",client:discord});
+    manager.cache.set("canonical",{id:"canonical",partial:false});
+    t.mock.method(discord.rest,"get",async(_route,options)=>{
+      scans++;assert.equal(options.query.get("limit"),"100");
+      return [...messages.values()].map(message=>({...message,content:"",author:{...message.author,username:"Bot",discriminator:"0",avatar:null}}));
+    });
     const channel={isTextBased:()=>true,isSendable:()=>true,isDMBased:()=>false,isThread:()=>false,permissionsFor:()=>({has:()=>true}),
-      messages:{fetch:async()=>messages},send:async(payload)=> {
+      messages:manager,send:async(payload)=> {
         sends++;assert.equal(payload.enforceNonce,true);assert.equal(payload.nonce.length,24);
         const message={id:"message",author:{id:"bot"},embeds:[{footer:payload.embeds[0].data.footer}]};messages.set(message.id,message);
         if(failAcknowledgement){failAcknowledgement=false;throw new Error("connection lost after Discord accepted message");}
@@ -503,6 +510,7 @@ test("weekly recap delivery persists one report with deterministic nonce and rec
     await f.collector.collectOnce();
     delivery=f.db.history.getDelivery("guild",next.start,next.end);
     assert.equal(delivery.status,"sent");assert.equal(delivery.message_id,"message");assert.equal(sends,1);
+    assert.equal(scans,1);assert.equal(manager.cache.size,1);assert.equal(manager.cache.has("canonical"),true);
     await f.collector.collectOnce();assert.equal(sends,1);
-  } finally {await f.close();}
+  } finally {await f.close();await discord.destroy();}
 });

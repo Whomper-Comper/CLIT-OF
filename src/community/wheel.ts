@@ -7,7 +7,7 @@ import { withCommunityTransaction } from './transactions.js';
 export function spinWheel(presets: WheelPreset[], roll: (min: number, maxExclusive: number) => number = randomInt): { preset: WheelPreset; map: string } {
   if (presets.length > 50) throw new CommandError('A wheel supports at most 50 presets.');
   const enabled = presets.filter(preset => preset.enabled);
-  if (!enabled.length) throw new CommandError('No enabled presets. Ask an officer to add or enable a preset using /wheel presets.');
+  if (!enabled.length) throw new CommandError('No enabled presets. Ask an officer to add or enable a preset using /wheel action:presets.');
   const preset = validateWheelPreset(enabled[roll(0, enabled.length)]);
   return { preset, map: preset.maps[roll(0, preset.maps.length)] };
 }
@@ -42,7 +42,7 @@ export class WheelStore {
     return withCommunityTransaction(this.sql, () => {
       const row = this.sql.prepare('SELECT revision FROM community_wheel_presets WHERE guild_id=? AND id=?').get(valid.guildId, valid.id);
       if (Number(row?.revision ?? 0) !== expectedRevision || valid.revision !== expectedRevision) {
-        throw new CommandError('Preset changed or removed. Reopen /wheel presets.');
+        throw new CommandError('Preset changed or removed. Reopen /wheel action:presets.');
       }
       if (!row && Number(this.sql.prepare('SELECT count(*) AS total FROM community_wheel_presets WHERE guild_id=?').get(valid.guildId)!.total) >= 50) {
         throw new CommandError('A guild supports at most 50 presets. Remove a preset first.');
@@ -57,6 +57,6 @@ export class WheelStore {
   remove(guildId: string, presetId: string, expectedRevision: number): void {
     const removed = this.sql.prepare('DELETE FROM community_wheel_presets WHERE guild_id=? AND id=? AND revision=?')
       .run(guildId, presetId, expectedRevision);
-    if (!removed.changes) throw new CommandError('Preset changed or unavailable. Reopen /wheel presets.');
+    if (!removed.changes) throw new CommandError('Preset changed or unavailable. Reopen /wheel action:presets.');
   }
 }

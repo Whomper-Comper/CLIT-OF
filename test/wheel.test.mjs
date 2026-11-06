@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { MessageFlags } from 'discord.js';
-import { communityFixture } from './helpers/community.mjs';
+import { communityFixture, legacyCommandOptions } from './helpers/community.mjs';
 const catalog = await import('../dist/community/wheelPresets.js').catch(() => ({}));
 const wheel = await import('../dist/community/wheel.js').catch(() => ({}));
 const commands = await import('../dist/commands/wheel.js').catch(() => ({}));
@@ -86,7 +86,7 @@ test('guild store seeds once, enforces limits/revisions and keeps deletions acro
 function interaction(f, sub, values = {}) {
   return {
     guild: f.guild, guildId: 'g', channelId: 'c', user: { id: 'u' },
-    options: { getSubcommand: () => sub, getString: key => values[key] ?? null },
+    options: legacyCommandOptions(sub, values),
     async deferReply(payload) { this.deferred = payload; },
     async editReply(payload) { this.output = payload; return { id: 'private' }; },
     async reply(payload) { this.output = payload; return { id: 'private' }; },

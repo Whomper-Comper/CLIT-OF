@@ -13,6 +13,9 @@ import type { CommunitySettings } from '../community/settings.js';
 import { milestoneBinding, milestoneClanEligible, milestoneHealth, milestoneIdentityCurrent } from '../community/milestoneWorker.js';
 import { readMilestoneCounters, validateMilestoneThresholds } from '../community/milestoneCounters.js';
 import { CommandLimits } from '../queues.js';
+import { actionOption, commandAction, type CommandActions } from './actions.js';
+
+const ACTIONS = { view: {}, configure: {} } satisfies CommandActions;
 
 interface Menu {
   draft: CommunitySettings;
@@ -22,7 +25,7 @@ interface Menu {
 }
 interface Dependencies { db?: BotDatabase; api?: OpenFrontApi; now?: () => number; sessions?: CommunitySessions }
 type Component = Extract<Interaction, { customId: string }>;
-const changed = () => new CommandError('Milestone identity or settings changed. Reopen /milestones view.');
+const changed = () => new CommandError('Milestone identity or settings changed. Reopen /milestones action:view.');
 export function createMilestonesCommand(dependencies: Dependencies = {}) {
   const db = dependencies.db ?? defaultDatabase;
   const api = dependencies.api ?? openfrontApi;
@@ -156,12 +159,11 @@ export function createMilestonesCommand(dependencies: Dependencies = {}) {
   return {
     data: new SlashCommandBuilder().setName('milestones').setDescription('View earned milestones or configure announcements')
       .setContexts(InteractionContextType.Guild)
-      .addSubcommand(s => s.setName('view').setDescription('Your private earned and upcoming milestones'))
-      .addSubcommand(s => s.setName('configure').setDescription('Private announcement settings and delivery recovery')),
+      .addStringOption(actionOption(ACTIONS)),
     async execute(i: ChatInputCommandInteraction): Promise<void> {
       if (!i.guild || !i.guildId || !i.channelId) throw new CommandError('Use milestones in a server.');
+      const configuring = commandAction(i.options, ACTIONS) === 'configure';
       await i.deferReply(privateReply);
-      const configuring = i.options.getSubcommand() === 'configure';
       if (configuring) await requireConfigAccess(i.guild, i.user.id, db);
       const s = sessions.create({ kind: configuring ? 'milestones-configure' : 'milestones-view', ownerId: i.user.id,
         guildId: i.guildId, channelId: i.channelId, messageId: null,
@@ -223,7 +225,7 @@ export function createMilestonesCommand(dependencies: Dependencies = {}) {
             db.community.deliveries.retry(s.guildId, job.id, job.revision, now());
           } else if (action === 'next' && i.isButton()) data.page++;
           else if (action === 'previous' && i.isButton()) data.page = Math.max(0, data.page - 1);
-          else throw new CommandError('Reopen /milestones configure.');
+          else throw new CommandError('Reopen /milestones action:configure.');
           // No await separates the final access check/mutation above from this private render.
           get(i, id);
           await i.editReply(config(s));

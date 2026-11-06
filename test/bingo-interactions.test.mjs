@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { communityFixture } from './helpers/community.mjs';
+import { communityFixture, legacyCommandOptions } from './helpers/community.mjs';
 import { defaultBingoObjectives } from '../dist/community/bingo.js';
 import { CommunitySessions } from '../dist/community/sessions.js';
 const bingo = await import('../dist/commands/bingo.js').catch(() => ({}));
 export function interaction(f, sub, values = {}) {
   return { guild: f.guild, guildId: 'g', channelId: 'c', user: { id: 'u' },
-    options: { getSubcommand: () => sub, getString: k => values[k] ?? null, getInteger: k => values[k] ?? null },
+    options: legacyCommandOptions(sub, values),
     async deferReply(p) { this.deferred = p; }, async editReply(p) { this.output = p; return { id: 'private' }; },
     async reply(p) { this.output = p; }, async fetchReply() { return { id: 'private' }; } };
 }

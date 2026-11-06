@@ -10,6 +10,14 @@ import type { LocalWindow, MemberAvailability } from "../community/availability.
 import { suggestAvailability } from "../community/time.js";
 import { createEventDraft } from "./event.js";
 import type { EventDraftInput } from "../community/events.js";
+import { actionOption, commandAction, type CommandActions } from './actions.js';
+
+const ACTIONS = {
+  set: { required: ['day', 'start', 'end'], optional: ['timezone', 'window'] },
+  view: { optional: ['user', 'page'] },
+  clear: { optional: ['window'] },
+  suggest: { optional: ['duration'] },
+} satisfies CommandActions;
 
 const DAYS=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const clock=(minute:number)=>`${String(Math.floor(minute/60)).padStart(2,"0")}:${String(minute%60).padStart(2,"0")}`;
@@ -44,7 +52,7 @@ export function createAvailabilityCommand(dependencies:Dependencies={}) {
     if (!visible.some(window=>window.id===data.selected)) data.selected=visible[0]?.id??null;
     const description=visible.map(window=>`**${DAYS[window.weekday]}** ${clock(window.startMinute)}–${clock(window.endMinute)}${window.endMinute<window.startMinute?" (next day)":""}\nWindow: \`${window.id}\``).join("\n\n");
     const embed=new EmbedBuilder().setColor(0x5865f2).setTitle("Weekly availability")
-      .setDescription(description||"No weekly windows saved. Use /availability set to add one.")
+      .setDescription(description||"No weekly windows saved. Use /availability action:set to add one.")
       .setFooter({text:`${member?label(member.timezone):"Timezone not set"} · Page ${data.page+1}/${pages} · Private menu expires in 10 minutes`});
     const components:(ActionRowBuilder<ButtonBuilder>|ActionRowBuilder<StringSelectMenuBuilder>)[]=[];
     const editable=data.targetId===session.ownerId;
@@ -63,25 +71,21 @@ export function createAvailabilityCommand(dependencies:Dependencies={}) {
   return {
     data:new SlashCommandBuilder().setName("availability").setDescription("Save weekly playing times and find shared sessions")
       .setContexts(InteractionContextType.Guild)
-      .addSubcommand(sub=>sub.setName("set").setDescription("Add or replace one weekly window")
-        .addIntegerOption(option=>option.setName("day").setDescription("Local weekday").setRequired(true).addChoices(...DAYS.map((name,value)=>({name,value}))))
-        .addStringOption(option=>option.setName("start").setDescription("Local start, HH:mm").setRequired(true).setMaxLength(5))
-        .addStringOption(option=>option.setName("end").setDescription("Local end, HH:mm (may cross midnight)").setRequired(true).setMaxLength(5))
-        .addStringOption(option=>option.setName("timezone").setDescription("IANA timezone (required on first save)").setMaxLength(100))
-        .addStringOption(option=>option.setName("window").setDescription("Window ID from view to replace").setMaxLength(64)))
-      .addSubcommand(sub=>sub.setName("view").setDescription("View private recurring windows")
-        .addUserOption(option=>option.setName("user").setDescription("Another member (officers only)"))
-        .addIntegerOption(option=>option.setName("page").setDescription("Page number").setMinValue(1).setMaxValue(2)))
-      .addSubcommand(sub=>sub.setName("clear").setDescription("Remove one window, or all your availability")
-        .addStringOption(option=>option.setName("window").setDescription("Window ID, or omit to clear all").setMaxLength(64)))
-      .addSubcommand(sub=>sub.setName("suggest").setDescription("Show up to three shared sessions over the next 14 days")
-        .addIntegerOption(option=>option.setName("duration").setDescription("Session minutes (default 120)").setMinValue(30).setMaxValue(240))),
+      .addStringOption(actionOption(ACTIONS))
+      .addIntegerOption(option=>option.setName("day").setDescription("Set: local weekday").addChoices(...DAYS.map((name,value)=>({name,value}))))
+      .addStringOption(option=>option.setName("start").setDescription("Set: local start, HH:mm").setMaxLength(5))
+      .addStringOption(option=>option.setName("end").setDescription("Set: local end, HH:mm (may cross midnight)").setMaxLength(5))
+      .addStringOption(option=>option.setName("timezone").setDescription("Set: IANA timezone (required on first save)").setMaxLength(100))
+      .addStringOption(option=>option.setName("window").setDescription("Set/clear: window ID from view; omit to add or clear all").setMaxLength(64))
+      .addUserOption(option=>option.setName("user").setDescription("View: another member (officers only)"))
+      .addIntegerOption(option=>option.setName("page").setDescription("View: page number").setMinValue(1).setMaxValue(2))
+      .addIntegerOption(option=>option.setName("duration").setDescription("Suggest: session minutes (default 120)").setMinValue(30).setMaxValue(240)),
     async execute(i:ChatInputCommandInteraction):Promise<void> {
       if (!i.guild || !i.guildId || !i.channelId) throw new CommandError("Use availability in a server.");
-      const sub=i.options.getSubcommand();
+      const sub=commandAction(i.options,ACTIONS);
       if (sub==="set") {
         saveWindow(i.guildId,i.user.id,i.options.getInteger("day",true),i.options.getString("start",true),i.options.getString("end",true),i.options.getString("timezone"),i.options.getString("window"));
-        await i.reply({content:"Weekly availability saved. Use /availability view to edit your windows.",...privateReply,allowedMentions:{parse:[]}});return;
+        await i.reply({content:"Weekly availability saved. Use /availability action:view to edit your windows.",...privateReply,allowedMentions:{parse:[]}});return;
       }
       if (sub==="clear") {
         const id=i.options.getString("window"),current=database.community.availability.get(i.guildId,i.user.id);
@@ -152,7 +156,7 @@ export function createAvailabilityCommand(dependencies:Dependencies={}) {
         if (!/^[0-6]$/.test(day)) throw new CommandError("Choose weekday 0 (Monday) through 6 (Sunday).");
         saveWindow(i.guildId,i.user.id,+day,i.fields.getTextInputValue("start"),i.fields.getTextInputValue("end"),i.fields.getTextInputValue("timezone"),data.selected,data.revision);
         sessions.delete(id);
-        await i.reply({content:"Weekly window updated. Reopen /availability view for fresh controls.",...privateReply,allowedMentions:{parse:[]}});return true;
+        await i.reply({content:"Weekly window updated. Reopen /availability action:view for fresh controls.",...privateReply,allowedMentions:{parse:[]}});return true;
       }
       if (i.isModalSubmit()) throw new CommandError("Reopen your availability menu.");
       if (action==="edit" && i.isButton()) {

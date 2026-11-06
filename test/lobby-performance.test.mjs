@@ -3,6 +3,46 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { LobbyStore } from "../dist/lobby/store.js";
 import { LobbyWorker } from "../dist/lobby/worker.js";
+import { LobbyFeed, SUPPORTED_BUILD } from "../dist/lobby/feed.js";
+
+test("delivery uses one whole snapshot per tick and point reads after awaits", async (t) => {
+  const sql = new DatabaseSync(":memory:");
+  try {
+    LobbyStore.initialize(sql);
+    const store = new LobbyStore(sql);
+    const now = 1800000000000, source = "https://blue.openfront.io";
+    store.configure("g", true, "c", now);
+    store.watch("g", "u", { name: "World", map: "World" }, now);
+    const feed = new LobbyFeed({ now: () => now });
+    const raw = { gameID: "match", numClients: 12, startsAt: now + 600000, publicGameType: "team",
+      gameConfig: { gameMap: "World", gameMode: "Team", maxPlayers: 100 } };
+    feed.accept({ type: "full", serverTime: now, gitCommit: SUPPORTED_BUILD,
+      games: { team: Array.from({ length: 500 }, (_, i) => ({ ...raw, gameID: `other-${i}`,
+        gameConfig: { ...raw.gameConfig, gameMap: "Other" } })).concat(raw) } }, source);
+    let snapshots = 0, revalidationClones = 0, awaitingDelivery = false;
+    const snapshot = feed.snapshot.bind(feed), clone = globalThis.structuredClone;
+    t.mock.method(feed, "snapshot", () => { snapshots++; return snapshot(); });
+    t.mock.method(globalThis, "structuredClone", value => {
+      if (awaitingDelivery && Array.isArray(value?.lobbies)) revalidationClones++;
+      return clone(value);
+    });
+    const sent = [];
+    const member = { user: { bot: false }, createDM: async () => ({ id: "dm", send: async payload => {
+      sent.push(payload); return { id: "m", createdTimestamp: now };
+    } }) };
+    const guild = { members: { fetch: async () => {
+      awaitingDelivery = true;
+      feed.accept({ type: "counts", serverTime: now, counts: { match: 20 } }, source);
+      return member;
+    } } };
+    const worker = new LobbyWorker({ guilds: { cache: new Map([["g", guild]]) } }, store, feed, { now: () => now });
+    await worker.tick();
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].embeds[0].data.description, /20\/100 current players/);
+    assert.equal(snapshots, 1);
+    assert.equal(revalidationClones, 0);
+  } finally { sql.close(); }
+});
 
 test("matching skips database selection for nonmatching lobbies and still finds a later match", async () => {
   const sql = new DatabaseSync(":memory:");
@@ -23,7 +63,8 @@ test("matching skips database selection for nonmatching lobbies and still finds 
     const selected = [];
     const select = store.select.bind(store);
     store.select = (...args) => { selected.push(args[2].id); return select(...args); };
-    const feed = { snapshot: () => ({ observedAt: now, lobbies }) };
+    const feed = { snapshot: () => ({ observedAt: now, lobbies }),
+      getLobby: (source, id) => lobbies.find(lobby => lobby.source === source && lobby.id === id) ?? null };
     const client = { guilds: { cache: new Map() } };
     const worker = new LobbyWorker(client, store, feed, { now: () => now });
     await worker.tick();
@@ -56,7 +97,9 @@ test("matching skips already handled lobbies before selecting a new match", asyn
     const selected = [];
     const select = store.select.bind(store);
     store.select = (...args) => { selected.push(args[2].id); return select(...args); };
-    const feed = { snapshot: () => ({ observedAt: now, lobbies: [...old, lobby] }) };
+    const lobbies = [...old, lobby];
+    const feed = { snapshot: () => ({ observedAt: now, lobbies }),
+      getLobby: (source, id) => lobbies.find(lobby => lobby.source === source && lobby.id === id) ?? null };
     const client = { guilds: { cache: new Map() } };
     const worker = new LobbyWorker(client, store, feed, { now: () => now });
     await worker.tick();

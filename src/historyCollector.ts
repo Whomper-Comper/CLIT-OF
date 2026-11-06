@@ -3,6 +3,7 @@ import type { OpenFrontApi } from "./api.js";
 import type { BotDatabase, LinkedUser } from "./db.js";
 import { DAY, type EloObservation, type HistoryJob, type HistoryJobInput, type HistorySettings } from "./historyStore.js";
 import { weeklyPeriod } from "./historySchedule.js";
+import { humanMemberLinks } from "./memberLinks.js";
 
 export interface HistoryCollectorOptions {
   buildWeeklyReport?: (guildId: string, start: string, end: string) => Promise<EmbedBuilder>;
@@ -40,10 +41,7 @@ export class HistoryCollector {
   private async refreshMembers(guild: Guild): Promise<LinkedUser[]> {
     const members = await guild.members.fetch();
     if (this.stopping) return [];
-    const links = this.db.getEffectiveLinks(guild.id).filter(link=> {
-      const member = members.get(link.discord_id);
-      return member && !member.user.bot;
-    });
+    const links = humanMemberLinks(this.db.getEffectiveLinks(guild.id), members);
     this.db.history.prunePlayerMembers(guild.id,links);
     return links;
   }
@@ -254,7 +252,7 @@ export class HistoryCollector {
         throw new Error("Weekly recap channel requires View Channel, Send Messages, Embed Links and Read Message History.");
       const marker = `Report ${delivery.nonce}`;
       if (delivery.attempts > 0) {
-        const recent = await channel.messages.fetch({limit:100});
+        const recent = await channel.messages.fetch({limit:100,cache:false});
         if (this.stopping) return;
         const prior = recent.find(message=>message.author.id === this.client.user?.id && message.embeds.some(embed=>embed.footer?.text.includes(marker)));
         if (prior) { this.db.history.finishDelivery(delivery,prior.id); return; }

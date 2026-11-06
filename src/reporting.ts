@@ -3,6 +3,7 @@ import { db, GuildClanConfig, type LinkedUser } from "./db.js";
 import { openfrontApi, OpenFrontPlayerProfile } from "./api.js";
 import { clanDraft, configSnapshot, draftErrors } from "./setupConfig.js";
 import { toEpochSeconds } from "./utils.js";
+import { humanMemberLinks } from "./memberLinks.js";
 import { CommandError, label, pageOf, shortText } from "./commands/support.js";
 
 const percentage = (part: number, total: number) => total ? `${(part / total * 100).toFixed(1)}%` : "—";
@@ -48,7 +49,7 @@ export async function buildCoverageReport(guild: Guild, configs: GuildClanConfig
     catch { throw new CommandError("Could not load all server members to calculate link coverage. Please try again."); }
   };
   const initialMembers = await fetchMembers();
-  const links = db.getEffectiveLinks(guild.id).filter((link) => initialMembers.has(link.discord_id) && !initialMembers.get(link.discord_id)!.user.bot);
+  const links = humanMemberLinks(db.getEffectiveLinks(guild.id), initialMembers);
   const outcomes = new Map<string, { link: LinkedUser; profile: OpenFrontPlayerProfile | null }>();
   let next = 0;
   const deadline = Date.now() + 90_000;
@@ -82,7 +83,7 @@ export async function buildCoverageReport(guild: Guild, configs: GuildClanConfig
   // Build every count from one final roster/link snapshot after all external requests finish.
   const members = await fetchMembers();
   const humans = [...members.values()].filter((member) => !member.user.bot);
-  const currentLinks = db.getEffectiveLinks(guild.id).filter(link => members.has(link.discord_id) && !members.get(link.discord_id)!.user.bot);
+  const currentLinks = humanMemberLinks(db.getEffectiveLinks(guild.id), members);
   const assertCurrent = coverageSnapshotGuard(guild, new Set(humans.map(member => member.id)), currentLinks);
   const profiles: OpenFrontPlayerProfile[] = [];
   let unavailable = 0;

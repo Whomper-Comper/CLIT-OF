@@ -112,21 +112,28 @@ test('weekly recap batches coverage and reads each clan payload once while prese
     db.history.markCoverage({ guild_id: guildId, kind: 'player', subject: publicId,
       window_start: start, window_end: i === 999 ? '2026-10-18T00:00:00.000Z' : end }, now);
   }
-  const counts = { clanQueries: 0, coverageQueries: 0, payloadRows: 0 };
+  const counts = { clanQueries: 0, coverageQueries: 0, payloadRows: 0, decodes: 0 };
   const prepare = db.db.prepare.bind(db.db);
+  const parse = JSON.parse;
+  t.mock.method(JSON, 'parse', (text, ...args) => {
+    const decoded = parse(text, ...args);
+    if (decoded?.gameId?.startsWith('weekly-')) counts.decodes++;
+    return decoded;
+  });
   t.mock.method(db.db, 'prepare', query => {
     const statement = prepare(query);
     if (query.startsWith('SELECT') && query.includes('FROM history_coverage')) counts.coverageQueries++;
     if (!query.startsWith('SELECT payload FROM history_clan_matches')) return statement;
-    return { all(...parameters) {
+    return { all() { assert.fail('Weekly clan payloads must stream, not materialize with all()'); }, *iterate(...parameters) {
       counts.clanQueries++;
-      const rows = statement.all(...parameters);
-      counts.payloadRows += rows.length;
-      return rows;
+      for (const row of statement.iterate(...parameters)) {
+        counts.payloadRows++;
+        yield row;
+      }
     } };
   });
   const report = (await buildWeeklyReport({ id: guildId, members: { fetch: async () => members } }, start, end)).toJSON();
-  assert.deepEqual(counts, { clanQueries: 10, coverageQueries: 2, payloadRows: 20 });
+  assert.deepEqual(counts, { clanQueries: 10, coverageQueries: 2, payloadRows: 20, decodes: 20 });
   assert.match(report.description, /\*\*11\*\* distinct recorded games across \*\*10\*\*/);
   assert.match(report.fields.find(field => field.name === 'Collection coverage').value, /9\/10 clans and 999\/1000 current linked members.*Coverage is partial/);
   assert.match(report.fields.find(field => field.name === '[C00]').value, /2 recorded games · 2 wins · 0 losses/);
@@ -134,4 +141,119 @@ test('weekly recap batches coverage and reads each clan payload once while prese
   assert.equal(report.fields.filter(field => /^\[C/.test(field.name)).length, 8);
   assert.match(report.fields.find(field => field.name === 'Clan result entries').value, /Wins\s+█+\s+15/);
   assert.match(report.fields.find(field => field.name === 'Clan result entries').value, /Losses\s+[█░]+\s+5/);
+});
+
+test('history iterators preserve canonical corrections, scope, half-open bounds and deterministic order', () => {
+  const guild = 'iterator-contract', start = '2026-10-12T00:00:00.000Z', end = '2026-10-19T00:00:00.000Z';
+  const sessions = [row('boundary-start', { gameStart: start }), row('b'), row('a'),
+    row('boundary-end', { gameStart: end }), row('before', { gameStart: '2026-10-11T23:59:59.999Z' })];
+  db.history.upsertClanMatches(guild, 'MARS', sessions);
+  db.history.upsertClanMatches(guild, 'MARS', [row('a', { hasWon: false, score: -4 })]);
+  db.history.upsertClanMatches('other-iterator-guild', 'MARS', [row('other-guild')]);
+  db.history.upsertClanMatches(guild, 'VENUS', [row('other-tag', { clanTag: 'VENUS' })]);
+  const clan = [...db.history.iterateClanMatches(guild, ' mars ', start, end)];
+  assert.deepEqual(clan.map(item => item.gameId), ['a', 'b', 'boundary-start']);
+  assert.equal(clan[0].hasWon, false);
+  assert.equal(clan[0].score, -4);
+  assert.deepEqual(db.history.getClanMatches(guild, ' mars ', start, end), clan);
+  const player = sessions.map(item => ({ gameId: item.gameId, gameStart: item.gameStart, gameEnd: end,
+    gameType: 'Public', gameMode: 'Team', gameRankedType: 'unranked', clientId: 'ephemeral', username: 'Player', clanTag: 'MARS', hasWon: true }));
+  db.history.upsertPlayerMatches(guild, 'iterator-account', 'old-owner', player);
+  db.history.upsertPlayerMatches(guild, 'iterator-account', 'new-owner', [{ ...player[2], hasWon: false }]);
+  db.history.upsertPlayerMatches('other-iterator-guild', 'iterator-account', 'other-owner', [player[0]]);
+  const stored = [...db.history.iteratePlayerMatches(guild, start, end)];
+  assert.deepEqual(stored.map(item => [item.gameId, item.public_id, item.discord_id, item.hasWon]), [
+    ['a', 'iterator-account', 'new-owner', false], ['b', 'iterator-account', 'old-owner', true],
+    ['boundary-start', 'iterator-account', 'old-owner', true],
+  ]);
+  assert.deepEqual(db.history.getPlayerMatches(guild, start, end), stored);
+  // Breaking early must close the underlying SQLite statement too.
+  for (const _row of db.history.iteratePlayerMatches(guild, start, end)) break;
+  db.history.upsertPlayerMatches(guild, 'iterator-account', 'new-owner', [{ ...player[2], hasWon: true }]);
+});
+
+test('weekly recap streams large mixed player history once without retaining decoded rows and preserves exact rankings', async t => {
+  const guildId = 'weekly-mixed', start = '2026-10-12T00:00:00.000Z', end = '2026-10-19T00:00:00.000Z';
+  const members = new Map();
+  db.history.setMeta('deletions_last_success', new Date().toISOString());
+  db.setGuildClanConfig({ guild_id: guildId, clan_tag: 'MARS', member_role_id: 'rank', officer_role_id: null,
+    leader_role_id: null, join_role_id: null, log_channel_id: null, sync_interval_mins: 10, last_sync_at: null });
+  db.history.upsertClanMatches(guildId, 'MARS', [row('mixed-clan-a'), row('mixed-clan-b', { hasWon: false })]);
+  const session = (gameId, extra = {}) => ({ gameId, gameStart: '2026-10-16T10:00:00.000Z', gameEnd: '2026-10-16T11:00:00.000Z',
+    gameType: 'pUbLiC', gameMode: 'tEaM', gameRankedType: 'unranked', clientId: 'ephemeral', username: 'Player', clanTag: ' mars ', hasWon: false, ...extra });
+  function addPlayer(name, wins, games, present = true, bot = false, linked = true) {
+    const discordId = `mixed-user-${name}`, publicId = `mixed-account-${name}`;
+    if (present) members.set(discordId, { id: discordId, user: { bot } });
+    if (linked) db.linkGuildUser(guildId, 'manager', discordId, publicId, name);
+    db.history.upsertPlayerMatches(guildId, publicId, discordId,
+      Array.from({ length: games }, (_, i) => session(`mixed-${name}-${i}`, { hasWon: i < wins })));
+  }
+  for (let i = 0; i < 120; i++) addPlayer(`background-${i}`, 0, 30);
+  for (const [name, wins, games] of [['Alpha', 4, 6], ['Beta', 4, 5], ['Gamma', 4, 5], ['Delta', 3, 3], ['Epsilon', 2, 2], ['Zeta', 2, 4]]) addPlayer(name, wins, games);
+  addPlayer('Left', 30, 30, false);
+  addPlayer('Bot', 30, 30, true, true);
+  addPlayer('Unlinked', 30, 30, true, false, false);
+  db.history.upsertPlayerMatches(guildId, 'mixed-account-Alpha', 'mixed-user-Alpha', [
+    session('mixed-private', { gameType: 'Private', hasWon: true }), session('mixed-ffa', { gameMode: 'FFA', hasWon: true }),
+    session('mixed-wrong-tag', { clanTag: 'VENUS', hasWon: true }), session('mixed-no-tag', { clanTag: null, hasWon: true }),
+    session('mixed-unfinished', { gameEnd: null, hasWon: true }),
+  ]);
+  db.history.upsertPlayerMatches(guildId, 'mixed-account-Alpha', 'wrong-discord-owner', [session('mixed-wrong-owner', { hasWon: true })]);
+  // A corrected canonical win must count once, independently of insertion order.
+  db.history.upsertPlayerMatches(guildId, 'mixed-account-Beta', 'mixed-user-Beta', [session('mixed-Beta-0', { hasWon: false })]);
+  db.history.upsertPlayerMatches(guildId, 'mixed-account-Beta', 'mixed-user-Beta', [session('mixed-Beta-0', { hasWon: true })]);
+  const counts = { clanReads: 0, playerReads: 0, payloadRows: 0, decodes: 0, activeIterators: 0 };
+  let retainedPlayerGameIds = 0;
+  const add = Set.prototype.add;
+  t.mock.method(Set.prototype, 'add', function (value) {
+    if (typeof value === 'string' && /^mixed-(?:background-|Alpha-|Beta-|Gamma-|Delta-|Epsilon-|Zeta-)/.test(value)) retainedPlayerGameIds++;
+    return add.call(this, value);
+  });
+  const prepare = db.db.prepare.bind(db.db), parse = JSON.parse;
+  t.mock.method(JSON, 'parse', (text, ...args) => {
+    const decoded = parse(text, ...args);
+    if (decoded?.gameId?.startsWith('mixed-')) counts.decodes++;
+    return decoded;
+  });
+  t.mock.method(db.db, 'prepare', query => {
+    const statement = prepare(query);
+    const clan = query.startsWith('SELECT payload FROM history_clan_matches');
+    const player = query.startsWith('SELECT public_id,discord_id,payload FROM history_player_matches');
+    if (!clan && !player) return statement;
+    return { all() { assert.fail('Weekly payload queries must not materialize raw rows'); }, *iterate(...args) {
+      if (clan) counts.clanReads++; else counts.playerReads++;
+      for (const row of statement.iterate(...args)) { counts.payloadRows++; yield row; }
+    } };
+  });
+  for (const method of ['getClanMatches', 'getPlayerMatches']) t.mock.method(db.history, method, () => assert.fail('Weekly reports must not use array compatibility APIs'));
+  for (const method of ['iterateClanMatches', 'iteratePlayerMatches']) {
+    const iterate = db.history[method].bind(db.history);
+    t.mock.method(db.history, method, function* (...args) {
+      counts.activeIterators++;
+      try {
+        for (const row of iterate(...args)) {
+          // Access to a decoded row must finish before requesting the next one.
+          // Retaining [...rows], flatMap or raw row arrays fails on later access.
+          const { proxy, revoke } = Proxy.revocable(row, {});
+          try { yield proxy; } finally { revoke(); }
+        }
+      } finally { counts.activeIterators--; }
+    });
+  }
+  const report = (await buildWeeklyReport({ id: guildId, members: { fetch: async () => {
+    assert.equal(counts.activeIterators, 0);
+    return members;
+  } } }, start, end)).toJSON();
+  assert.deepEqual(counts, { clanReads: 1, playerReads: 1, payloadRows: 3632, decodes: 3632, activeIterators: 0 });
+  assert.equal(retainedPlayerGameIds, 0, 'Player aggregation must retain counters rather than game-ID inventories');
+  const wins = report.fields.find(field => field.name.startsWith('Most recorded wins')).value;
+  const rates = report.fields.find(field => field.name.startsWith('Best recorded win fraction')).value;
+  assert.deepEqual(wins.split('\n').map(line => line.match(/^\[([^\]]+)\]/)[1]), ['Alpha', 'Beta', 'Gamma', 'Delta', 'Zeta']);
+  assert.match(wins, /Alpha.*\*\*4\*\* wins \/ \*\*6\*\* appearances \(66\.7%\)/);
+  assert.match(wins, /Zeta.*\*\*2\*\* wins \/ \*\*4\*\* appearances \(50\.0%\)/);
+  assert.deepEqual(rates.split('\n').map(line => line.match(/^\[([^\]]+)\]/)[1]), ['Delta', 'Beta', 'Gamma']);
+  assert.match(rates, /Delta.*\(100\.0%\)/);
+  assert.match(rates, /Beta.*\(80\.0%\)/);
+  assert.doesNotMatch(wins + rates, /Left|Bot|Unlinked|Epsilon/);
+  assert.match(report.fields.find(field => field.name === 'Collection coverage').value, /1 record\(s\) without an end timestamp/);
 });

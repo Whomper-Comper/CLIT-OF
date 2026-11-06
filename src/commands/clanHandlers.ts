@@ -153,13 +153,9 @@ function configEmbed(c: GuildClanConfig) {
   const epoch = toEpochSeconds(c.last_sync_at);
   const role = (id: string | null) => id ? `<@&${id}>` : "None";
   return new EmbedBuilder().setTitle(`Clan configuration: [${shortText(c.clan_tag, 32)}]`).setColor(0x3b82f6)
-    .addFields({ name: "Member Role", value: role(c.member_role_id), inline: true },
-      { name: "Officer Role", value: role(c.officer_role_id), inline: true },
-      { name: "Leader Role", value: role(c.leader_role_id), inline: true },
-      { name: "Approval Role", value: role(c.join_role_id), inline: true },
-      { name: "Log Channel", value: c.log_channel_id ? `<#${c.log_channel_id}>` : "None", inline: true },
-      { name: "Sync Interval", value: `${c.sync_interval_mins} minutes`, inline: true },
-      { name: "Last Successful Sync", value: epoch !== null ? `<t:${epoch}:F> (<t:${epoch}:R>)` : "Never" });
+    .addFields({ name: "Role mappings", value: `**Member:** ${role(c.member_role_id)}\n**Officer:** ${role(c.officer_role_id)}\n**Leader:** ${role(c.leader_role_id)}` },
+      { name: "Approval & logging", value: `**Approval:** ${role(c.join_role_id)}\n**Logs:** ${c.log_channel_id ? `<#${c.log_channel_id}>` : "None"}` },
+      { name: "Synchronization", value: `**Sync interval:** ${c.sync_interval_mins} minutes\n**Last successful sync:** ${epoch !== null ? `<t:${epoch}:F> (<t:${epoch}:R>)` : "Never"}` });
 }
 
 async function config(i: GuildCommand) {

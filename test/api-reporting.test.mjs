@@ -18,6 +18,72 @@ const leaf = (wins, losses, stats = {}) => ({ wins: String(wins), losses: String
 const config = (overrides = {}) => ({ guild_id: "guild", clan_tag: "TEST", member_role_id: "member", officer_role_id: null,
   leader_role_id: null, join_role_id: null, log_channel_id: null, sync_interval_mins: 10, last_sync_at: null, ...overrides });
 
+// Count entries actually visited by cache iteration, without adding production instrumentation.
+function cacheVisits(t, api) {
+  let visits = 0;
+  for (const name of [Symbol.iterator, "entries", "values", "keys"]) {
+    const original = api.cache[name].bind(api.cache);
+    t.mock.method(api.cache, name, function* () {
+      for (const item of original()) { visits++; yield item; }
+    });
+  }
+  const original = api.cache.forEach.bind(api.cache);
+  t.mock.method(api.cache, "forEach", (callback, receiver) => original((value, key, map) => {
+    visits++; callback.call(receiver, value, key, map);
+  }));
+  return () => visits;
+}
+
+test("500 frozen-time cached reads visit no expiry-map entries before the default fifteen-second boundary", async (t) => {
+  let now = 0, calls = 0;
+  t.mock.method(globalThis, "fetch", async () => { calls++; return response(profile()); });
+  const api = new OpenFrontApi("https://example.invalid", { now: () => now });
+  for (let i = 0; i < 500; i++) await api.getPlayerProfile(`player-${i}`);
+  const visits = cacheVisits(t, api);
+  now = 14_999;
+  for (let i = 0; i < 500; i++) assert.equal((await api.getPlayerProfile(`player-${i}`)).username, "Player");
+  assert.equal(calls, 500);
+  assert.equal(visits(), 0);
+  now = 15_000;
+  await api.getPlayerProfile("player-0");
+  assert.equal(calls, 501);
+  assert.equal(visits(), 500, "the exact expiry boundary sweeps retained entries once");
+  await api.getPlayerProfile("player-0");
+  assert.equal(visits(), 500);
+});
+
+test("expiry frontier lowers after clock rollback and preserves later-expiring entries", async (t) => {
+  let now = 100, calls = 0;
+  t.mock.method(globalThis, "fetch", async () => response(profile({ username: `value-${++calls}` })));
+  const api = new OpenFrontApi("https://example.invalid", { now: () => now, cacheTtlMs: 20 });
+  await api.getPlayerProfile("later"); // expires at 120
+  now = 10;
+  await api.getPlayerProfile("earlier"); // expires at 30
+  const visits = cacheVisits(t, api);
+  now = 29;
+  assert.equal((await api.getPlayerProfile("earlier")).username, "value-2");
+  assert.equal(visits(), 0);
+  now = 30;
+  assert.equal((await api.getPlayerProfile("earlier")).username, "value-3");
+  assert.equal(visits(), 2);
+  assert.equal((await api.getPlayerProfile("later")).username, "value-1");
+  assert.equal(visits(), 2);
+  now = 50;
+  await api.getPlayerProfile("later");
+  assert.equal(visits(), 4, "sweeping recomputes the next retained expiration");
+  assert.equal(calls, 3);
+});
+
+test("default public cache evicts the oldest key after 500 entries", async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => response(profile({ username: `value-${++calls}` })));
+  const api = new OpenFrontApi("https://example.invalid", { now: () => 0 });
+  for (let i = 0; i < 501; i++) await api.getPlayerProfile(`player-${i}`);
+  assert.equal((await api.getPlayerProfile("player-500")).username, "value-501");
+  assert.equal((await api.getPlayerProfile("player-0")).username, "value-502");
+  assert.equal(api.cache.size, 500);
+});
+
 test("public API coalesces simultaneous profile reads and clones cached values", async (t) => {
   let calls = 0, release;
   t.mock.method(globalThis, "fetch", async () => { calls++; await new Promise((resolve) => { release = resolve; }); return response(profile()); });
