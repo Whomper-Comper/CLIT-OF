@@ -23,7 +23,7 @@ export interface OpenFrontClanInfo {
   name: string; tag: string; description: string; memberCount?: number; isOpen?: boolean;
 }
 export class OpenFrontApiError extends Error {
-  constructor(public reason: "timeout" | "network" | "http" | "invalid_response" = "invalid_response", public status?: number) {
+  constructor(public reason: "timeout" | "network" | "http" | "invalid_response" | "busy" | "queue_timeout" = "invalid_response", public status?: number) {
     super("OpenFront is temporarily unavailable or returned an invalid response. Please try again later.");
   }
 }
@@ -84,7 +84,21 @@ function validClanSession(data: unknown): data is OpenFrontClanSession {
 }
 export interface PublicReadOptions { fresh?: boolean }
 interface CacheEntry { expires: number; value: unknown }
-interface ApiOptions { cacheTtlMs?: number; maxCacheEntries?: number; now?: () => number }
+interface ApiOptions {
+  cacheTtlMs?: number; maxCacheEntries?: number; now?: () => number;
+  maxActiveRequests?: number; maxQueuedRequests?: number; queueTimeoutMs?: number;
+}
+interface WaitingRequest {
+  deadline: number;
+  timer: ReturnType<typeof setTimeout>;
+  start: () => void;
+  reject: (error: OpenFrontApiError) => void;
+}
+
+function admissionBound(value: number, minimum: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value < minimum) throw new RangeError(`Invalid API ${name}.`);
+  return value;
+}
 
 export class OpenFrontApi {
   private base: string;
@@ -96,11 +110,54 @@ export class OpenFrontApi {
   private cacheTtlMs: number;
   private maxCacheEntries: number;
   private now: () => number;
+  private activeRequests = 0;
+  private waitingRequests: WaitingRequest[] = [];
+  private maxActiveRequests: number;
+  private maxQueuedRequests: number;
+  private queueTimeoutMs: number;
   constructor(baseUrl = CONFIG.OPENFRONT_API_BASE, options: ApiOptions = {}) {
     this.base = baseUrl.replace(/\/+$/, "");
     this.cacheTtlMs = Math.max(0, options.cacheTtlMs ?? 15_000);
     this.maxCacheEntries = Math.max(0, options.maxCacheEntries ?? 500);
     this.now = options.now ?? Date.now;
+    this.maxActiveRequests = admissionBound(options.maxActiveRequests ?? 8, 1, "active request limit");
+    this.maxQueuedRequests = admissionBound(options.maxQueuedRequests ?? 64, 0, "queued request limit");
+    this.queueTimeoutMs = admissionBound(options.queueTimeoutMs ?? 2_000, 1, "queue timeout");
+    if (this.queueTimeoutMs > 2_147_483_647) throw new RangeError("Invalid API queue timeout.");
+  }
+
+  /** Admission surrounds the entire loader, including body reads and normalization. */
+  private withAdmission<T>(load: () => Promise<T>): Promise<T> {
+    if (this.activeRequests < this.maxActiveRequests) return this.runActive(load);
+    if (this.waitingRequests.length >= this.maxQueuedRequests) throw new OpenFrontApiError("busy");
+    return new Promise<T>((resolve, reject) => {
+      const entry: WaitingRequest = {
+        deadline: performance.now() + this.queueTimeoutMs,
+        start: () => resolve(this.runActive(load)), reject,
+        timer: setTimeout(() => {
+          const index = this.waitingRequests.indexOf(entry);
+          if (index !== -1) this.waitingRequests.splice(index, 1);
+          reject(new OpenFrontApiError("queue_timeout"));
+        }, this.queueTimeoutMs),
+      };
+      entry.timer.unref?.();
+      this.waitingRequests.push(entry);
+    });
+  }
+
+  private async runActive<T>(load: () => Promise<T>): Promise<T> {
+    this.activeRequests++;
+    try { return await load(); }
+    finally {
+      this.activeRequests--;
+      while (this.activeRequests < this.maxActiveRequests && this.waitingRequests.length) {
+        const entry = this.waitingRequests.shift()!;
+        clearTimeout(entry.timer);
+        // Timers can be delayed; an elapsed absolute deadline must never start work.
+        if (performance.now() >= entry.deadline) entry.reject(new OpenFrontApiError("queue_timeout"));
+        else entry.start();
+      }
+    }
   }
 
   /** Public reads share in-flight work and short-lived results. Verification must use fresh. */
@@ -124,20 +181,24 @@ export class OpenFrontApi {
     }
     const generation = ++this.generation;
     this.generations.set(key, generation);
-    const task = load().then((value) => {
-      if (this.generations.get(key) === generation && this.cacheTtlMs && this.maxCacheEntries) {
-        while (this.cache.size >= this.maxCacheEntries) this.cache.delete(this.cache.keys().next().value!);
-        const expires = this.now() + this.cacheTtlMs;
-        this.cache.set(key, { value: structuredClone(value), expires });
-        // Clock rollback can make a new result expire before every retained key.
-        this.nextCacheExpiry = Math.min(this.nextCacheExpiry, expires);
-      }
-      return value;
-    });
-    this.pending.set(key, task);
-    try { return structuredClone(await task); }
+    let task: Promise<T> | undefined;
+    try {
+      task = this.withAdmission(load).then((value) => {
+        if (this.generations.get(key) === generation && this.cacheTtlMs && this.maxCacheEntries) {
+          while (this.cache.size >= this.maxCacheEntries) this.cache.delete(this.cache.keys().next().value!);
+          const expires = this.now() + this.cacheTtlMs;
+          // Private loaders own fresh parsed values; only defensive caller copies escape.
+          this.cache.set(key, { value, expires });
+          // Clock rollback can make a new result expire before every retained key.
+          this.nextCacheExpiry = Math.min(this.nextCacheExpiry, expires);
+        }
+        return value;
+      });
+      this.pending.set(key, task);
+      return structuredClone(await task);
+    }
     finally {
-      if (this.pending.get(key) === task) this.pending.delete(key);
+      if (task && this.pending.get(key) === task) this.pending.delete(key);
       if (this.generations.get(key) === generation) this.generations.delete(key);
     }
   }
@@ -151,9 +212,16 @@ export class OpenFrontApi {
     }
   }
   private async json(response: Response): Promise<unknown> {
-    if (!response.ok) throw new OpenFrontApiError("http", response.status);
+    if (!response.ok) {
+      await this.discard(response);
+      throw new OpenFrontApiError("http", response.status);
+    }
     try { return await response.json(); }
     catch (error) { throw new OpenFrontApiError(isTimeout(error) ? "timeout" : "invalid_response"); }
+  }
+  private async discard(response: Response): Promise<void> {
+    // Error/empty responses need no JSON, but their transport work still owns its slot.
+    try { await response.body?.cancel(); } catch { /* Preserve the endpoint's HTTP/null result. */ }
   }
 
   async getPlayerProfile(publicId: string, options: PublicReadOptions = {}): Promise<OpenFrontPlayerProfile | null> {
@@ -163,7 +231,7 @@ export class OpenFrontApi {
 
   private async loadPlayerProfile(endpoint: string): Promise<OpenFrontPlayerProfile | null> {
     const response = await this.request(endpoint);
-    if (response.status === 404) return null;
+    if (response.status === 404) { await this.discard(response); return null; }
     const data = await this.json(response);
     if (!object(data) || (data.username !== undefined && data.username !== null && typeof data.username !== "string")) throw new OpenFrontApiError();
     if (data.user !== undefined && (!object(data.user) || typeof data.user.id !== "string")) throw new OpenFrontApiError();
@@ -179,7 +247,7 @@ export class OpenFrontApi {
 
   private async loadClanInfo(endpoint: string): Promise<OpenFrontClanInfo | null> {
     const response = await this.request(endpoint);
-    if (response.status === 404) return null;
+    if (response.status === 404) { await this.discard(response); return null; }
     const data = await this.json(response);
     if (!object(data) || typeof data.name !== "string" || typeof data.tag !== "string" || typeof data.description !== "string" ||
       (data.memberCount !== undefined && (typeof data.memberCount !== "number" || !Number.isSafeInteger(data.memberCount) || data.memberCount < 0))) throw new OpenFrontApiError();
@@ -226,7 +294,7 @@ export class OpenFrontApi {
 
   private async jsonForPageBounds(response: Response, requestedPage: number): Promise<boolean> {
     let data: unknown;
-    try { data = await response.clone().json(); } catch { return false; }
+    try { data = await response.json(); } catch { return false; }
     if (!object(data) || typeof data.message !== "string") return false;
     const bounds = /^Page must be between (\d+) and (\d+)$/.exec(data.message);
     if (!bounds) return false;
@@ -268,7 +336,7 @@ export class OpenFrontApi {
 
   private async loadCursorPage<T>(endpoint: string, validate: (value: unknown) => value is T, normalize: (value: T) => T): Promise<{ results: T[]; nextCursor: string | null } | null> {
     const response = await this.request(endpoint);
-    if (response.status === 404) return null;
+    if (response.status === 404) { await this.discard(response); return null; }
     const data = await this.json(response);
     if (!object(data) || !Array.isArray(data.results) || data.results.length > 100 || data.results.some((row) => !validate(row)) ||
       !nullableString(data.nextCursor) || data.nextCursor === "") throw new OpenFrontApiError();
@@ -290,7 +358,7 @@ export class OpenFrontApi {
     const endpoint = `/public/clan/${encodeURIComponent(tag.trim().toUpperCase())}/sessions?${params}`;
     return this.publicRead(endpoint, async () => {
       const response = await this.request(endpoint);
-      if (response.status === 404) return null;
+      if (response.status === 404) { await this.discard(response); return null; }
       const data = await this.json(response);
       if (!object(data) || !Array.isArray(data.results) || data.results.length > limit || data.results.some((row) => !validClanSession(row)) ||
         !nonnegativeInteger(data.total) || data.page !== page || data.limit !== limit) throw new OpenFrontApiError();
@@ -320,16 +388,18 @@ export class OpenFrontApi {
       const claims = decodeJwt(trimmed);
       audience = Array.isArray(claims.aud) ? claims.aud[0] : claims.aud;
     } catch { return null; }
-    for (const aud of new Set([audience || "ofstats.io", "ofstats.io", "trackerfront.io"])) {
-      const response = await this.request("/public/identity_token/validate", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: trimmed, audience: aud }),
-      });
-      if ([400, 401, 403].includes(response.status)) continue;
-      const data = await this.json(response);
-      if (!object(data) || typeof data.publicId !== "string" || !/^[A-Za-z0-9_-]{1,22}$/.test(data.publicId)) throw new OpenFrontApiError();
-      return data.publicId;
-    }
-    return null;
+    return this.withAdmission(async () => {
+      for (const aud of new Set([audience || "ofstats.io", "ofstats.io", "trackerfront.io"])) {
+        const response = await this.request("/public/identity_token/validate", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: trimmed, audience: aud }),
+        });
+        if ([400, 401, 403].includes(response.status)) { await this.discard(response); continue; }
+        const data = await this.json(response);
+        if (!object(data) || typeof data.publicId !== "string" || !/^[A-Za-z0-9_-]{1,22}$/.test(data.publicId)) throw new OpenFrontApiError();
+        return data.publicId;
+      }
+      return null;
+    });
   }
 }
 export const openfrontApi = new OpenFrontApi();

@@ -17,6 +17,13 @@ export interface SyncResult {
   error?: string;
 }
 
+export interface GuildClanSyncResult {
+  config: GuildClanConfig;
+  results: SyncResult[];
+  /** A clan-wide failure, such as its final pending-invite roster refresh. */
+  error?: string;
+}
+
 export interface JoinRoleMismatch {
   discordId: string;
   openfrontId: string;
@@ -26,6 +33,12 @@ export interface JoinRoleMismatch {
 }
 
 class StaleSyncError extends Error {}
+
+interface SyncMemberState {
+  member: GuildMember;
+  needsRoleRefresh: boolean;
+  refreshError?: string;
+}
 
 export class ClanSyncService {
   private client: Client;
@@ -201,14 +214,18 @@ export class ClanSyncService {
         const guild = this.client.guilds.cache.get(guildId);
         if (!guild) continue;
 
-        for (const config of guildConfigs) {
+        const dueConfigs = guildConfigs.filter((config) => {
           const parsedSync = config.last_sync_at ? new Date(config.last_sync_at).getTime() : 0;
           const lastSync = Number.isFinite(parsedSync) ? parsedSync : 0;
           const intervalMs = (config.sync_interval_mins || 10) * 60 * 1000;
 
-          if (now - lastSync >= intervalMs) {
-            console.log(`[ClanSync] Auto-syncing clan [${config.clan_tag}] in guild ${guild.name}...`);
-            await this.syncGuildClan(guild, config);
+          return now - lastSync >= intervalMs;
+        });
+        if (dueConfigs.length) {
+          for (const config of dueConfigs) console.log(`[ClanSync] Auto-syncing clan [${config.clan_tag}] in guild ${guild.name}...`);
+          const buckets = await this.syncGuildClans(guild, dueConfigs);
+          for (const bucket of buckets) {
+            if (bucket.error) console.warn(`[ClanSync] Sync failed for [${bucket.config.clan_tag}] in guild ${guild.id}:`, bucket.error);
           }
         }
       }
@@ -221,52 +238,83 @@ export class ClanSyncService {
    * Sync all linked members in a guild for a specific clan config.
    */
   async syncGuildClan(guild: Guild, config: GuildClanConfig): Promise<SyncResult[]> {
-    return this.guildLocks.run(`${guild.id}:${config.clan_tag}`, () => this.syncGuildClanLocked(guild, config));
+    const [bucket] = await this.syncGuildClans(guild, [config]);
+    if (bucket.error) throw new Error(bucket.error);
+    return bucket.results;
   }
 
-  private async syncGuildClanLocked(guild: Guild, config: GuildClanConfig): Promise<SyncResult[]> {
-    const results: SyncResult[] = [];
-    const mismatches: JoinRoleMismatch[] = [];
+  /** Share initial roster discovery, retaining separate results and final freshness per clan. */
+  async syncGuildClans(guild: Guild, configs: readonly GuildClanConfig[]): Promise<GuildClanSyncResult[]> {
+    const selected = [...new Map(configs.map((config) => [config.clan_tag, config])).values()];
+    if (!selected.length) return [];
+    // Every caller, including the single-clan wrapper, acquires overlapping locks
+    // in the same order. Keep the caller's selected order for work and reporting.
+    const lockTags = selected.map((config) => config.clan_tag).sort();
+    const lock = (index: number): Promise<GuildClanSyncResult[]> => index === lockTags.length
+      ? this.syncGuildClansLocked(guild, selected)
+      : this.guildLocks.run(`${guild.id}:${lockTags[index]}`, () => lock(index + 1));
+    return lock(0);
+  }
 
+  private async syncGuildClansLocked(guild: Guild, configs: GuildClanConfig[]): Promise<GuildClanSyncResult[]> {
+    const buckets = configs.map((config) => ({ config, results: [] as SyncResult[], mismatches: [] as JoinRoleMismatch[], error: undefined as string | undefined }));
+    // Failure here rejects the whole batch before any clan can be marked synced.
     const members = await guild.members.fetch();
 
-    for (const [memberId, member] of members) {
-      if (member.user.bot) continue;
+    for (const [memberId, initialMember] of members) {
+      if (initialMember.user.bot) continue;
+      const state: SyncMemberState = { member: initialMember, needsRoleRefresh: false };
 
-      const link = db.getEffectiveLink(guild.id, memberId);
-      if (!link) {
-        // Even if not linked, check for join_role mismatch (they have the role but no link)
-        if (config.join_role_id && member.roles.cache.has(config.join_role_id)) {
-          mismatches.push({
-            discordId: memberId,
-            openfrontId: "(not linked)",
-            openfrontUsername: null,
-            linkedAt: null,
-            clanTag: config.clan_tag,
-          });
+      const unlinkedMismatch = (bucket: typeof buckets[number]) => {
+        const { member } = state;
+        if (bucket.config.join_role_id && member.roles.cache.has(bucket.config.join_role_id)) {
+          bucket.mismatches.push({ discordId: memberId, openfrontId: "(not linked)",
+            openfrontUsername: null, linkedAt: null, clanTag: bucket.config.clan_tag });
         }
+      };
+      if (!db.getEffectiveLink(guild.id, memberId)) {
+        // There is no await in this block: discovery is safe to share only here.
+        for (const bucket of buckets) unlinkedMismatch(bucket);
         continue;
       }
 
-      const result = await this.syncMemberForClan(member, link, config);
-      results.push(result);
+      for (const bucket of buckets) {
+        const { config } = bucket;
+        if (state.needsRoleRefresh) await this.refreshSyncMember(state);
+        const { member } = state;
+        // A prior clan's profile, paced role write or logging can change the link.
+        const link = db.getEffectiveLink(guild.id, memberId);
+        if (!link) { unlinkedMismatch(bucket); continue; }
+        // Keep the guarded helper and its normal API reads. Adjacent reads share
+        // the API's short cache, but a slow await must still permit TTL expiry.
+        const result = state.refreshError ? this.memberRefreshFailure(state, link, config)
+          : await this.syncMemberForClan(member, link, config);
+        state.needsRoleRefresh = result.rolesAdded.length > 0 || result.rolesRemoved.length > 0;
+        bucket.results.push(result);
 
-      if (result.rolesAdded.length > 0 || result.rolesRemoved.length > 0) {
-        await this.logRoleChange(guild, config, member, result);
-      }
+        if (result.rolesAdded.length > 0 || result.rolesRemoved.length > 0) {
+          await this.logRoleChange(guild, config, member, result);
+        }
 
-      // Check join_role mismatch: member has join_role but is NOT in the clan in OpenFront
-      if (config.join_role_id && member.roles.cache.has(config.join_role_id) && !result.inClan && !result.error) {
-        mismatches.push({
-          discordId: memberId,
-          openfrontId: link.openfront_id,
-          openfrontUsername: link.openfront_username,
-          linkedAt: link.linked_at,
-          clanTag: config.clan_tag,
-        });
+        if (config.join_role_id && member.roles.cache.has(config.join_role_id) && !result.inClan && !result.error) {
+          bucket.mismatches.push({ discordId: memberId, openfrontId: link.openfront_id,
+            openfrontUsername: link.openfront_username, linkedAt: link.linked_at, clanTag: config.clan_tag });
+        }
       }
     }
 
+    for (const bucket of buckets) {
+      try {
+        await this.finishGuildClanSync(guild, bucket.config, bucket.results, bucket.mismatches);
+      } catch (error) {
+        // A failed final refresh cannot complete this clan or block other clans.
+        bucket.error = (error instanceof Error ? error.message : String(error)) || "Clan sync failed";
+      }
+    }
+    return buckets.map(({ config, results, error }) => ({ config, results, ...(error ? { error } : {}) }));
+  }
+
+  private async finishGuildClanSync(guild: Guild, config: GuildClanConfig, results: SyncResult[], mismatches: JoinRoleMismatch[]): Promise<void> {
     const isCurrentConfig = () => {
       const latest = db.getGuildClanConfig(guild.id, config.clan_tag);
       return guild.id === config.guild_id && latest !== null &&
@@ -296,7 +344,6 @@ export class ClanSyncService {
     if (!results.some((result) => result.error) && isCurrentConfig()) {
       db.updateClanLastSync(guild.id, config.clan_tag);
     }
-    return results;
   }
 
   /**
@@ -309,15 +356,47 @@ export class ClanSyncService {
     const link = db.getEffectiveLink(member.guild.id, member.id);
     if (!link) return [];
 
+    return this.syncMemberClans(member, link, configs);
+  }
+
+  /** Sync an already-bound member across only the caller's selected mappings. */
+  async syncMemberClans(member: GuildMember, link: LinkedUser, configs: readonly GuildClanConfig[]): Promise<SyncResult[]> {
     const results: SyncResult[] = [];
+    const state: SyncMemberState = { member, needsRoleRefresh: false };
     for (const config of configs) {
-      const result = await this.syncMemberForClan(member, link, config);
+      if (state.needsRoleRefresh) await this.refreshSyncMember(state);
+      const result = state.refreshError ? this.memberRefreshFailure(state, link, config)
+        : await this.syncMemberForClan(state.member, link, config);
+      state.needsRoleRefresh = result.rolesAdded.length > 0 || result.rolesRemoved.length > 0;
       if (result.rolesAdded.length > 0 || result.rolesRemoved.length > 0) {
-        await this.logRoleChange(member.guild, config, member, result);
+        await this.logRoleChange(member.guild, config, state.member, result);
       }
       results.push(result);
     }
     return results;
+  }
+
+  /** Single-role discord.js writes return clones; the old member can lag the server. */
+  private async refreshSyncMember(state: SyncMemberState): Promise<void> {
+    if (state.refreshError) return;
+    try {
+      const latest = await state.member.guild.members.fetch({ user: state.member.id, force: true });
+      if (latest.id !== state.member.id || latest.guild.id !== state.member.guild.id || latest.user?.bot) {
+        throw new Error("Could not refresh the current server member after role changes");
+      }
+      // A REST refresh also observes intervening staff/Gateway changes. Do not
+      // synthesize role state by applying the old write's clone to a newer view.
+      state.member = latest;
+      state.needsRoleRefresh = false;
+    } catch (error) {
+      // No later clan may treat the stale role cache as a successful observation.
+      state.refreshError = (error instanceof Error ? error.message : String(error)) || "Member refresh failed after role changes";
+    }
+  }
+
+  private memberRefreshFailure(state: SyncMemberState, link: LinkedUser, config: GuildClanConfig): SyncResult {
+    return { discordId: state.member.id, openfrontId: link.openfront_id, linkedAt: link.linked_at,
+      clanTag: config.clan_tag, inClan: false, rolesAdded: [], rolesRemoved: [], error: state.refreshError };
   }
 
   /**

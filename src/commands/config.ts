@@ -13,6 +13,7 @@ import { buildCoverageReport, buildDoctorEmbeds, reportSettingsGuard } from "../
 import { commandErrorMessage } from "./errorMessages.js";
 import { HistorySettings } from "../historyStore.js";
 import { affectedRoleMemberIds } from "../roles.js";
+import { ExpiringSessions } from "../expiringSessions.js";
 
 type Screen = "home" | "clans" | "access_page" | "diagnostics" | "draft" | "roles" | "logs" | "confirm" | "history";
 interface Session {
@@ -21,7 +22,7 @@ interface Session {
   historyDraft: Omit<HistorySettings, "guild_id" | "revision">; historyRevision: number;
   dirty?: boolean; historyDirty?: boolean; busy?: boolean;
 }
-const sessions = new Map<string, Session>();
+const sessions = new ExpiringSessions<Session>(200, session => session.expires);
 const prefix = "clit-config:";
 const lifetime = 10 * 60_000;
 const button = (s: Session, action: string, text: string, style = ButtonStyle.Secondary) =>
@@ -40,8 +41,6 @@ export const configCommand = {
       stage = "access";
       const allowed = await hasConfigAccess(i.guild, i.user.id);
       if (!allowed) throw new CommandError("You need Manage Server permission or the configured config role to open this menu.");
-      for (const [id, session] of sessions) if (session.expires <= Date.now()) sessions.delete(id);
-      if (sessions.size >= 200) sessions.delete(sessions.keys().next().value!);
       stage = "session";
       const { guild_id: _guild, revision: historyRevision, ...historyDraft } = db.history.getSettings(i.guildId);
       const s: Session = { id: randomUUID(), user: i.user.id, guild: i.guildId, expires: Date.now() + lifetime,
@@ -187,6 +186,7 @@ export async function handleConfigInteraction(i: Interaction): Promise<boolean> 
     const commit = () => { Object.assign(stored, s); committed = true; };
     const redraw = async (notice = "", allowed = true) => {
       stage = "redraw";
+      ensureLive(stored);
       await i.editReply(render(s, allowed, notice));
       Object.assign(stored, s);
     };
@@ -233,6 +233,7 @@ export async function handleConfigInteraction(i: Interaction): Promise<boolean> 
     stage = "access";
     const allowed = await hasConfigAccess(i.guild, i.user.id);
     if (!allowed) throw new CommandError("You no longer have Manage Server permission or the config role. A server manager can recover access with /config.");
+    ensureLive(stored);
     stage = "action";
     let notice = "";
     if (action === "debug_access" && i.isRoleSelectMenu()) {

@@ -39,3 +39,21 @@ test('runtime preflight reports independent capabilities even when SQLite and cr
   assert.equal(report.checks.find(check => check.name === 'data')?.ok, true);
   assert.doesNotMatch(result.stdout + result.stderr, /private-runtime-error-do-not-print|never-open-this-production-database/);
 });
+
+test('runtime preflight rejects SQLite without the ordered iterator required by weekly readers', () => {
+  const preload = 'data:text/javascript,' + encodeURIComponent(
+    "import { StatementSync } from 'node:sqlite'; StatementSync.prototype.iterate = undefined;",
+  );
+  const result = spawnSync(process.execPath, ['--import', preload, 'tools/check-runtime.mjs'], {
+    encoding: 'utf8', timeout: 20_000,
+    env: { ...process.env, DISCORD_TOKEN: '', CLIENT_ID: '', DB_PATH: 'never-open-this-production-database.db' },
+  });
+  assert.equal(result.status, 1, result.stderr || result.stdout);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.compatible, false);
+  assert.deepEqual(report.checks.find(check => check.name === 'sqlite'), { name: 'sqlite', ok: false, error: 'TypeError' });
+  for (const name of ['crypto', 'networking', 'intl', 'discord', 'data']) {
+    assert.equal(report.checks.find(check => check.name === name)?.ok, true, name);
+  }
+  assert.equal(result.stdout.includes('never-open-this-production-database'), false);
+});

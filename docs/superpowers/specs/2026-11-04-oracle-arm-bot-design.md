@@ -30,4 +30,4 @@ Measure operation counts and representative offline CPU/RSS/timer observations a
 
 Use regression-first changes, focused tests after compilation, independent task review, complete-suite integration checks and a final independent review. Include Linux x64/ARM64 verification without deployment and an offline capability/workload tool. Update user documentation and project guidance with verified behavior and limitations.
 
-The implementation does not include GitHub pushes, live command registration, production deployment, VM provisioning or executable packaging. The runbook covers future consistent database transfer, single-process cutover, readiness, smoke checks and rollback.
+GitHub publication requires separate explicit authorization; it does not authorize deployment. Live command registration, production deployment, VM provisioning and executable packaging remain outside this implementation. The runbook covers future consistent database transfer, single-process cutover, readiness, smoke checks and rollback.

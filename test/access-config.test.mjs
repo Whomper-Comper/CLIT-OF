@@ -92,6 +92,38 @@ function assertComponentLimits(payload) {
   }
 }
 
+for (const legacyOrder of [false, true]) test(`a newly saved clan can be edited, saved again and removed with ${legacyOrder ? "legacy" : "current"} column order`, async t => {
+  const f = fixture();
+  if (legacyOrder) {
+    // The supported migration adds join_role_id after the original columns.
+    const readConfig = db.getGuildClanConfig.bind(db);
+    t.mock.method(db, "getGuildClanConfig", (...args) => {
+      const config = readConfig(...args);
+      if (!config) return null;
+      const { join_role_id, ...originalColumns } = config;
+      return { ...originalColumns, join_role_id };
+    });
+  }
+  t.mock.method(openfrontApi, "getClanInfo", async () => ({ tag: "TEST", name: "Test", description: "" }));
+  const { id } = await open(f);
+  await action(f, id, "new");
+  await action(f, id, "details", "modal", [], {
+    fields: { getTextInputValue: name => name === "tag" ? "TEST" : "10" },
+  });
+  await action(f, id, "member_role_id", "role", [ids.member]);
+  const first = await action(f, id, "save");
+  assert.equal(error(first), "");
+  assert.ok(db.getGuildClanConfig(f.guild.id, "TEST"));
+  await action(f, id, "log_channel_id", "channel", [ids.logs]);
+  const second = await action(f, id, "save");
+  assert.equal(error(second), "", "a saved draft must compare equal regardless of SQLite column order");
+  assert.equal(db.getGuildClanConfig(f.guild.id, "TEST").log_channel_id, ids.logs);
+  await action(f, id, "delete");
+  const removed = await action(f, id, "remove");
+  assert.equal(error(removed), "");
+  assert.equal(db.getGuildClanConfig(f.guild.id, "TEST"), null);
+});
+
 test("all clan access checks require the selected role even for an administrator or server owner", async () => {
   const f = fixture({ owner: true, manageGuild: true }), i = command(f);
   checkClanAccess(i);

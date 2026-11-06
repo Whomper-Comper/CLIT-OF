@@ -35,6 +35,14 @@ const sqlite = await check('sqlite', async () => {
     requireValue([...database.prepare('SELECT value FROM probe ORDER BY id').iterate()][0].value === 'bound', 'sqlite.iterate');
     requireValue(database.prepare('UPDATE probe SET value=? WHERE id=?').run('changed', 1).changes === 1, 'sqlite.changes');
     requireValue(database.prepare('SELECT value FROM json_each(?) ORDER BY value').all('[2,1]').map(row => row.value).join(',') === '1,2', 'sqlite.json_each');
+    database.exec('DELETE FROM probe');
+    database.prepare('INSERT INTO probe VALUES (?, ?)').run(2, 'second');
+    database.prepare('INSERT INTO probe VALUES (?, ?)').run(1, 'first');
+    const ordered = [];
+    for (const row of database.prepare('SELECT id, value FROM probe ORDER BY id').iterate()) {
+      ordered.push([row.id, row.value]);
+    }
+    requireValue(JSON.stringify(ordered) === '[[1,"first"],[2,"second"]]', 'sqlite.iterate-order');
   } finally { database.close(); }
 });
 await check('crypto', async () => {

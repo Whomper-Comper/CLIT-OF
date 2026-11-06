@@ -69,7 +69,7 @@ export function createAvailabilityCommand(dependencies:Dependencies={}) {
     return {embeds:[embed],components,allowedMentions:{parse:[] as never[]}};
   }
   return {
-    data:new SlashCommandBuilder().setName("availability").setDescription("Save weekly playing times and find shared sessions")
+    data: new SlashCommandBuilder().setName('availability').setDescription('Save weekly playing times and find shared sessions')
       .setContexts(InteractionContextType.Guild)
       .addStringOption(actionOption(ACTIONS))
       .addIntegerOption(option=>option.setName("day").setDescription("Set: local weekday").addChoices(...DAYS.map((name,value)=>({name,value}))))

@@ -277,12 +277,21 @@ export class BotDatabase {
       .all(...parameters, (page - 1) * 10) as unknown as AuditEntry[];
   }
   enqueueGuild(guild: string, id: string, extraRoles: string[] = [], priority = 0) {
-    const previous = this.db.prepare("SELECT role_ids FROM role_jobs WHERE guild_id=? AND discord_id=?").get(guild,id);
-    const roles = [...new Set([...managedRoles(this.getGuildConfigs(guild)), ...extraRoles,
-      ...(previous ? JSON.parse(String(previous.role_ids)) as string[] : [])])];
-    this.db.prepare(`INSERT INTO role_jobs(guild_id,discord_id,role_ids,version,priority,created_at) VALUES(?,?,?,?,?,?)
+    this.enqueueGuildMembers(guild,[id],extraRoles,priority);
+  }
+  /** Synchronous batch: callers retain their transaction and per-member obsolete roles. */
+  private enqueueGuildMembers(guild: string, ids: readonly string[], extraRoles: readonly string[] = [], priority = 0) {
+    if (!ids.length) return;
+    const currentRoles = [...new Set([...managedRoles(this.getGuildConfigs(guild)), ...extraRoles])];
+    const previousRoles = this.db.prepare("SELECT role_ids FROM role_jobs WHERE guild_id=? AND discord_id=?");
+    const upsert = this.db.prepare(`INSERT INTO role_jobs(guild_id,discord_id,role_ids,version,priority,created_at) VALUES(?,?,?,?,?,?)
       ON CONFLICT(guild_id,discord_id) DO UPDATE SET role_ids=excluded.role_ids,version=excluded.version,
-      available_at=0,attempts=0,last_error=NULL,priority=MAX(role_jobs.priority,excluded.priority)`).run(guild,id,JSON.stringify(roles),randomUUID(),priority,Date.now());
+      available_at=0,attempts=0,last_error=NULL,priority=MAX(role_jobs.priority,excluded.priority)`);
+    for (const id of ids) {
+      const previous = previousRoles.get(guild,id);
+      const roles = [...new Set([...currentRoles, ...(previous ? JSON.parse(String(previous.role_ids)) as string[] : [])])];
+      upsert.run(guild,id,JSON.stringify(roles),randomUUID(),priority,Date.now());
+    }
   }
   private enqueueAll(id: string, priority = 0) {
     for (const guild of new Set(this.getAllGuildConfigs().map(c=>c.guild_id))) this.enqueueGuild(guild,id,[],priority);
@@ -316,7 +325,7 @@ export class BotDatabase {
     this.transaction(() => {
       const old = this.getGuildClanConfig(c.guild_id, c.clan_tag);
       if (!old) this.history.clearGuildPlayerMatches(c.guild_id);
-      for (const id of guildMemberIds) this.enqueueGuild(c.guild_id, id, [...managedRoles(old ? [old] : []), ...managedRoles([c])]);
+      this.enqueueGuildMembers(c.guild_id, guildMemberIds, [...managedRoles(old ? [old] : []), ...managedRoles([c])]);
       this.db.prepare(`INSERT INTO guild_clan_configs(guild_id,clan_tag,member_role_id,officer_role_id,leader_role_id,
         join_role_id,log_channel_id,sync_interval_mins,last_sync_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(guild_id,clan_tag) DO UPDATE SET
         member_role_id=excluded.member_role_id,officer_role_id=excluded.officer_role_id,leader_role_id=excluded.leader_role_id,
@@ -338,7 +347,7 @@ export class BotDatabase {
       const config = this.getGuildClanConfig(guild, tag);
       if (!config) return false;
       this.history.purgeClan(guild,tag);
-      for (const id of guildMemberIds) this.enqueueGuild(guild, id, managedRoles([config]));
+      this.enqueueGuildMembers(guild, guildMemberIds, managedRoles([config]));
       return Number(this.db.prepare("DELETE FROM guild_clan_configs WHERE guild_id=? AND clan_tag=?").run(guild,tag.trim().toUpperCase()).changes)>0;
     });
   }

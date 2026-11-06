@@ -5,6 +5,44 @@ import { LobbyStore } from "../dist/lobby/store.js";
 import { LobbyWorker } from "../dist/lobby/worker.js";
 import { LobbyFeed, SUPPORTED_BUILD } from "../dist/lobby/feed.js";
 
+for (const change of ["fresh at 29999ms", "expired at 30000ms", "source changed", "disappeared", "feed stopped"]) {
+  test(`final delivery revalidation uses the real feed when ${change}`, async () => {
+    const sql = new DatabaseSync(":memory:");
+    try {
+      LobbyStore.initialize(sql);
+      const store = new LobbyStore(sql);
+      let now = 1800000000000;
+      const source = "https://blue.openfront.io";
+      store.configure("g", true, "c", now);
+      store.watch("g", "u", { name: "World", map: "World" }, now);
+      const feed = new LobbyFeed({ now: () => now });
+      const raw = { gameID: "match", numClients: 12, startsAt: now + 600000, publicGameType: "team",
+        gameConfig: { gameMap: "World", gameMode: "Team", maxPlayers: 100 } };
+      const full = games => ({ type: "full", serverTime: now, gitCommit: SUPPORTED_BUILD, games: { team: games } });
+      feed.accept(full([raw]), source);
+      const sent = [];
+      const member = { user: { bot: false }, createDM: async () => {
+        if (change === "fresh at 29999ms") now += 29999;
+        if (change === "expired at 30000ms") now += 30000;
+        if (change === "source changed") feed.accept(full([raw]), "https://red.openfront.io");
+        if (change === "disappeared") feed.accept(full([]), source);
+        if (change === "feed stopped") feed.stop();
+        return { id: "dm", send: async payload => {
+          sent.push(payload); return { id: "m", createdTimestamp: now };
+        } };
+      } };
+      let membershipFetches = 0;
+      const guild = { members: { fetch: async () => { membershipFetches++; return member; } } };
+      const worker = new LobbyWorker({ guilds: { cache: new Map([["g", guild]]) } }, store, feed, { now: () => now });
+      await worker.tick();
+      assert.equal(membershipFetches, 2, "the change occurs between initial and final membership lookup");
+      const fresh = change === "fresh at 29999ms";
+      assert.equal(sent.length, fresh ? 1 : 0);
+      assert.equal(store.search("g", "u").state, fresh ? "waiting" : "searching");
+    } finally { sql.close(); }
+  });
+}
+
 test("delivery uses one whole snapshot per tick and point reads after awaits", async (t) => {
   const sql = new DatabaseSync(":memory:");
   try {

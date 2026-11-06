@@ -8,6 +8,8 @@ For Oracle Linux ARM hosting, use the [Oracle ARM runbook](docs/oracle-arm.md). 
 
 Coverage reports, weekly recaps and history collection use shared current-human membership filtering. Reports retain fresh roster/identity checks, streamed history aggregation and explicit coverage limits. The action-choice command definitions accept legacy subcommand requests during registration rollout; guild and global registration remain separate operations.
 
+**Architecture/version note:** the same bot code supports Linux x86-64 and ARM64 under Node; install the runtime and dependencies for the destination architecture. There is no separate ARM feature version. ANT has not been enabled, and the published performance measurements are local Node/Windows x64 results, not ANT or Oracle ARM benchmarks. See the [verified compatibility matrix](docs/oracle-arm.md#version-and-architecture-compatibility) for tested versions and limits.
+
 ## Documentation
 
 Start with the guide for your role. The detailed references describe the implementation in this repository, including its limits; they do not certify a live deployment or upstream API availability.

@@ -41,11 +41,7 @@ export function createLobbyCommand(
     return found;
   };
   return {
-    data: new SlashCommandBuilder()
-      .setName("lobby")
-      .setDescription(
-        "Get DMs when an OpenFront lobby matches your preferences",
-      )
+    data: new SlashCommandBuilder().setName('lobby').setDescription('Get DMs when an OpenFront lobby matches your preferences')
       .setContexts(InteractionContextType.Guild)
       .addStringOption(actionOption(ACTIONS))
       .addStringOption(o => o.setName('name').setDescription('Watch: a name for this saved filter').setMaxLength(60))

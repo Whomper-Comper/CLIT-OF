@@ -87,6 +87,11 @@ export class LobbyFeed {
             normalizeLobby(l, source, message.serverTime, now),
           ),
         };
+        for (const lobby of this.current.lobbies) {
+          const key = JSON.stringify([lobby.source, lobby.id]);
+          // Match Array.find's first-duplicate behavior used by delivery checks.
+          if (!this.lobbyIndex.has(key)) this.lobbyIndex.set(key, lobby);
+        }
       } else if (message.type === "counts") {
         if (!this.current) return;
         if (
@@ -96,20 +101,12 @@ export class LobbyFeed {
           )
         )
           throw new Error("Invalid lobby counts");
-        this.current = {
-          observedAt: now,
-          lobbies: this.current.lobbies.map((l) => ({
-            ...l,
-            players: message.counts[l.id] ?? l.players,
-          })),
-        };
+        // Normalized state is privately owned; public reads return defensive copies.
+        // Retaining these objects also keeps the full-frame index current.
+        this.current.observedAt = now;
+        for (const lobby of this.current.lobbies)
+          lobby.players = message.counts[lobby.id] ?? lobby.players;
       } else throw new Error("Invalid lobby frame type");
-      this.lobbyIndex.clear();
-      for (const lobby of this.current.lobbies) {
-        const key = JSON.stringify([lobby.source, lobby.id]);
-        // Match Array.find's first-duplicate behavior used by delivery checks.
-        if (!this.lobbyIndex.has(key)) this.lobbyIndex.set(key, lobby);
-      }
       this.status = "Connected";
       this.failures = 0;
     } catch (e) {

@@ -1,8 +1,6 @@
 name: Deploy Bot to Oracle Cloud
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
 
 permissions:

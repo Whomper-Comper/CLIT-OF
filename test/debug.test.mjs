@@ -158,3 +158,22 @@ test("verbose errors explain API, permissions and conflicts without exposing raw
   assert.match(commandErrorMessage(new CommandError("The user input is required."), f.i.guildId), /selected action needs/);
   assert.equal(commandErrorMessage(permission, null), "An unexpected error occurred. Please try again later.");
 });
+
+for (const { reason, explanation } of [
+  { reason: "busy", explanation: /bot.*request capacity.*full/i },
+  { reason: "queue_timeout", explanation: /bot.*wait.*deadline/i },
+]) {
+  test(`admission error ${reason} explains local capacity only when verbose errors are enabled`, () => {
+    const f = fixture();
+    const error = new OpenFrontApiError(reason);
+    assert.equal(commandErrorMessage(error, f.i.guildId), error.message);
+    assert.equal(commandErrorMessage(error, null), error.message);
+    db.setDebugOptions(f.i.guildId, { verboseErrors: true }, 1);
+    Object.assign(error, { body: "secret-body", token: "secret-token", stack: "secret-stack" });
+    const output = commandErrorMessage(error, f.i.guildId);
+    assert.ok(output.startsWith(error.message));
+    assert.match(output, explanation);
+    assert.match(output, /retry/i);
+    assert.doesNotMatch(output, /returned data|API format|secret-body|secret-token|secret-stack/);
+  });
+}

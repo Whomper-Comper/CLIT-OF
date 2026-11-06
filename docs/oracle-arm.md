@@ -6,7 +6,30 @@ The migration default is **Oracle Linux 9 on a 64-bit Ampere/aarch64 VM with 6 G
 
 Use **Node.js >=22.13.0** with its existing built-in SQLite driver. The user selected Node and stopped the ANT investigation. Earlier experiments remain in the [historical runtime assessment](ant-sqlite.md); they are not an active hosting prerequisite.
 
-Use a maintained, patched Node release satisfying that floor. The architecture CI is configured for the patched Node 22 line on Linux x64 and ARM64; this local session did not execute that workflow. Build/test tools and the current PM2/deployment script also use Node/npm. Install dependencies, then run the local preflight and tests from the repository root:
+### Version and architecture compatibility
+
+There is **one bot codebase for x86-64 and ARM64**, not separate feature versions. CPU architecture determines which runtime executable and native dependencies to install; an x86-64 executable does not run natively on ARM64, or vice versa. Install dependencies on each destination with `npm ci` rather than transferring `node_modules` between architectures.
+
+| Runtime / platform | Verified status | Meaning for hosting |
+| --- | --- | --- |
+| Node.js 22.13.0 or newer | Required API floor declared by the project; Linux CI uses the patched Node 22 line | Supported runtime; use an architecture-matched, maintained build |
+| Linux x86-64 + Node 22 | Full regression suite and runtime gate passed | Same bot features and persistence format as ARM64 |
+| Linux ARM64 + Node 22 | Full regression suite and runtime gate passed on Ubuntu 24.04 ARM64 | Supports the ARM architecture; Oracle Linux deployment and live Discord smoke checks remain separate |
+| Windows x64 + Node 26.4.0 | Local regression and offline performance measurements passed | Benchmark environment, not a requirement to upgrade the Oracle host to Node 26 |
+| ANT 16.5.c41757b4.0, Windows x64 | Runtime gate failed resolving `node:sqlite` | Cannot replace Node for this bot in the tested configuration |
+| ANT on Linux ARM64 / other versions | Not executed or certified by this work | Historical exploration only; do not infer support from another architecture or version |
+
+**Performance disclaimer:** published RAM/query/render measurements compare bot implementations on Windows x64 under Node, not ANT versus Node or ARM versus x86. No ANT speedup or Oracle ARM throughput improvement was measured. More RAM and a different CPU do not guarantee a particular latency or CPU improvement. Run the same workload on the destination before making host-performance claims.
+
+**Historical compatibility result:** the official ANT **16.5.c41757b4.0** Windows x64 release, with the release asset's SHA256 digest verified, failed the first gate: `TypeError: Cannot resolve module: node:sqlite`. The bot imports that API for persistent storage and migration backups. This check is a Windows result, not an executed Linux ARM result. ANT's source inventory also lacked this built-in. These results document the earlier investigation; Node remains the selected runtime.
+
+Use a maintained, patched Node release satisfying the API floor. The architecture CI checks the patched Node 22 line on Linux x64 and ARM64. Build/test tools and the current PM2/deployment script also use Node/npm. No SQLite adapter or alternate Discord transport is introduced.
+
+The optimization publication `1e13640` passed both Node 22 / Ubuntu 24.04 x64 and Node 22 / Ubuntu 24.04 ARM64 jobs in [architecture verification run 42048524530](https://github.com/Whomper-Comper/CLIT-OF/actions/runs/42048524530). This verifies the Linux architecture matrix on that revision; Oracle Linux host/runtime and live Discord checks remain part of cutover.
+
+Verification runs for pull requests, manual dispatch and pushes to `main` or `feat/**`. The separate Oracle deployment workflow is manual-only (`workflow_dispatch`); publishing a commit does not deploy it.
+
+Install dependencies, then run the local preflight and tests from the repository root:
 
 ```sh
 node --version
@@ -49,6 +72,8 @@ node --expose-gc tools/benchmark-bot.mjs 2000 250 100 5
 The benchmark suppresses dotenv loading, sets test credentials and an in-memory database, forbids fetch, seeds ten clans, and calls the real weekly-report implementation. It prints elapsed report times, process CPU, RSS/peak RSS, a timer-delay observation across the workload, and a report SHA256. The default fixture has 20,000 clan rows and 25,000 player rows. The timer observation represents blocking across the entire run, not a percentile of production event-loop delay. Peak RSS includes fixture setup; optional explicit GC and allocator behavior affect results.
 
 Compare unchanged and updated revisions using identical arguments, runtime, machine and GC setting. Keep the same report hash and operation-count regressions alongside timings. Repeat on the Oracle host; Windows/x64 results cannot establish an ARM speedup. Record steady-state RSS, CPU, worker duration/backlog, interaction acknowledgement age and PM2 restart history during an authorized staging run. Avoid timing thresholds in ordinary regression tests.
+
+The [architecture evidence](architecture.md#local-performance-evidence) also records idle session release, bounded API admission, configuration queue preparation and history index measurements. API defaults bound each instance to eight active loaders and 64 waiting for at most two seconds; overload returns the existing safe retry-later error. These limits are constructor options, with no new `.env` settings. Session cleanup uses unreferenced timers and keeps existing ten-minute caps. Added SQLite indexes improve maintenance reads while increasing storage and write work; include ingestion and backup duration when profiling the ARM host.
 
 ## Cutover and rollback
 

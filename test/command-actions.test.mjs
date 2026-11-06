@@ -20,6 +20,13 @@ const actions = {
   milestones: ['view', 'configure'],
   lobby: ['watch', 'list', 'remove', 'resume', 'stop', 'configure'],
 };
+const fields = {
+  bingo: ['cell', 'explanation', 'evidence', 'page'],
+  availability: ['day', 'start', 'end', 'timezone', 'window', 'user', 'page', 'duration'],
+  event: ['title', 'start', 'timezone', 'offset', 'description', 'capacity', 'duration', 'reminder', 'page', 'id'],
+  onboarding: ['clan', 'user', 'page'], wheel: ['id'], milestones: [],
+  lobby: ['name', 'map', 'mode', 'category', 'min_players', 'max_players', 'page', 'id', 'enabled', 'channel'],
+};
 function commands(f) {
   const deps = { db: f.db, api: f.api, now: f.now };
   return { bingo: createBingoCommand(deps), availability: createAvailabilityCommand(deps),
@@ -57,6 +64,7 @@ test('seven serialized command schemas require a first action choice and expose 
       assert.deepEqual(action.choices.map(c => c.value), expected, name);
       assert.ok(inputs.every(o => o.type > 2 && !o.required), name);
       assert.equal(new Set(inputs.map(o => o.name)).size, inputs.length, name);
+      assert.deepEqual(inputs.map(o => o.name), fields[name], name);
     }
     const schema = name => all[name].data.toJSON().options;
     assert.equal(schema('availability').find(o => o.name === 'day').choices[0].value, 0);
@@ -74,7 +82,7 @@ test('missing and unknown actions fail before database reads, replies, permissio
     let reads = 0;
     f.db.db.prepare = function (...args) { reads++; return prepare.apply(this, args); };
     for (const [name, command] of Object.entries(all)) for (const action of [null, 'unknown', 'toString', 'constructor']) {
-      const i = interaction(f, action);
+      const i = interaction(f, action, {}, action === null ? {} : { fallback: actions[name][0] });
       await assert.rejects(command.execute(i), e => e instanceof CommandError && /action/i.test(e.message), `${name}: ${action}`);
       assert.equal(reads, 0, name);
       assert.equal(i.replies.length, 0, name);
@@ -193,4 +201,51 @@ test('legacy nested options normalize without counting their subcommand as an ir
     await all.event.execute(i);
     assert.match(JSON.stringify(i.output), /No published events/);
   } finally { await f.close(); }
+});
+
+test('flat officer and manager actions retain their private previews and authorization boundaries', async () => {
+  const f = communityFixture();
+  try {
+    f.addMember('u');
+    const all = commands(f);
+    for (const [name, action] of [['bingo', 'create'], ['onboarding', 'queue'], ['wheel', 'add'], ['milestones', 'configure']]) {
+      await assert.rejects(all[name].execute(interaction(f, action)), /officer|manager|config role|Manage Server/i, name);
+    }
+    assert.equal(f.db.community.bingo.draft('g', 'u'), null);
+    f.db.setManagerRole('g', 'manager'); f.setRoles('u', ['manager']);
+    for (const [name, action, expected] of [
+      ['bingo', 'create', /Bingo draft/], ['onboarding', 'queue', /Newcomer follow.up queue/],
+      ['wheel', 'add', /New preset/], ['milestones', 'configure', /Milestone announcements/],
+    ]) {
+      const i = interaction(f, action);
+      await all[name].execute(i);
+      assert.equal(i.replies[0].flags, MessageFlags.Ephemeral, name);
+      assert.match(JSON.stringify(i.output), expected, name);
+    }
+    assert.equal(f.db.community.bingo.getActive('g'), null);
+    assert.equal(f.db.community.settings.get('g').milestonesEnabled, false);
+    assert.equal(f.calls.sends.length, 0);
+  } finally { await f.close(); }
+});
+
+test('remaining legacy nested families still open their original private previews', async () => {
+  const f = communityFixture();
+  try {
+    f.addMember('u', ['manager']); f.db.setManagerRole('g', 'manager');
+    const all = commands(f);
+    for (const [name, action] of [['bingo', 'create'], ['onboarding', 'queue'], ['wheel', 'add'], ['milestones', 'configure']]) {
+      const i = interaction(f, action, {}, { legacy: true });
+      await all[name].execute(i);
+      assert.equal(i.replies[0].flags, MessageFlags.Ephemeral, name);
+      assert.ok(i.output.embeds.length > 0, name);
+    }
+  } finally { await f.close(); }
+});
+
+test('command registry retains exactly sixteen original roots', async () => {
+  const { commands } = await import('../dist/commands/index.js');
+  assert.deepEqual(commands.map(c => c.data.name).sort(), [
+    'link', 'unlink', 'whois', 'stats', 'clan', 'config', 'debug', 'dice',
+    'availability', 'event', 'onboarding', 'wheel', 'milestones', 'bingo', 'duel', 'lobby',
+  ].sort());
 });

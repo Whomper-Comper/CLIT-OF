@@ -64,8 +64,8 @@ Roles may be shared across different clans. The bot calculates earned roles acro
 
 1. Open `/config`, choose **Clans**, then **New clan**.
 2. Open **Tag / sync interval**. Enter a tag of 2–5 letters or digits without brackets; it is trimmed and uppercased. Enter an integer sync interval from 2 to 1440 minutes. New drafts use `DEFAULT_SYNC_INTERVAL_MINS`, normally 10 minutes.
-3. Open **Clan roles** and select Member plus optional Officer, Leader and Approval mappings. Optional selectors can be cleared. Choose **Back** to return to the draft summary.
-4. Open **Log channel**, optionally select a text channel, then return or save.
+3. Open **Roles** and select Member plus optional Officer, Leader and Approval mappings. Optional selectors can be cleared. Choose **Back** to return to General.
+4. Open **Logging**, optionally select a text channel, then return or save.
 5. Review the complete draft and choose **Save**. The bot refreshes roles/permissions, verifies the OpenFront clan exists, loads server membership and checks that no other session changed this configuration. Success reports that reconciliation is queued.
 6. Run `/clan action:doctor clan_tag:MARS`, then `/clan action:sync clan_tag:MARS` to inspect initial behavior. These slash actions require the selected config role, even if you created the configuration using Manage Server permission.
 
