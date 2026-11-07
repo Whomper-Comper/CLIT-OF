@@ -1,9 +1,10 @@
-import { Client, Guild, GuildMember, TextChannel, EmbedBuilder } from "discord.js";
+import { Client, Guild, GuildMember, TextChannel, EmbedBuilder, PermissionFlagsBits } from "discord.js";
 import { db, GuildClanConfig, LinkedUser, managedRoles } from "./db.js";
 import { openfrontApi } from "./api.js";
 import { MemberLocks, PacedQueue } from "./queues.js";
 import { desiredRoles } from "./roles.js";
-import { configSnapshot } from "./setupConfig.js";
+import { configSnapshot, newClanDraft } from "./setupConfig.js";
+import { CommandError } from "./commands/support.js";
 
 export interface SyncResult {
   discordId: string;
@@ -33,6 +34,8 @@ export interface JoinRoleMismatch {
 }
 
 class StaleSyncError extends Error {}
+class SyncAuthorizationError extends CommandError {}
+type AuthorizeSync = () => Promise<void>;
 
 interface SyncMemberState {
   member: GuildMember;
@@ -243,23 +246,56 @@ export class ClanSyncService {
     return bucket.results;
   }
 
+  /** Create a permission-free member role and save its ID as a normal clan mapping. */
+  async createClanMemberMapping(guild: Guild, tag: string, authorize: AuthorizeSync): Promise<GuildClanConfig> {
+    return this.rolePacer.run(async () => {
+      const existing = db.getGuildClanConfig(guild.id, tag);
+      if (existing) return existing;
+      const [roles, bot] = await Promise.all([guild.roles.fetch(), guild.members.fetchMe()]);
+      const name = `(${tag}) clan member`;
+      if (!bot.permissions.has(PermissionFlagsBits.ManageRoles)) throw new CommandError("Give the bot Manage Roles before running Auto sync.");
+      if (roles.some(role => role.name.toLowerCase() === name.toLowerCase())) {
+        throw new CommandError(`A role named ${name} already exists. Select it manually in /config if it is safe to assign.`);
+      }
+      await authorize();
+      const current = db.getGuildClanConfig(guild.id, tag);
+      if (current) return current;
+      let role;
+      try {
+        role = await guild.roles.create({ name, permissions: [], mentionable: false, reason: "OpenFront clan Auto sync" });
+      } catch {
+        throw new CommandError(`Discord could not create ${name}. Check Manage Roles and the server's role limit.`);
+      }
+      const config = { ...newClanDraft(tag), guild_id: guild.id, member_role_id: role.id, last_sync_at: null };
+      try {
+        await authorize();
+        if (db.getGuildClanConfig(guild.id, tag)) throw new Error("Mapping changed");
+        db.setGuildClanConfig(config);
+      } catch {
+        throw new CommandError(`Discord created ${name}, but the bot could not save its mapping. Review the role and clan settings in /config.`);
+      }
+      return config;
+    }, { guildId: guild.id });
+  }
+
   /** Share initial roster discovery, retaining separate results and final freshness per clan. */
-  async syncGuildClans(guild: Guild, configs: readonly GuildClanConfig[]): Promise<GuildClanSyncResult[]> {
+  async syncGuildClans(guild: Guild, configs: readonly GuildClanConfig[], authorize?: AuthorizeSync): Promise<GuildClanSyncResult[]> {
     const selected = [...new Map(configs.map((config) => [config.clan_tag, config])).values()];
     if (!selected.length) return [];
     // Every caller, including the single-clan wrapper, acquires overlapping locks
     // in the same order. Keep the caller's selected order for work and reporting.
     const lockTags = selected.map((config) => config.clan_tag).sort();
     const lock = (index: number): Promise<GuildClanSyncResult[]> => index === lockTags.length
-      ? this.syncGuildClansLocked(guild, selected)
+      ? this.syncGuildClansLocked(guild, selected, authorize)
       : this.guildLocks.run(`${guild.id}:${lockTags[index]}`, () => lock(index + 1));
     return lock(0);
   }
 
-  private async syncGuildClansLocked(guild: Guild, configs: GuildClanConfig[]): Promise<GuildClanSyncResult[]> {
+  private async syncGuildClansLocked(guild: Guild, configs: GuildClanConfig[], authorize?: AuthorizeSync): Promise<GuildClanSyncResult[]> {
     const buckets = configs.map((config) => ({ config, results: [] as SyncResult[], mismatches: [] as JoinRoleMismatch[], error: undefined as string | undefined }));
     // Failure here rejects the whole batch before any clan can be marked synced.
     const members = await guild.members.fetch();
+    if (authorize) await authorize();
 
     for (const [memberId, initialMember] of members) {
       if (initialMember.user.bot) continue;
@@ -288,7 +324,7 @@ export class ClanSyncService {
         // Keep the guarded helper and its normal API reads. Adjacent reads share
         // the API's short cache, but a slow await must still permit TTL expiry.
         const result = state.refreshError ? this.memberRefreshFailure(state, link, config)
-          : await this.syncMemberForClan(member, link, config);
+          : await this.syncMemberForClan(member, link, config, authorize);
         state.needsRoleRefresh = result.rolesAdded.length > 0 || result.rolesRemoved.length > 0;
         bucket.results.push(result);
 
@@ -304,6 +340,7 @@ export class ClanSyncService {
     }
 
     for (const bucket of buckets) {
+      if (authorize) await authorize();
       try {
         await this.finishGuildClanSync(guild, bucket.config, bucket.results, bucket.mismatches);
       } catch (error) {
@@ -405,17 +442,19 @@ export class ClanSyncService {
   async syncMemberForClan(
     member: GuildMember,
     link: LinkedUser,
-    config: GuildClanConfig
+    config: GuildClanConfig,
+    authorize?: AuthorizeSync,
   ): Promise<SyncResult> {
     return this.memberLocks.run(`${config.guild_id}:${member.id}`, () =>
-      this.syncMemberForClanLocked(member, link, config)
+      this.syncMemberForClanLocked(member, link, config, authorize)
     );
   }
 
   private async syncMemberForClanLocked(
     member: GuildMember,
     link: LinkedUser,
-    config: GuildClanConfig
+    config: GuildClanConfig,
+    authorize?: AuthorizeSync,
   ): Promise<SyncResult> {
     const result: SyncResult = {
       discordId: member.id,
@@ -465,6 +504,10 @@ export class ClanSyncService {
         if (member.roles.cache.has(operation.role) === operation.add) continue;
         try {
           await this.rolePacer.run(async () => {
+            if (authorize) {
+              try { await authorize(); }
+              catch { throw new SyncAuthorizationError("Auto sync stopped because config role access or the menu session could no longer be confirmed."); }
+            }
             const latest = db.getEffectiveLink(config.guild_id, member.id);
             const latestConfig = db.getGuildClanConfig(config.guild_id, config.clan_tag);
             if (!latest || latest.openfront_id !== link.openfront_id || latest.linked_at !== currentLink.linked_at ||
@@ -477,12 +520,14 @@ export class ClanSyncService {
           }, { guildId: config.guild_id });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
+          if (error instanceof SyncAuthorizationError) throw error;
           result.error = [result.error, message].filter(Boolean).join("; ");
           if (error instanceof StaleSyncError) break;
           console.warn(`[ClanSync] Role update failed for ${member.id} in guild ${config.guild_id}:`, message);
         }
       }
     } catch (err) {
+      if (err instanceof SyncAuthorizationError) throw err;
       result.error = err instanceof Error ? err.message : String(err);
     }
 

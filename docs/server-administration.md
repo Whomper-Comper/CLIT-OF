@@ -73,6 +73,10 @@ An existing clan saves valid role, log channel, and interval edits immediately. 
 
 Select an existing clan on the Clans page to edit it. Its selector displays up to 25 clans per page. An existing tag cannot be renamed in place; configure the replacement tag and remove the old configuration if a tag changes. Concurrent edits are rejected rather than silently overwriting saved state. Reopen the clan and reapply the intended changes after a conflict.
 
+Use **Clans → Auto sync** to provision and sync multiple clans as a config-role holder. The include field accepts up to ten tags after exclusions. Leave it blank to use configured clans. To add a new clan, enter its tag explicitly. The bot checks that the tag exists and creates a role named `(TAG) clan member` with no extra permissions. If the name already exists, review the existing role and map it through the normal editor. Created mappings join periodic sync at the default interval. An exclusion only applies to this run.
+
+Auto sync uses the current Discord roster and saved OpenFront links. A member who signed in to OpenFront with Discord can use `/link` with their OpenFront profile to verify the connection. See who has linked in this server with `/debug action:status` using the debug role.
+
 ### Equivalent slash setup
 
 ```text

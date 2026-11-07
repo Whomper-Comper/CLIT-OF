@@ -184,7 +184,7 @@ No options. Opens a private, invoker-only server menu for 10 minutes. Manage Ser
 
 | Page / control | Behavior |
 | --- | --- |
-| Clans | Choose a saved clan or New clan; Previous/Next pages contain up to 25 clans |
+| Clans | Edit or create a clan, or use Auto sync to provision and synchronize selected clans. Pages contain up to 25 clans |
 | Access | Select normal config/debug roles; both selectors save immediately; clearing debug disables `/debug` |
 | History & recaps | Opens history/recap draft settings with explicit Save |
 | Diagnostics | Doctor and link-coverage reports plus current reply/error settings |
@@ -193,6 +193,8 @@ No options. Opens a private, invoker-only server menu for 10 minutes. Manage Ser
 Clan editing groups settings into **General**, **Roles**, and **Logging**. For an existing clan, a valid selection, clear, or interval submission saves immediately. For a new clan, enter the exact tag and select a member role, then choose **Create clan** once. **Cancel** discards the new draft. Creation and edits use Discord validation and work during OpenFront outages. **Delete** opens a separate confirmation. **Confirm removal** queues obsolete-role cleanup.
 
 If Discord rejects a draft redraw, the previous draft stays in the session. A committed edit stays saved even if the following reply fails. Reopen `/config` to see the saved settings if the menu fails to refresh.
+
+**Auto sync** requires the config role. Enter up to ten included clan tags separated by commas or spaces, or leave Include blank to use the configured clans. Exclude takes precedence for that run. New tags that OpenFront confirms get a `(TAG) clan member` role and a saved mapping for periodic sync. Existing mappings are used as configured. The run checks only current server members with effective bot links, including links previously verified through OpenFront's Discord connection.
 
 History settings expose **Clan history**, **Player history / Elo**, **Collect**, **Weekly**, a destination text-channel selector and **Timing / retention**. They are drafts until **Save**. Timing bounds: collection every 5–1440 minutes, retention 14–365 days, weekly day 0 (Sunday) through 6 (Saturday), hour 0–23 and a valid IANA time zone. New-server defaults: clan/player history on, collection/weekly off, no channel, 15-minute polling, 90-day retention, Monday at 12:00 UTC. Enabling Weekly enables collection; disabling collection disables Weekly; clearing the destination disables Weekly. A selected recap channel must allow view/send/embed/read-history permissions even when validating a draft that has Weekly off.
 
@@ -292,7 +294,7 @@ There is no explicit handler cooldown for saved-config display or audit. GUI Dia
 | `action` | Required | `export_links`, `status`, `verbose`, `ephemeral` |
 | `enabled` | Required for `verbose` and `ephemeral` | Boolean `true`/`false`; ignored for status/export |
 
-`status` privately reports current member/link counts, configured clans, pending/retrying role jobs, verbose/private-reply modes, collection state and retained records/Elo, source retries, weekly state/time zone and collection/error indicators. Status and export share a 15-second cooldown per server/invoker.
+`status` privately lists current linked Discord members and their OpenFront profiles. It previews up to 15 entries and attaches the full list when it fits Discord's attachment limit. It also reports member/link counts, configured clans, role jobs, reply settings and history health. Status and export share a 15-second cooldown per server/invoker.
 
 `export_links` privately attaches the complete JSON snapshot of effective links whose Discord users are currently server members. It includes schema version, export time, server ID/name, member and linked counts, and each user's Discord ID/username/display name, OpenFront ID/saved username, linked time, scope and verification method. The member/link export is not the human-only coverage report; the export code filters membership rather than excluding bots explicitly. It does not export the identity token. Full membership must load successfully; oversized files or failed membership fetches produce no partial export. Access is rechecked before releasing data. Downloaded JSON contains account associations and should be shared accordingly.
 

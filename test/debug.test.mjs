@@ -106,6 +106,10 @@ test("debug status stays scoped to this server and uses a private reply", async 
   assert.match(f.i.output.content, /Linked members: \*\*1\*\*/);
   assert.match(f.i.output.content, /Configured clans: \*\*1\*\*/);
   assert.match(f.i.output.content, /Role queue: \*\*1\*\*/);
+  const linked = f.i.output.embeds[0].toJSON().description;
+  assert.match(linked, /status-here.*here-player/);
+  assert.doesNotMatch(linked, /elsewhere|unlinked|another-player/);
+  assert.deepEqual(f.i.output.allowedMentions, { parse: [] });
   assert.equal(f.i.output.files, undefined);
 });
 

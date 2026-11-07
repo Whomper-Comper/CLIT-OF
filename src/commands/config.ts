@@ -5,7 +5,7 @@ import {
   PermissionFlagsBits, RoleSelectMenuBuilder, SlashCommandBuilder, StringSelectMenuBuilder, TextInputBuilder, TextInputStyle,
 } from "discord.js";
 import { db } from "../db.js";
-import { hasConfigAccess, requireConfigAccess } from "../access.js";
+import { hasConfigAccess, requireClanAccess, requireConfigAccess } from "../access.js";
 import { OpenFrontApiError } from "../api.js";
 import { ClanDraft, clanDraft, configSnapshot, newClanDraft, normalizeClanTag, validateClanDraft } from "../setupConfig.js";
 import { CommandError, label, privateReply, shortText, throttle } from "./support.js";
@@ -14,6 +14,8 @@ import { commandErrorMessage } from "./errorMessages.js";
 import { HistorySettings } from "../historyStore.js";
 import { affectedRoleMemberIds, clanRoleMappingsChanged } from "../roles.js";
 import { ExpiringSessions } from "../expiringSessions.js";
+import type { ClanSyncService } from "../clanSync.js";
+import { runClanAutosync } from "./clanAutosync.js";
 
 type Screen = "home" | "clans" | "access_page" | "diagnostics" | "draft" | "roles" | "logs" | "confirm" | "history";
 interface Session {
@@ -107,7 +109,7 @@ function render(s: Session, allowed: boolean, notice = "") {
     if (choices.length) components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder()
       .setCustomId(`${prefix}${s.id}:clan`).setPlaceholder(`Edit a clan · page ${s.page + 1}/${pages}`)
       .addOptions(choices.map((c) => ({ label: shortText(`[${c.clan_tag}]`, 100), value: c.clan_tag, description: `Sync every ${c.sync_interval_mins} minutes` })))));
-    components.push(row(button(s, "new", "New clan", ButtonStyle.Primary), button(s, "previous", "Previous").setDisabled(s.page === 0),
+    components.push(row(button(s, "new", "New clan", ButtonStyle.Primary), button(s, "autosync", "Auto sync"), button(s, "previous", "Previous").setDisabled(s.page === 0),
       button(s, "next", "Next").setDisabled(s.page >= pages - 1)));
     components.push(row(button(s, "home", "Back"), button(s, "close", "Close")));
   } else if (s.screen === "diagnostics") {
@@ -172,7 +174,7 @@ function render(s: Session, allowed: boolean, notice = "") {
   return { content: null, embeds: [embed], components, allowedMentions: { parse: [] as never[] } };
 }
 
-export async function handleConfigInteraction(i: Interaction): Promise<boolean> {
+export async function handleConfigInteraction(i: Interaction, sync?: ClanSyncService): Promise<boolean> {
   if (!(i.isMessageComponent() || i.isModalSubmit()) || !i.customId.startsWith(prefix)) return false;
   let locked: Session | undefined;
   let stage = "session";
@@ -202,6 +204,18 @@ export async function handleConfigInteraction(i: Interaction): Promise<boolean> 
       sessions.delete(s.id);
       if (i.isMessageComponent()) await i.update({ content: "Configuration menu closed.", embeds: [], components: [] });
       return true;
+    }
+    if (action === "autosync" && i.isButton() && s.screen === "clans") {
+      const role = db.getGuildSettings(i.guildId)?.manager_role_id;
+      if (!role || !i.member.roles.cache.has(role)) throw new CommandError("You need this server's config role to run Auto sync.");
+      const modal = new ModalBuilder().setCustomId(`${prefix}${s.id}:autosync_submit`).setTitle("Auto sync linked members");
+      for (const [key, label] of [["include", "Include tags (blank = configured clans)"], ["exclude", "Exclude tags (optional)"]]) {
+        modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder()
+          .setCustomId(key).setLabel(label).setStyle(TextInputStyle.Short).setMaxLength(150).setRequired(false)
+          .setPlaceholder("Tags separated by commas or spaces")));
+      }
+      stage = "acknowledgement";
+      await i.showModal(modal); return true;
     }
     if (action === "basics" && i.isButton() && s.draft) {
       const role = db.getGuildSettings(i.guildId)?.manager_role_id;
@@ -271,7 +285,17 @@ export async function handleConfigInteraction(i: Interaction): Promise<boolean> 
       commit();
       return affected.length ? "Saved. Role reconciliation is queued." : "Saved.";
     };
-    if (action === "debug_access" && i.isRoleSelectMenu()) {
+    if (action === "autosync_submit" && i.isModalSubmit() && s.screen === "clans" && sync) {
+      const authorize = async () => {
+        ensureLive(stored);
+        await requireClanAccess(i.guild, i.user.id);
+        ensureLive(stored);
+      };
+      const summary = await runClanAutosync(i.guild, i.fields.getTextInputValue("include"), i.fields.getTextInputValue("exclude"), sync, authorize);
+      await authorize();
+      await redraw(summary);
+      return true;
+    } else if (action === "debug_access" && i.isRoleSelectMenu()) {
       const selected = i.values[0] ?? null;
       if (selected) {
         const role = await i.guild.roles.fetch(selected);
@@ -409,7 +433,7 @@ function ensureLive(s: Session) {
   if (sessions.get(s.id) !== s || s.expires <= Date.now()) throw new CommandError("This menu expired. Open /config again.");
 }
 
-const diagnosticActions = new Set(["open", "clans", "access_page", "diagnostics", "home", "cancel", "history_cancel", "close", "access", "debug_access", "clan", "new", "previous", "next",
+const diagnosticActions = new Set(["open", "clans", "access_page", "diagnostics", "home", "cancel", "history_cancel", "close", "access", "debug_access", "clan", "new", "previous", "next", "autosync", "autosync_submit",
   "draft", "roles", "logs", "basics", "details", "delete", "remove", "save", "member_role_id", "officer_role_id", "leader_role_id", "join_role_id", "log_channel_id",
   "history", "history_timing", "history_details", "history_channel", "history_clans", "history_players", "history_collect", "history_weekly", "history_save", "doctor", "coverage"]);
 

@@ -10,6 +10,9 @@ const { PermissionFlagsBits } = await import("discord.js");
 const { configCommand, handleConfigInteraction } = await import("../dist/commands/config.js");
 const { db } = await import("../dist/db.js");
 const { openfrontApi } = await import("../dist/api.js");
+const { ClanSyncService } = await import("../dist/clanSync.js");
+const { PacedQueue } = await import("../dist/queues.js");
+const { Collection } = await import("discord.js");
 after(() => db.close());
 
 let sequence = 0;
@@ -571,6 +574,62 @@ test("configuration home links focused pages and access saves are explicit", asy
   }
   const access = await action(f, id, "access_page");
   assert.ok(components(access.output).filter(c => c.type === 6).every(c => /immediately/.test(c.placeholder)));
+});
+
+test("configuration Auto sync creates and assigns the included clan role using current server links", async t => {
+  const f = fixture(), { id } = await open(f);
+  const assigned = [];
+  const makeMember = memberId => ({
+    id: memberId, guild: f.guild, user: { bot: false },
+    roles: { cache: new Map(), add: async role => { assigned.push([memberId, role]); } },
+  });
+  const linked = makeMember("linked"), unlinked = makeMember("unlinked");
+  db.linkUser(linked.id, "openfront-linked", null, "profile_discord");
+  db.linkUser("outside", "openfront-outside", null, "identity_token");
+  const fetch = f.guild.members.fetch;
+  f.guild.members.fetch = async options => options ? fetch(options) : new Collection([[linked.id, linked], [unlinked.id, unlinked]]);
+  f.guild.roles.fetch = async () => new Collection([...f.roles].map(([id, role]) => [id, { ...role, name: "Existing role" }]));
+  const created = [];
+  f.guild.roles.create = async options => { created.push(options); return { id: ids.member }; };
+  const exists = t.mock.method(openfrontApi, "clanExists", async tag => tag === "TEST");
+  const profile = t.mock.method(openfrontApi, "getPlayerProfile", async () => ({ clans: [{ tag: "TEST", role: "member" }] }));
+  const sync = new ClanSyncService({});
+  sync.rolePacer = new PacedQueue(0);
+
+  await action(f, id, "clans");
+  const form = await action(f, id, "autosync");
+  assert.ok(form.modal);
+  const submitted = component(f, id, "autosync_submit", "modal", [], {
+    fields: { getTextInputValue: key => key === "include" ? "test, SKIP, test" : "skip" },
+  });
+  assert.equal(await handleConfigInteraction(submitted, sync), true);
+  assert.equal(error(submitted), "");
+  assert.match(submitted.output.embeds[0].toJSON().description, /1 roles added/);
+  assert.deepEqual(exists.mock.calls.map(call => call.arguments), [["TEST"]]);
+  assert.deepEqual(profile.mock.calls.map(call => call.arguments), [["openfront-linked"]]);
+  assert.equal(created[0].name, "(TEST) clan member");
+  assert.deepEqual(created[0].permissions, []);
+  assert.equal(created[0].mentionable, false);
+  assert.deepEqual(assigned, [["linked", ids.member]]);
+  assert.equal(db.getGuildClanConfig(f.guild.id, "TEST").member_role_id, ids.member);
+  assert.equal(db.getGuildClanConfig(f.guild.id, "SKIP"), null);
+});
+
+test("Auto sync blocks role assignment if the config role is revoked during a profile lookup", async t => {
+  const f = fixture({ manageGuild: true }), { id } = await open(f);
+  db.setGuildClanConfig(savedConfig(f));
+  f.user.guild = f.guild;
+  f.user.roles.add = async () => assert.fail("revoked access must prevent the role write");
+  db.linkGuildUser(f.guild.id, "manager", f.userId, "revoked-autosync", null);
+  t.mock.method(openfrontApi, "getPlayerProfile", async () => {
+    f.user.roles.cache.clear();
+    return { clans: [{ tag: "TEST", role: "member" }] };
+  });
+  await action(f, id, "clans");
+  const submitted = component(f, id, "autosync_submit", "modal", [], { fields: { getTextInputValue: () => "" } });
+  await handleConfigInteraction(submitted, new ClanSyncService({}));
+  assert.match(error(submitted), /config role access/);
+  assert.equal(db.getGuildClanConfig(f.guild.id, "TEST").last_sync_at, null);
 });
 
 for (const setting of ["history_channel"]) test(`${setting} visibly confirms staged select and clear, and discards a failed redraw`, async (t) => {

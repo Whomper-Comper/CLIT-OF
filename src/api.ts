@@ -239,6 +239,17 @@ export class OpenFrontApi {
     return this.publicRead(endpoint, () => this.loadPlayerProfile(endpoint), options);
   }
 
+  async clanExists(tag: string): Promise<boolean> {
+    const endpoint = `/public/clan/${encodeURIComponent(tag.trim().toUpperCase())}/exists`;
+    return this.publicRead(endpoint, async () => {
+      const response = await this.request(endpoint);
+      if (response.status === 404) { await this.discard(response); return false; }
+      const data = await this.json(response);
+      if (!object(data) || data.exists !== true) throw new OpenFrontApiError();
+      return true;
+    }, {});
+  }
+
   private async loadPlayerProfile(endpoint: string): Promise<OpenFrontPlayerProfile | null> {
     const response = await this.request(endpoint);
     if (response.status === 404) { await this.discard(response); return null; }

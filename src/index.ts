@@ -98,7 +98,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
     if (await handleCommunityInteraction(interaction)) return;
-    if (await handleConfigInteraction(interaction)) return;
+    if (await handleConfigInteraction(interaction, clanSyncService)) return;
     if (await handleStatsInteraction(interaction)) return;
     if (!interaction.isChatInputCommand()) return;
 

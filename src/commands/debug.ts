@@ -1,7 +1,7 @@
-import { AttachmentBuilder, ChatInputCommandInteraction, InteractionContextType, SlashCommandBuilder } from "discord.js";
+import { AttachmentBuilder, ChatInputCommandInteraction, EmbedBuilder, InteractionContextType, SlashCommandBuilder } from "discord.js";
 import { requireDebugAccess } from "../access.js";
 import { db } from "../db.js";
-import { CommandError, privateReply, throttle } from "./support.js";
+import { CommandError, privateReply, profileLink, shortText, throttle } from "./support.js";
 
 export const debugCommand = {
   data: new SlashCommandBuilder().setName("debug").setDescription("Export server links or inspect server status (requires the debug role)")
@@ -41,7 +41,25 @@ export const debugCommand = {
       const jobs = db.getQueueSummary(i.guildId);
       const settings = db.getDebugSettings(i.guildId)!;
       const history = db.history.getStatus(i.guildId), historySettings = db.history.getSettings(i.guildId);
-      await i.editReply({ content: `Current server members: **${members.size}**\nLinked members: **${links.length}**\nConfigured clans: **${db.getGuildConfigs(i.guildId).length}**\nRole queue: **${jobs.pending}** pending (**${jobs.retrying}** retrying)\nVerbose errors: **${settings.verbose_errors ? "on" : "off"}**\nEphemeral replies: **${settings.ephemeral_replies ? "on" : "off"}**\nHistory collection: **${historySettings.collection_enabled ? "on" : "off"}** · ${history.clanMatches} clan and ${history.playerMatches} player records\nElo observations: ${history.eloObservations} retained${history.eloError ? " · refresh unavailable; use clan doctor for details" : ""}\nHistory sources: ${history.pending} configured · ${history.failed} retrying\nWeekly recap: **${historySettings.weekly_enabled ? "on" : "off"}** (${historySettings.timezone})${history.lastCollectedAt ? `\nLast collection: <t:${Math.floor(Date.parse(history.lastCollectedAt) / 1000)}:R>` : "\nNo history collection completed yet."}${history.lastError ? "\nA history error needs attention; use the clan doctor action for details." : ""}`, allowedMentions: { parse: [] } });
+      const visible = links.slice(0, 15).map(link => `<@${link.discord_id}> · ${profileLink(link.openfront_id, link.openfront_username || link.openfront_id)}`);
+      const roster = new EmbedBuilder().setTitle("Linked members in this server")
+        .setDescription(visible.join("\n") || "No current server members are linked.");
+      const files: AttachmentBuilder[] = [];
+      if (links.length > visible.length) {
+        const lines = links.map(link => {
+          const member = members.get(link.discord_id)!;
+          const name = shortText(member.displayName.replace(/[\r\n]/g, " "), 80);
+          return `${name} (${link.discord_id}) · https://openfront.io/player/${encodeURIComponent(link.openfront_id)}`;
+        });
+        const data = Buffer.from(lines.join("\n") + "\n", "utf8");
+        if (data.length <= (i.attachmentSizeLimit ?? 8 * 1024 * 1024)) {
+          files.push(new AttachmentBuilder(data, { name: "linked-members.txt" }));
+          roster.setFooter({ text: `Showing ${visible.length} of ${links.length}. The full list is attached.` });
+        } else {
+          roster.setFooter({ text: `Showing ${visible.length} of ${links.length}. The full list exceeds the attachment limit.` });
+        }
+      }
+      await i.editReply({ content: `Current server members: **${members.size}**\nLinked members: **${links.length}**\nConfigured clans: **${db.getGuildConfigs(i.guildId).length}**\nRole queue: **${jobs.pending}** pending (**${jobs.retrying}** retrying)\nVerbose errors: **${settings.verbose_errors ? "on" : "off"}**\nEphemeral replies: **${settings.ephemeral_replies ? "on" : "off"}**\nHistory collection: **${historySettings.collection_enabled ? "on" : "off"}** · ${history.clanMatches} clan and ${history.playerMatches} player records\nElo observations: ${history.eloObservations} retained${history.eloError ? " · refresh unavailable; use clan doctor for details" : ""}\nHistory sources: ${history.pending} configured · ${history.failed} retrying\nWeekly recap: **${historySettings.weekly_enabled ? "on" : "off"}** (${historySettings.timezone})${history.lastCollectedAt ? `\nLast collection: <t:${Math.floor(Date.parse(history.lastCollectedAt) / 1000)}:R>` : "\nNo history collection completed yet."}${history.lastError ? "\nA history error needs attention; use the clan doctor action for details." : ""}`, embeds: [roster], ...(files.length ? { files } : {}), allowedMentions: { parse: [] } });
       return;
     }
     const data = {
