@@ -4,7 +4,7 @@ import { openfrontApi, type OpenFrontClanMembership } from "../api.js";
 import { ClanSyncService, GuildClanSyncResult } from "../clanSync.js";
 import { configSnapshot, newClanDraft, normalizeClanTag, validateClanDraft } from "../setupConfig.js";
 import { toEpochSeconds } from "../utils.js";
-import { affectedRoleMemberIds, desiredRoles } from "../roles.js";
+import { affectedRoleMemberIds, clanRoleMappingsChanged, desiredRoles } from "../roles.js";
 import { CommandError, identityBindingCurrent, identityLocks, label, pageOf, playerId, privateReply, commandReplyOptions, profileLink, sendEmbeds, shortText, throttle } from "./support.js";
 import { checkClanAccess, checkConfigAccess, requireClanAccess, requireConfigAccess } from "../access.js";
 import { configCommand } from "./config.js";
@@ -127,15 +127,13 @@ async function setup(i: GuildCommand) {
   draft.sync_interval_mins = i.options.getInteger("sync_interval") ?? draft.sync_interval_mins;
   const errors = await validateClanDraft(i.guild, draft);
   if (errors.length) throw new CommandError(errors.join("\n"));
-  const clan = await openfrontApi.getClanInfo(tag);
-  if (!clan) throw new CommandError("That OpenFront clan does not exist. Check the clan tag.");
-  const allMembers = await members(i.guild);
+  const allMembers = clanRoleMappingsChanged(previous, draft) ? await members(i.guild) : null;
   await requireClanAccess(i.guild, i.user.id);
   if (configSnapshot(db.getGuildClanConfig(i.guildId, tag)) !== snapshot) throw new CommandError("This clan configuration changed while setup was running. Run setup again.");
-  const affected = affectedRoleMemberIds(allMembers.values(), db.getEffectiveLinks(i.guildId), previous);
+  const affected = allMembers ? affectedRoleMemberIds(allMembers.values(), db.getEffectiveLinks(i.guildId), previous) : [];
   db.setGuildClanConfig({ ...draft, guild_id: i.guildId, last_sync_at: null }, affected);
   await sendEmbeds(i, [configEmbed({ ...draft, guild_id: i.guildId, last_sync_at: null }).setTitle(`Clan configured: [${tag}]`)
-    .setDescription(`Connected to **${label(clan.name)}**. Role updates are queued when existing mappings change.`)]);
+    .setDescription(affected.length ? "Saved. Role reconciliation is queued." : "Saved.")]);
 }
 
 async function remove(i: GuildCommand) {

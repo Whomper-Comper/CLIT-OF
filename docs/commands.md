@@ -190,9 +190,9 @@ No options. Opens a private, invoker-only server menu for 10 minutes. Manage Ser
 | Diagnostics | Doctor and link-coverage reports plus current reply/error settings |
 | Close | Ends the session |
 
-Clan editing groups settings into **General**, **Roles**, and **Logging**, with a visible saved/unsaved marker and explicit **Save**. Optional role/channel selectors can be cleared. Selecting or clearing a log destination confirms an unsaved draft change; no destination is persisted until Save. Back from a focused editor retains its draft; leaving the clan editor with Cancel discards it. Existing clan tags cannot be renamed in place. **Delete** opens a separate confirmation; **Confirm removal** queues obsolete-role cleanup and **Keep clan** returns to editing.
+Clan editing groups settings into **General**, **Roles**, and **Logging**. For an existing clan, a valid selection, clear, or interval submission saves immediately. For a new clan, enter the exact tag and select a member role, then choose **Create clan** once. **Cancel** discards the new draft. Creation and edits use Discord validation and work during OpenFront outages. **Delete** opens a separate confirmation. **Confirm removal** queues obsolete-role cleanup.
 
-If Discord rejects a draft redraw, that unsaved change is not retained invisibly. A successful database Save remains committed even if the following reply fails; recovery explains the saved outcome when Discord still accepts a private message. An expired interaction token can prevent every response: reopen `/config` and check the safe host-side config diagnostic rather than repeatedly clicking an old control.
+If Discord rejects a draft redraw, the previous draft stays in the session. A committed edit stays saved even if the following reply fails. Reopen `/config` to see the saved settings if the menu fails to refresh.
 
 History settings expose **Clan history**, **Player history / Elo**, **Collect**, **Weekly**, a destination text-channel selector and **Timing / retention**. They are drafts until **Save**. Timing bounds: collection every 5–1440 minutes, retention 14–365 days, weekly day 0 (Sunday) through 6 (Saturday), hour 0–23 and a valid IANA time zone. New-server defaults: clan/player history on, collection/weekly off, no channel, 15-minute polling, 90-day retention, Monday at 12:00 UTC. Enabling Weekly enables collection; disabling collection disables Weekly; clearing the destination disables Weekly. A selected recap channel must allow view/send/embed/read-history permissions even when validating a draft that has Weekly off.
 
@@ -226,7 +226,7 @@ Only supply options relevant to the chosen action. Optional inputs unrelated to 
 
 | `action` | Additional required inputs | Behavior and pagination |
 | --- | --- | --- |
-| `setup` | `clan_tag`, `member_role` | Create or replace configuration for that tag; validates mappings, permissions and clan existence |
+| `setup` | `clan_tag`, `member_role` | Create or replace configuration for that tag after validating tag format, Discord mappings and permissions |
 | `config` | None | Without tag/page: opens menu. With either: shows saved settings, 3 clans/page; optional tag filters |
 | `remove` | `clan_tag` | Removes configuration immediately and queues obsolete-role cleanup |
 | `sync` | None | Synchronizes selected clans, 10 clans/page; optional `clan_tag` and/or `user` |

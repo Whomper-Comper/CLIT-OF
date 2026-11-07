@@ -224,9 +224,9 @@ Buttons bind to the requester, guild/DM context, and original message. A concurr
 
 ### Current ratings and separate ladders
 
-The bot reads current public leaderboard entries from `/leaderboard/ranked?page=N` and matches the exact public ID. It keeps **1v1**, **2v2**, and **Ranked FFA** separate. Clan-war ratings are not player Elo.
+The bot reads current public leaderboard entries from `/public/leaderboard/ranked?page=N` and matches the exact public ID. It keeps **1v1**, **2v2**, and **Ranked FFA** separate. Clan-war ratings are not player Elo.
 
-The interactive lookup scans up to three pages by default and checks a ten-second budget between pages. Its API helper accepts a bounded one-to-five-page limit internally; that is not a slash-command setting. A missing bounded-search result is not zero Elo and does not prove the account is unranked.
+The interactive lookup scans at most the two public pages and checks a ten-second budget between pages. A missing result means the lookup has no rating to show for that ladder.
 
 Public leaderboard access can fail, including HTTP 403. In that case the bot explains that it cannot refresh and can still display retained observations. This repository implements the collector and error handling; this guide does not establish that a particular live host can access the endpoint.
 
@@ -295,7 +295,7 @@ Persistent jobs retain their date window, page/cursor, next attempt, attempts, a
 
 Player recap collection is restricted to public Team sessions whose recorded clan tag matches a configured clan. It does not continuously archive every private/singleplayer/FFA match that a member can inspect interactively in `/stats`.
 
-Leaderboard work shares one page across enabled servers and matches ratings by exact ID. It advances through up to 100 pages before restarting the scan. Success/failure progress persists; failures back off. A larger linked population and sparse leaderboard positions affect how long a full observation cycle takes.
+Leaderboard work shares one page across enabled servers and matches ratings by exact ID. It scans at most two pages before restarting. Progress persists and failures back off.
 
 ## Weekly recap setup and calculations
 

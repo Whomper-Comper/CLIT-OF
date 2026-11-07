@@ -36,7 +36,7 @@ for (const action of ['pending', 'roster', 'coverage', 'doctor']) test(`${action
   const ready = new Promise(resolve => { entered = resolve; });
   const waiting = new Promise(resolve => { release = resolve; });
   t.mock.method(openfrontApi, 'getPlayerProfile', async () => { entered(); await waiting; return { username: 'Player', clans: [{ tag: 'ABC', role: 'member' }] }; });
-  t.mock.method(openfrontApi, 'getClanInfo', async () => { entered(); await waiting; return { tag: 'ABC', memberCount: 10 }; });
+  t.mock.method(openfrontApi, 'getClanSessions', async () => { entered(); await waiting; return { results: [], total: 0, page: 1, limit: 1 }; });
   const sync = { getPendingJoinMembers: async () => { entered(); await waiting; return []; } };
   const pending = clanCommand.execute(f.i, sync);
   await ready;
@@ -47,10 +47,9 @@ for (const action of ['pending', 'roster', 'coverage', 'doctor']) test(`${action
 
 for (const action of ['coverage', 'doctor']) test(`${action} rejects a mapping edited during its API lookup`, async t => {
   const f = fixture(`mapping-${action}`, action);
-  t.mock.method(openfrontApi, 'getPlayerProfile', async () => ({ clans: [{ tag: 'ABC' }] }));
-  t.mock.method(openfrontApi, 'getClanInfo', async () => {
+  t.mock.method(openfrontApi, action === 'coverage' ? 'getPlayerProfile' : 'getClanSessions', async () => {
     db.setGuildClanConfig({ ...db.getGuildClanConfig(f.guildId, 'ABC'), member_role_id: 'replacement' });
-    return { tag: 'ABC', memberCount: 10 };
+    return action === 'coverage' ? { clans: [] } : { results: [], total: 0, page: 1, limit: 1 };
   });
   await assert.rejects(clanCommand.execute(f.i, {}), /settings|configuration changed/i);
   assert.equal(f.i.output, undefined);
@@ -72,7 +71,6 @@ for (const change of ['identity', 'departure']) test(`coverage rejects ${change}
     return fetch(request);
   };
   t.mock.method(openfrontApi, 'getPlayerProfile', async () => ({ clans: [{ tag: 'ABC' }] }));
-  t.mock.method(openfrontApi, 'getClanInfo', async () => ({ tag: 'ABC', memberCount: 10 }));
   await assert.rejects(clanCommand.execute(f.i, {}), /membership|identit.*changed/i);
   assert.equal(f.i.output, undefined);
 });
@@ -92,7 +90,6 @@ test('coverage rejects an identity unlinked between rendering and the caller res
     return fetch(request);
   };
   t.mock.method(openfrontApi, 'getPlayerProfile', async () => ({ clans: [{ tag: 'ABC' }] }));
-  t.mock.method(openfrontApi, 'getClanInfo', async () => ({ tag: 'ABC', memberCount: 10 }));
   await assert.rejects(clanCommand.execute(f.i, {}), /identit.*changed/i);
   assert.equal(db.getEffectiveLink(f.guildId, f.user), null);
   assert.equal(f.i.output, undefined, 'coverage rendered before unlink must not be released');
@@ -107,12 +104,11 @@ test('coverage ignores identity changes for people outside the server during fin
     return fetch(request);
   };
   t.mock.method(openfrontApi, 'getPlayerProfile', async () => ({ clans: [{ tag: 'ABC' }] }));
-  t.mock.method(openfrontApi, 'getClanInfo', async () => ({ tag: 'ABC', memberCount: 10 }));
   await clanCommand.execute(f.i, {});
   assert.match(f.i.output.embeds[0].toJSON().fields.find(field => field.name === 'Discord Members Linked').value, /^1 \/ 1/);
 });
 
-for (const change of ['unlink', 'reverify', 'replace', 'departure', 'new-link']) test(`coverage recalculates current checks after ${change} during clan totals lookup`, async t => {
+for (const change of ['unlink', 'reverify', 'replace', 'departure', 'new-link']) test(`coverage recalculates current checks after ${change} during the profile lookup`, async t => {
   const f = fixture(`coverage-${change}`, 'coverage');
   const additional = { id: 'additional', user: { bot: false } };
   let currentMembers = new Map([[f.user, f.person], ['additional', additional]]);
@@ -120,14 +116,13 @@ for (const change of ['unlink', 'reverify', 'replace', 'departure', 'new-link'])
     f.i.guild.members.cache = currentMembers;
     return currentMembers;
   };
-  t.mock.method(openfrontApi, 'getPlayerProfile', async () => ({ clans: [{ tag: 'ABC' }] }));
-  t.mock.method(openfrontApi, 'getClanInfo', async () => {
+  t.mock.method(openfrontApi, 'getPlayerProfile', async () => {
     if (change === 'unlink') db.unlinkGuildUser(f.guildId, 'manager', f.user);
     if (change === 'reverify' || change === 'replace') db.linkGuildUser(f.guildId, 'manager', f.user,
       change === 'replace' ? 'replacement-account' : `acct-coverage-${change}`, 'Player');
     if (change === 'departure') currentMembers = new Map([['additional', additional]]);
     if (change === 'new-link') db.linkGuildUser(f.guildId, 'manager', 'additional', 'additional-account', 'New');
-    return { tag: 'ABC', memberCount: 10 };
+    return { clans: [{ tag: 'ABC' }] };
   });
   const { embeds: [embed] } = await buildCoverageReport(f.i.guild, db.getGuildConfigs(f.guildId));
   const fields = embed.toJSON().fields;
@@ -137,12 +132,12 @@ for (const change of ['unlink', 'reverify', 'replace', 'departure', 'new-link'])
   if (change === 'unlink' || change === 'departure') {
     assert.match(linked, change === 'unlink' ? /^0 \/ 2/ : /^0 \/ 1/);
     assert.match(checks, /^0 profiles checked successfully out of 0/);
-    assert.match(clan, /At least 0 \/ 10/);
+    assert.match(clan, /0 confirmed linked here/);
   } else {
     assert.match(linked, change === 'new-link' ? /^2 \/ 2/ : /^1 \/ 2/);
     assert.match(checks, change === 'new-link' ? /^1 profiles checked successfully out of 2/ : /^0 profiles checked successfully out of 1/);
     assert.match(checks, /1 not checked.*counts are partial/);
-    assert.match(clan, change === 'new-link' ? /At least 1 \/ 10/ : /At least 0 \/ 10/);
+    assert.match(clan, change === 'new-link' ? /1 confirmed linked here/ : /0 confirmed linked here/);
   }
 });
 
@@ -151,7 +146,6 @@ test('coverage fails closed when the final member refresh fails', async t => {
   let calls = 0;
   f.i.guild.members.fetch = async () => { if (++calls > 1) throw new Error('unavailable'); return new Map([[f.user, f.person]]); };
   t.mock.method(openfrontApi, 'getPlayerProfile', async () => ({ clans: [] }));
-  t.mock.method(openfrontApi, 'getClanInfo', async () => ({ tag: 'ABC', memberCount: 10 }));
   await assert.rejects(buildCoverageReport(f.i.guild, db.getGuildConfigs(f.guildId)), /Could not load all server members/);
 });
 

@@ -19,12 +19,12 @@ export interface OpenFrontPlayerProfile {
   /** Kept as received: older responses can omit statistics or return null. */
   stats?: unknown;
 }
-export interface OpenFrontClanInfo {
-  name: string; tag: string; description: string; memberCount?: number; isOpen?: boolean;
-}
+export const RANKED_LEADERBOARD_MAX_PAGE = 2;
 export class OpenFrontApiError extends Error {
   constructor(public reason: "timeout" | "network" | "http" | "invalid_response" | "busy" | "queue_timeout" = "invalid_response", public status?: number) {
-    super("OpenFront is temporarily unavailable or returned an invalid response. Please try again later.");
+    super(status === 429 ? "OpenFront is rate limiting requests. Please wait before trying again."
+      : status === 400 ? "OpenFront rejected the request (HTTP 400). If it persists, report the command to a bot maintainer."
+      : "OpenFront is temporarily unavailable or returned an invalid response. Please try again later.");
   }
 }
 const object = (data: unknown): data is Record<string, unknown> => typeof data === "object" && data !== null && !Array.isArray(data);
@@ -115,6 +115,7 @@ export class OpenFrontApi {
   private maxActiveRequests: number;
   private maxQueuedRequests: number;
   private queueTimeoutMs: number;
+  private rateLimitedUntil = -Infinity;
   constructor(baseUrl = CONFIG.OPENFRONT_API_BASE, options: ApiOptions = {}) {
     this.base = baseUrl.replace(/\/+$/, "");
     this.cacheTtlMs = Math.max(0, options.cacheTtlMs ?? 15_000);
@@ -204,12 +205,21 @@ export class OpenFrontApi {
   }
 
   private async request(endpoint: string, options: RequestInit = {}): Promise<Response> {
+    if (this.now() < this.rateLimitedUntil) throw new OpenFrontApiError("http", 429);
+    let response: Response;
     try {
-      return await fetch(`${this.base}${endpoint}`, { ...options,
+      response = await fetch(`${this.base}${endpoint}`, { ...options,
         headers: { Accept: "application/json", ...options.headers }, signal: AbortSignal.timeout(15_000) });
     } catch (error) {
       throw new OpenFrontApiError(isTimeout(error) ? "timeout" : "network");
     }
+    if (response.status === 429) {
+      const now = this.now();
+      const retryAfter = response.headers?.get("Retry-After")?.trim() ?? "";
+      const deadline = /^\d+$/.test(retryAfter) ? now + Number(retryAfter) * 1000 : Date.parse(retryAfter);
+      this.rateLimitedUntil = Math.max(this.rateLimitedUntil, Number.isSafeInteger(deadline) && deadline > now ? deadline : now + 30_000);
+    }
+    return response;
   }
   private async json(response: Response): Promise<unknown> {
     if (!response.ok) {
@@ -240,20 +250,6 @@ export class OpenFrontApi {
     return data as unknown as OpenFrontPlayerProfile;
   }
 
-  async getClanInfo(tag: string, options: PublicReadOptions = {}): Promise<OpenFrontClanInfo | null> {
-    const endpoint = `/public/clan/${encodeURIComponent(tag.trim().toUpperCase())}`;
-    return this.publicRead(endpoint, () => this.loadClanInfo(endpoint), options);
-  }
-
-  private async loadClanInfo(endpoint: string): Promise<OpenFrontClanInfo | null> {
-    const response = await this.request(endpoint);
-    if (response.status === 404) { await this.discard(response); return null; }
-    const data = await this.json(response);
-    if (!object(data) || typeof data.name !== "string" || typeof data.tag !== "string" || typeof data.description !== "string" ||
-      (data.memberCount !== undefined && (typeof data.memberCount !== "number" || !Number.isSafeInteger(data.memberCount) || data.memberCount < 0))) throw new OpenFrontApiError();
-    return data as unknown as OpenFrontClanInfo;
-  }
-
   async getPlayerGames(publicId: string, query: OpenFrontPlayerGamesQuery = {}, options: PublicReadOptions = {}): Promise<OpenFrontPlayerGamesPage | null> {
     const params = historyQuery(query);
     const endpoint = `/public/player/${encodeURIComponent(publicId.trim())}/games${params.size ? `?${params}` : ""}`;
@@ -262,10 +258,10 @@ export class OpenFrontApi {
     })), options);
   }
 
-  /** Source: OpenFront's client fetchPlayerLeaderboard and RankedLeaderboardResponseSchema. */
+  /** The public API exposes two pages of the ranked leaderboard. */
   async getRankedLeaderboardPage(page = 1, options: PublicReadOptions = {}): Promise<OpenFrontRankedLeaderboardPage> {
-    if (!Number.isSafeInteger(page) || page < 1 || page > 200) throw new RangeError("Leaderboard page must be 1–200.");
-    const endpoint = `/leaderboard/ranked?page=${page}`;
+    if (!Number.isSafeInteger(page) || page < 1 || page > RANKED_LEADERBOARD_MAX_PAGE) throw new RangeError("Leaderboard page must be 1 or 2.");
+    const endpoint = `/public/leaderboard/ranked?page=${page}`;
     return this.publicRead(endpoint, async () => {
       const response = await this.request(endpoint);
       if (response.status === 400) {
@@ -283,9 +279,7 @@ export class OpenFrontApi {
           typeof row.public_id !== "string" || !/^[A-Za-z0-9_-]{1,22}$/.test(row.public_id) ||
           typeof row.elo !== "number" || !Number.isFinite(row.elo) ||
           typeof row.rank !== "number" || !Number.isSafeInteger(row.rank) || row.rank < 1)) throw new OpenFrontApiError();
-        // The public client loads 50 entries per ladder/page. A full ladder
-        // may have another page; an empty next page safely terminates it.
-        hasMore ||= rows.length >= 50;
+        hasMore ||= page < RANKED_LEADERBOARD_MAX_PAGE && rows.length >= 50;
         for (const row of rows) ratings.push({ publicId: row.public_id, ladder, rating: row.elo, rank: row.rank });
       }
       return { ratings, hasMore, observedAt: new Date(this.now()).toISOString() };
@@ -306,12 +300,12 @@ export class OpenFrontApi {
   async getPlayerRatings(publicId: string, options: { maxPages?: number; fresh?: boolean } = {}): Promise<OpenFrontPlayerRatings> {
     const id = publicId.trim();
     if (!/^[A-Za-z0-9_-]{1,22}$/.test(id)) throw new RangeError("Invalid OpenFront player ID.");
-    const maxPages = options.maxPages ?? 3;
+    const maxPages = options.maxPages ?? RANKED_LEADERBOARD_MAX_PAGE;
     if (!Number.isInteger(maxPages) || maxPages < 1 || maxPages > 5) throw new RangeError("Player rating scan must use 1–5 pages.");
     const found = new Map<OpenFrontPlayerLadder, OpenFrontPlayerRatings["ratings"][number]>();
     let complete = false, pages = 0, observedAt = new Date(this.now()).toISOString();
     const started = Date.now();
-    for (let page = 1; page <= maxPages; page++) {
+    for (let page = 1; page <= Math.min(maxPages, RANKED_LEADERBOARD_MAX_PAGE); page++) {
       if (page > 1 && Date.now() - started >= 10_000) break;
       let response: OpenFrontRankedLeaderboardPage;
       try { response = await this.getRankedLeaderboardPage(page, { fresh: options.fresh }); }

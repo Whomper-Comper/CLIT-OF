@@ -13,7 +13,6 @@ after(() => db.close());
 
 const response = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
 const profile = (overrides = {}) => ({ createdAt: "2025-01-01T00:00:00.000Z", username: "Player", clans: [], ...overrides });
-const clan = (overrides = {}) => ({ tag: "TEST", name: "Test Clan", description: "", memberCount: 20, ...overrides });
 const leaf = (wins, losses, stats = {}) => ({ wins: String(wins), losses: String(losses), total: String(BigInt(wins) + BigInt(losses)), stats });
 const config = (overrides = {}) => ({ guild_id: "guild", clan_tag: "TEST", member_role_id: "member", officer_role_id: null,
   leader_role_id: null, join_role_id: null, log_channel_id: null, sync_interval_mins: 10, last_sync_at: null, ...overrides });
@@ -133,14 +132,15 @@ test("older reads cannot replace a later generation after another fresh request"
   assert.equal((await api.getPlayerProfile("player")).username, "value-3");
 });
 
-test("clan reads share canonical tags, enforce bounded cache, and retry errors", async (t) => {
+test("clan session reads share canonical tags, enforce bounded cache, and retry errors", async (t) => {
   let calls = 0;
-  t.mock.method(globalThis, "fetch", async () => { calls++; return response(clan()); });
+  const query = { start: "2026-10-15T00:00:00Z", end: "2026-10-16T00:00:00Z", limit: 1 };
+  t.mock.method(globalThis, "fetch", async url => { calls++; return response(url.includes("/sessions") ? { results: [], total: 0, page: 1, limit: 1 } : profile()); });
   const api = new OpenFrontApi("https://example.invalid", { maxCacheEntries: 1 });
-  await Promise.all([api.getClanInfo("test"), api.getClanInfo(" TEST ")]);
+  await Promise.all([api.getClanSessions("test", query), api.getClanSessions(" TEST ", query)]);
   assert.equal(calls, 1);
   await api.getPlayerProfile("player");
-  await api.getClanInfo("test");
+  await api.getClanSessions("test", query);
   assert.equal(calls, 3);
   t.mock.method(globalThis, "fetch", async () => response({}, 503));
   await assert.rejects(api.getPlayerProfile("retry"), OpenFrontApiError);
@@ -165,14 +165,16 @@ test("identity validation always sends fresh POSTs and keeps null statistics unc
   assert.equal((await api.getPlayerProfile("player")).stats, null);
 });
 
-test("array profiles and malformed clan sizes are rejected without populating caches", async (t) => {
+test("array profiles and malformed clan session pages are rejected without populating caches", async (t) => {
   t.mock.method(globalThis, "fetch", async () => response([]));
   const api = new OpenFrontApi("https://example.invalid");
   await assert.rejects(api.getPlayerProfile("player"), OpenFrontApiError);
-  t.mock.method(globalThis, "fetch", async () => response(clan({ memberCount: -1 })));
-  await assert.rejects(api.getClanInfo("test"), OpenFrontApiError);
-  t.mock.method(globalThis, "fetch", async () => response(clan()));
-  assert.equal((await api.getClanInfo("test")).memberCount, 20);
+  const query = { start: "2026-10-15T00:00:00Z", end: "2026-10-16T00:00:00Z", limit: 1 };
+  const empty = { results: [], total: 0, page: 1, limit: 1 };
+  t.mock.method(globalThis, "fetch", async () => response({ ...empty, total: -1 }));
+  await assert.rejects(api.getClanSessions("test", query), OpenFrontApiError);
+  t.mock.method(globalThis, "fetch", async () => response(empty));
+  assert.deepEqual(await api.getClanSessions("test", query), empty);
 });
 
 test("OpenFront stats sum disjoint buckets without counting recent windows or MIRV submunitions twice", () => {
@@ -225,19 +227,20 @@ test("graph columns align with zero, missing, partial and very large counts", as
   assert.ok(chart.length < 1024);
 });
 
-test("coverage counts current Discord humans and describes clan figures as a lower bound", async (t) => {
+test("coverage counts current Discord humans without requesting clan totals", async (t) => {
   const members = new Map([["linked", { id: "linked", user: { bot: false } }], ["unlinked", { id: "unlinked", user: { bot: false } }], ["bot", { id: "bot", user: { bot: true } }]]);
   t.mock.method(db, "getEffectiveLinks", () => [{ discord_id: "linked", openfront_id: "player" }, { discord_id: "bot", openfront_id: "robot" }, { discord_id: "another-server", openfront_id: "private" }]);
   t.mock.method(openfrontApi, "getPlayerProfile", async (id) => {
     assert.equal(id, "player");
     return profile({ clans: [{ tag: "test" }] });
   });
-  t.mock.method(openfrontApi, "getClanInfo", async () => clan());
+  const upstream = t.mock.method(globalThis, "fetch", async () => { throw new Error("Unexpected OpenFront request"); });
   const { embeds: [embed], assertCurrent } = await buildCoverageReport({ id: "guild", members: { cache: members, fetch: async () => members } }, [config()]);
   assertCurrent();
+  assert.equal(upstream.mock.callCount(), 0);
   const fields = embed.toJSON().fields;
   assert.match(fields.find((field) => field.name === "Discord Members Linked").value, /1 \/ 2 \(50.0%\)/);
-  assert.match(fields.find((field) => field.name.includes("Clan Members Linked")).value, /At least 1 \/ 20 \(5.0%\)/);
+  assert.match(fields.find((field) => field.name.includes("Clan Members Linked")).value, /1 confirmed linked here.*Full clan size is unavailable/);
   assert.match(embed.toJSON().description, /outside this Discord server are not checked/);
 });
 
@@ -245,7 +248,6 @@ test("coverage reports API failures as incomplete membership checks", async (t) 
   const members = new Map([["linked", { id: "linked", user: { bot: false } }]]);
   t.mock.method(db, "getEffectiveLinks", () => [{ discord_id: "linked", openfront_id: "player" }]);
   t.mock.method(openfrontApi, "getPlayerProfile", async () => { throw new OpenFrontApiError(); });
-  t.mock.method(openfrontApi, "getClanInfo", async () => clan());
   const { embeds: [embed], assertCurrent } = await buildCoverageReport({ id: "guild", members: { cache: members, fetch: async () => members } }, [config()]);
   assertCurrent();
   assert.match(embed.toJSON().fields.find((field) => field.name === "Current Clan Membership Checks").value, /1 unavailable.*counts are partial/);
@@ -255,13 +257,20 @@ test("coverage reports API failures as incomplete membership checks", async (t) 
 test("doctor checks live hierarchy, deleted log channels, uncached API, and retry backlog", async (t) => {
   const roles = new Map([["member", { id: "member", managed: false }], ["manager", { id: "manager", managed: false }]]);
   const guild = { id: "guild", roles: { fetch: async () => roles }, members: { fetchMe: async () => ({ permissions: { has: () => true }, roles: { highest: { comparePositionTo: () => -1 } } }) }, channels: { fetch: async () => null } };
-  t.mock.method(openfrontApi, "getClanInfo", async (_tag, options) => { assert.equal(options.fresh, true); return clan(); });
-  const [embed] = await buildDoctorEmbeds(guild, [config({ log_channel_id: "deleted" })], { accessRoleId: "manager", jobs: { pending: 2, retrying: 1, oldestAvailableAt: Date.now() - 60 * 60_000, lastError: "Missing Permissions" } });
+  const probe = t.mock.method(openfrontApi, "getClanSessions", async (tag, query, options) => {
+    assert.equal(tag, "TEST");
+    assert.equal(query.limit, 1);
+    assert.equal(Date.parse(query.end) - Date.parse(query.start), 86_400_000);
+    assert.equal(options.fresh, true);
+    return { results: [], total: 0, page: 1, limit: 1 };
+  });
+  const [embed] = await buildDoctorEmbeds(guild, [config({ log_channel_id: "deleted" }), config({ clan_tag: "NEXT" })], { accessRoleId: "manager", jobs: { pending: 2, retrying: 1, oldestAvailableAt: Date.now() - 60 * 60_000, lastError: "Missing Permissions" } });
   assert.match(embed.toJSON().description, /2 pending; 1 retrying/);
   assert.match(embed.toJSON().description, /over 15 minutes/);
   assert.match(embed.toJSON().fields[0].value, /above the member role/);
   assert.match(embed.toJSON().fields[0].value, /log channel was deleted/);
-  assert.match(embed.toJSON().fields[0].value, /API is reachable/);
+  assert.match(embed.toJSON().description, /public clan sessions endpoint is reachable/);
+  assert.equal(probe.mock.callCount(), 1);
   assert.equal(embed.toJSON().color, 0xf59e0b);
 });
 

@@ -6,13 +6,13 @@ import {
 } from "discord.js";
 import { db } from "../db.js";
 import { hasConfigAccess, requireConfigAccess } from "../access.js";
-import { OpenFrontApiError, openfrontApi } from "../api.js";
+import { OpenFrontApiError } from "../api.js";
 import { ClanDraft, clanDraft, configSnapshot, newClanDraft, normalizeClanTag, validateClanDraft } from "../setupConfig.js";
 import { CommandError, label, privateReply, shortText, throttle } from "./support.js";
 import { buildCoverageReport, buildDoctorEmbeds, reportSettingsGuard } from "../reporting.js";
 import { commandErrorMessage } from "./errorMessages.js";
 import { HistorySettings } from "../historyStore.js";
-import { affectedRoleMemberIds } from "../roles.js";
+import { affectedRoleMemberIds, clanRoleMappingsChanged } from "../roles.js";
 import { ExpiringSessions } from "../expiringSessions.js";
 
 type Screen = "home" | "clans" | "access_page" | "diagnostics" | "draft" | "roles" | "logs" | "confirm" | "history";
@@ -20,7 +20,7 @@ interface Session {
   id: string; user: string; guild: string; expires: number; page: number; screen: Screen;
   draft: ClanDraft | null; tag: string | null; snapshot: string; accessRevision: number; debugRevision: number;
   historyDraft: Omit<HistorySettings, "guild_id" | "revision">; historyRevision: number;
-  dirty?: boolean; historyDirty?: boolean; busy?: boolean;
+  historyDirty?: boolean; busy?: boolean;
 }
 const sessions = new ExpiringSessions<Session>(200, session => session.expires);
 const prefix = "clit-config:";
@@ -28,6 +28,11 @@ const lifetime = 10 * 60_000;
 const button = (s: Session, action: string, text: string, style = ButtonStyle.Secondary) =>
   new ButtonBuilder().setCustomId(`${prefix}${s.id}:${action}`).setLabel(text).setStyle(style);
 const row = (...buttons: ButtonBuilder[]) => new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
+const clanEditId = (s: Session, action: string) => `${prefix}${s.id}:${action}:${s.tag ?? "new"}`;
+const clanRoles = [
+  ["member_role_id", "Member role", true], ["officer_role_id", "Officer role", false],
+  ["leader_role_id", "Leader role", false], ["join_role_id", "Approval role", false],
+] as const;
 
 export const configCommand = {
   data: new SlashCommandBuilder().setName("config").setDescription("Open server configuration (Manage Server permission or config role)")
@@ -69,7 +74,7 @@ function render(s: Session, allowed: boolean, notice = "") {
   if (!allowed || s.screen === "home") {
     const configs = db.getGuildConfigs(s.guild);
     const jobs = db.getQueueSummary(s.guild);
-    embed.setDescription(`Choose a settings page. Clan and history changes require Save.${notice ? `\n\n${notice}` : ""}`)
+    embed.setDescription(`Choose a settings page. Existing clan settings save immediately.${notice ? `\n\n${notice}` : ""}`)
       .addFields({ name: "Server summary", value: `**Configured clans:** ${configs.length}\n**Role jobs:** ${jobs.pending} queued (${jobs.retrying} retrying)` });
     components.push(row(button(s, "clans", "Clans", ButtonStyle.Primary), button(s, "access_page", "Access"),
       button(s, "history", "History & recaps"), button(s, "diagnostics", "Diagnostics")));
@@ -98,7 +103,7 @@ function render(s: Session, allowed: boolean, notice = "") {
     const pages = Math.max(1, Math.ceil(configs.length / 25));
     s.page = Math.min(s.page, pages - 1);
     const choices = configs.slice(s.page * 25, (s.page + 1) * 25);
-    embed.setTitle("Clan configuration").setDescription(`Choose a clan to edit, or create one. Changes require Save.${notice ? `\n\n${notice}` : ""}`);
+    embed.setTitle("Clan configuration").setDescription(`Choose a clan to edit, or create one. Edits to existing clans save immediately.${notice ? `\n\n${notice}` : ""}`);
     if (choices.length) components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder()
       .setCustomId(`${prefix}${s.id}:clan`).setPlaceholder(`Edit a clan · page ${s.page + 1}/${pages}`)
       .addOptions(choices.map((c) => ({ label: shortText(`[${c.clan_tag}]`, 100), value: c.clan_tag, description: `Sync every ${c.sync_interval_mins} minutes` })))));
@@ -132,34 +137,36 @@ function render(s: Session, allowed: boolean, notice = "") {
   } else if (s.draft) {
     const d = s.draft;
     const role = (id: string | null) => id ? `<@&${id}>` : "Not selected";
+    const navigation = (back: "draft" | "clans") => s.tag ? row(button(s, back, "Back"))
+      : row(button(s, back, "Back"), button(s, "save", "Create clan", ButtonStyle.Success), button(s, "cancel", "Cancel"));
     embed.setTitle(`Clan settings · ${s.screen === "roles" ? "Roles" : s.screen === "logs" ? "Logging" : "General"}`)
-      .setDescription(`**Draft clan:** ${label(d.clan_tag) || "New clan"}\n**Status:** ${s.dirty ? "Unsaved changes" : "Saved settings"}\n\n${notice || "Changes are saved only when you choose Save."}`)
+      .setDescription(`**Clan:** ${label(d.clan_tag) || "New clan"}\n**Status:** ${s.tag ? "Saved settings" : "New clan draft"}\n\n${notice || (s.tag ? "Changes save immediately." : "Enter the exact OpenFront tag and choose a member role, then select Create clan.")}`)
       .addFields(
         { name: "Clan roles", value: `**Member:** ${role(d.member_role_id)}\n**Officer:** ${role(d.officer_role_id)}\n**Leader:** ${role(d.leader_role_id)}`, inline: true },
         { name: "Approval and logging", value: `**Approval:** ${role(d.join_role_id)}\n**Logs:** ${d.log_channel_id ? `<#${d.log_channel_id}>` : "Off"}`, inline: true },
         { name: "Role synchronization", value: `**Sync interval:** ${d.sync_interval_mins} minutes`, inline: true },
       );
     if (s.screen === "roles") {
-      for (const [field, title, required] of [["member_role_id", "Member role", true], ["officer_role_id", "Officer role", false], ["leader_role_id", "Leader role", false], ["join_role_id", "Approval role", false]] as const) {
-        const select = new RoleSelectMenuBuilder().setCustomId(`${prefix}${s.id}:${field}`).setPlaceholder(title)
+      for (const [field, title, required] of clanRoles) {
+        const select = new RoleSelectMenuBuilder().setCustomId(clanEditId(s, field)).setPlaceholder(title)
           .setMinValues(required ? 1 : 0).setMaxValues(1);
         if (d[field]) select.setDefaultRoles(d[field]!);
         components.push(new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(select));
       }
-      components.push(row(button(s, "draft", "Back"), button(s, "save", "Save", ButtonStyle.Success), button(s, "cancel", "Cancel")));
+      components.push(navigation("draft"));
     } else if (s.screen === "logs") {
-      const select = new ChannelSelectMenuBuilder().setCustomId(`${prefix}${s.id}:log_channel_id`).setPlaceholder("Optional log channel")
+      const select = new ChannelSelectMenuBuilder().setCustomId(clanEditId(s, "log_channel_id")).setPlaceholder("Optional log channel")
         .setChannelTypes(ChannelType.GuildText).setMinValues(0).setMaxValues(1);
       if (d.log_channel_id) select.setDefaultChannels(d.log_channel_id);
       components.push(new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(select));
-      components.push(row(button(s, "draft", "Back"), button(s, "save", "Save", ButtonStyle.Success), button(s, "cancel", "Cancel")));
+      components.push(navigation("draft"));
     } else if (s.screen === "confirm") {
       embed.setColor(0xef4444).setFields([]).setDescription(`Remove **[${label(d.clan_tag)}]** from this server? Obsolete roles will be queued for cleanup.`);
       components.push(row(button(s, "remove", "Confirm removal", ButtonStyle.Danger), button(s, "draft", "Keep clan")));
     } else {
       components.push(row(button(s, "basics", "Tag / sync interval", ButtonStyle.Primary), button(s, "roles", "Roles"),
         button(s, "logs", "Logging"), button(s, "delete", "Delete", ButtonStyle.Danger).setDisabled(!s.tag)));
-      components.push(row(button(s, "clans", "Back"), button(s, "save", "Save", ButtonStyle.Success), button(s, "cancel", "Cancel")));
+      components.push(navigation("clans"));
     }
   }
   return { content: null, embeds: [embed], components, allowedMentions: { parse: [] as never[] } };
@@ -171,7 +178,7 @@ export async function handleConfigInteraction(i: Interaction): Promise<boolean> 
   let stage = "session";
   let committed = false;
   const started = Date.now();
-  const [id, action] = i.customId.slice(prefix.length).split(":");
+  const [id, action, clanTarget] = i.customId.slice(prefix.length).split(":");
   try {
     if (!i.inCachedGuild()) throw new CommandError("This menu is only available in its original server.");
     const stored = sessions.get(id);
@@ -199,8 +206,8 @@ export async function handleConfigInteraction(i: Interaction): Promise<boolean> 
     if (action === "basics" && i.isButton() && s.draft) {
       const role = db.getGuildSettings(i.guildId)?.manager_role_id;
       if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild) && !(role && i.member.roles.cache.has(role))) throw new CommandError("You need Manage Server permission or the config role.");
-      // Opening a form changes no persistent state. Submission and Save refresh permissions.
-      const modal = new ModalBuilder().setCustomId(`${prefix}${s.id}:details`).setTitle("Clan settings");
+      // Opening a form changes no persistent state. Submission refreshes permissions.
+      const modal = new ModalBuilder().setCustomId(clanEditId(s, "details")).setTitle("Clan settings");
       if (!s.tag) {
         const tag = new TextInputBuilder().setCustomId("tag").setLabel("OpenFront clan tag (2–5 letters or numbers)")
           .setStyle(TextInputStyle.Short).setMinLength(2).setMaxLength(5);
@@ -236,6 +243,34 @@ export async function handleConfigInteraction(i: Interaction): Promise<boolean> 
     ensureLive(stored);
     stage = "action";
     let notice = "";
+    const roleField = clanRoles.find(([field]) => field === action)?.[0];
+    if ((roleField || action === "details" || action === "log_channel_id") && (!s.draft || clanTarget !== (s.tag ?? "new"))) {
+      throw new CommandError("The selected clan changed. Reopen its settings before editing.");
+    }
+    const saveClan = async (draft: ClanDraft) => {
+      const readCurrent = () => {
+        const current = db.getGuildClanConfig(i.guildId, draft.clan_tag);
+        if (configSnapshot(current) !== s.snapshot) throw new CommandError("This clan changed in another session. Reopen it before saving.");
+        return current;
+      };
+      const old = readCurrent();
+      const next = { ...draft, guild_id: i.guildId, last_sync_at: null };
+      const snapshot = configSnapshot(next);
+      if (snapshot === s.snapshot) return "Settings are already saved.";
+      const errors = await validateClanDraft(i.guild, draft);
+      if (errors.length) throw new CommandError(errors.join("\n"));
+      const all = clanRoleMappingsChanged(old, draft) ? await i.guild.members.fetch() : null;
+      await requireConfigAccess(i.guild, i.user.id);
+      ensureLive(stored);
+      readCurrent();
+      const affected = all ? affectedRoleMemberIds(all.values(), db.getEffectiveLinks(i.guildId), old) : [];
+      db.setGuildClanConfig(next, affected);
+      if (!s.tag) s.screen = "draft";
+      s.tag = draft.clan_tag;
+      s.snapshot = snapshot;
+      commit();
+      return affected.length ? "Saved. Role reconciliation is queued." : "Saved.";
+    };
     if (action === "debug_access" && i.isRoleSelectMenu()) {
       const selected = i.values[0] ?? null;
       if (selected) {
@@ -266,7 +301,7 @@ export async function handleConfigInteraction(i: Interaction): Promise<boolean> 
     if (action === "clan" && i.isStringSelectMenu()) {
       const c = db.getGuildClanConfig(i.guildId, i.values[0]);
       if (!c) throw new CommandError("That clan was removed. Open the menu again.");
-      s.draft = clanDraft(c); s.tag = c.clan_tag; s.snapshot = configSnapshot(c); s.screen = "draft"; s.dirty = false;
+      s.draft = clanDraft(c); s.tag = c.clan_tag; s.snapshot = configSnapshot(c); s.screen = "draft";
     } else if (action === "history") {
       const { guild_id: _guild, revision, ...draft } = db.history.getSettings(i.guildId);
       s.historyDraft = draft; s.historyRevision = revision; s.screen = "history"; s.historyDirty = false;
@@ -308,7 +343,7 @@ export async function handleConfigInteraction(i: Interaction): Promise<boolean> 
       commit();
       await redraw("History settings saved. Automatic collection and recaps use these settings."); return true;
     } else if (action === "new") {
-      s.draft = newClanDraft(); s.tag = null; s.snapshot = "null"; s.screen = "draft"; s.dirty = true;
+      s.draft = newClanDraft(); s.tag = null; s.snapshot = "null"; s.screen = "draft";
     } else if (["home", "clans", "access_page", "diagnostics", "cancel", "history_cancel"].includes(action)) {
       s.screen = action === "cancel" ? "clans" : action === "history_cancel" ? "home" : action as Screen;
       s.draft = null;
@@ -318,32 +353,19 @@ export async function handleConfigInteraction(i: Interaction): Promise<boolean> 
     else if (["roles", "logs", "draft"].includes(action)) s.screen = action as Screen;
     else if (action === "delete" && s.tag) s.screen = "confirm";
     else if (action === "details" && i.isModalSubmit() && s.draft) {
-      s.dirty = true;
       if (!s.tag) s.draft.clan_tag = normalizeClanTag(i.fields.getTextInputValue("tag"));
       s.draft.sync_interval_mins = Number(i.fields.getTextInputValue("interval"));
       s.screen = "draft";
-    } else if (i.isRoleSelectMenu() && s.draft && ["member_role_id", "officer_role_id", "leader_role_id", "join_role_id"].includes(action)) {
-      s.dirty = true;
-      (s.draft as unknown as Record<string, string | null>)[action] = i.values[0] ?? null;
+      if (s.tag) notice = await saveClan(s.draft);
+    } else if (i.isRoleSelectMenu() && s.draft && roleField) {
+      if (roleField === "member_role_id") s.draft.member_role_id = i.values[0] ?? "";
+      else s.draft[roleField] = i.values[0] ?? null;
+      if (s.tag) notice = await saveClan(s.draft);
     } else if (action === "log_channel_id" && i.isChannelSelectMenu() && s.draft) {
-      s.draft.log_channel_id = i.values[0] ?? null; s.dirty = true;
-      notice = s.draft.log_channel_id ? "Log channel selected (unsaved). Choose Save to apply." : "Log channel cleared (unsaved). Choose Save to apply.";
-    } else if (action === "save" && s.draft) {
-      const draft = { ...s.draft };
-      const errors = await validateClanDraft(i.guild, draft);
-      if (errors.length) throw new CommandError(errors.join("\n"));
-      const info = await openfrontApi.getClanInfo(draft.clan_tag);
-      if (!info) throw new CommandError("That OpenFront clan was not found. Check the tag.");
-      const all = await i.guild.members.fetch();
-      await requireConfigAccess(i.guild, i.user.id);
-      ensureLive(stored);
-      if (configSnapshot(db.getGuildClanConfig(i.guildId, draft.clan_tag)) !== s.snapshot) throw new CommandError("This clan changed in another session. Reopen it before saving.");
-      const old = db.getGuildClanConfig(i.guildId, draft.clan_tag);
-      const affected = affectedRoleMemberIds(all.values(), db.getEffectiveLinks(i.guildId), old);
-      db.setGuildClanConfig({ ...draft, guild_id: i.guildId, last_sync_at: null }, affected);
-      s.tag = draft.clan_tag; s.snapshot = configSnapshot({ ...draft, guild_id: i.guildId, last_sync_at: null }); s.screen = "draft"; s.dirty = false;
-      commit();
-      await redraw("Saved. Role reconciliation is queued."); return true;
+      s.draft.log_channel_id = i.values[0] ?? null;
+      if (s.tag) notice = await saveClan(s.draft);
+    } else if (action === "save" && i.isButton() && s.draft) {
+      notice = await saveClan(s.draft);
     } else if (action === "remove" && s.tag && s.screen === "confirm") {
       const current = db.getGuildClanConfig(i.guildId, s.tag);
       if (!current || configSnapshot(current) !== s.snapshot) throw new CommandError("This clan changed in another session. Reopen it before removing it.");

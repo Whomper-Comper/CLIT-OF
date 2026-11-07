@@ -260,20 +260,20 @@ test("mixed endpoint work drains FIFO while token audience retries retain one bo
       if (url.includes("recently-deleted")) return [];
       if (url.includes("leaderboard")) return { "1v1": [] };
       if (url.includes("/games")) return { results: [], nextCursor: null };
-      if (url.includes("/clan/")) return { tag: "TEST", name: "Test", description: "" };
+      if (url.includes("/clan/")) return { results: [], total: 0, page: 1, limit: 1 };
       return profile();
     } };
   });
   const api = new OpenFrontApi("https://example.invalid", { maxActiveRequests: 1, maxQueuedRequests: 5 });
   const token = `e30.${Buffer.from(JSON.stringify({ aud: "custom" })).toString("base64url")}.signature`;
-  const reads = [api.verifyIdentityToken(token), api.getPlayerProfile("interactive"), api.getClanInfo("test"),
+  const reads = [api.verifyIdentityToken(token), api.getPlayerProfile("interactive"), api.getClanSessions("test", { start: "2026-10-15T00:00:00Z", end: "2026-10-16T00:00:00Z", limit: 1 }),
     api.getPlayerGames("coverage"), api.getRecentlyDeletedPlayers(), api.getRankedLeaderboardPage()];
   assert.equal(started.length, 1);
   for (let i = 0; i < 8; i++) { await flush(); assert.equal(started.length, i + 1); gates[i].resolve(); }
   const results = await Promise.all(reads);
   assert.equal(results[0], "verified");
-  assert.deepEqual(started, ["custom", "ofstats.io", "trackerfront.io", "/public/player/interactive", "/public/clan/TEST",
-    "/public/player/coverage/games", "/public/players/recently-deleted", "/leaderboard/ranked?page=1"]);
+  assert.deepEqual(started, ["custom", "ofstats.io", "trackerfront.io", "/public/player/interactive", "/public/clan/TEST/sessions?start=2026-10-15T00%3A00%3A00.000Z&end=2026-10-16T00%3A00%3A00.000Z&page=1&limit=1",
+    "/public/player/coverage/games", "/public/players/recently-deleted", "/public/leaderboard/ranked?page=1"]);
   assert.equal(api.pending.size, 0); assert.equal(api.generations.size, 0);
 });
 

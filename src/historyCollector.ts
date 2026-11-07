@@ -1,5 +1,5 @@
 import { EmbedBuilder, PermissionFlagsBits, type Client, type Guild, type GuildMember } from "discord.js";
-import type { OpenFrontApi } from "./api.js";
+import { RANKED_LEADERBOARD_MAX_PAGE, type OpenFrontApi } from "./api.js";
 import type { BotDatabase, LinkedUser } from "./db.js";
 import { DAY, type EloObservation, type HistoryJob, type HistoryJobInput, type HistorySettings } from "./historyStore.js";
 import { weeklyPeriod } from "./historySchedule.js";
@@ -127,7 +127,7 @@ export class HistoryCollector {
   }
   private async collectEloPage(snapshots: Map<string,GuildSnapshot>) {
     const storedPage = Number(this.db.history.getMeta("elo_scan_page") ?? 1);
-    const pageNumber = Number.isSafeInteger(storedPage) && storedPage >= 1 && storedPage <= 100 ? storedPage : 1;
+    const pageNumber = Number.isSafeInteger(storedPage) && storedPage >= 1 && storedPage <= RANKED_LEADERBOARD_MAX_PAGE ? storedPage : 1;
     try {
       const page = await this.api.getRankedLeaderboardPage(pageNumber);
       if (this.stopping) return;
@@ -155,7 +155,7 @@ export class HistoryCollector {
         }
         this.db.history.recordEloBatch(snapshot.guild.id,observations,Date.parse(page.observedAt));
       }
-      const continues = page.hasMore && pageNumber < 100;
+      const continues = page.hasMore && pageNumber < RANKED_LEADERBOARD_MAX_PAGE;
       const interval = Math.min(...[...snapshots.values()].filter(s=>s.settings.player_history_enabled).map(s=>s.settings.poll_minutes));
       this.db.history.setMeta("elo_scan_page",String(continues ? pageNumber+1 : 1));
       this.db.history.setMeta("elo_next_attempt",String(this.now()+(continues ? 60_000 : Math.max(5,interval)*60_000)));

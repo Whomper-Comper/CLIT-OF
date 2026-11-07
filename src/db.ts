@@ -6,7 +6,7 @@ import { CONFIG } from "./config.js";
 import { backupDatabaseBeforeMigration } from "./backups.js";
 import { HistoryStore } from "./historyStore.js";
 import { CommunityStore } from "./community/store.js";
-import { managedRoles } from "./roles.js";
+import { clanRoleMappingsChanged, managedRoles } from "./roles.js";
 
 export interface LinkedUser {
   discord_id: string; openfront_id: string; openfront_username: string | null;
@@ -325,12 +325,14 @@ export class BotDatabase {
     this.transaction(() => {
       const old = this.getGuildClanConfig(c.guild_id, c.clan_tag);
       if (!old) this.history.clearGuildPlayerMatches(c.guild_id);
-      this.enqueueGuildMembers(c.guild_id, guildMemberIds, [...managedRoles(old ? [old] : []), ...managedRoles([c])]);
+      const reconcile = clanRoleMappingsChanged(old, c);
+      if (reconcile) this.enqueueGuildMembers(c.guild_id, guildMemberIds, [...managedRoles(old ? [old] : []), ...managedRoles([c])]);
       this.db.prepare(`INSERT INTO guild_clan_configs(guild_id,clan_tag,member_role_id,officer_role_id,leader_role_id,
         join_role_id,log_channel_id,sync_interval_mins,last_sync_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(guild_id,clan_tag) DO UPDATE SET
         member_role_id=excluded.member_role_id,officer_role_id=excluded.officer_role_id,leader_role_id=excluded.leader_role_id,
-        join_role_id=excluded.join_role_id,log_channel_id=excluded.log_channel_id,sync_interval_mins=excluded.sync_interval_mins,last_sync_at=NULL`)
-        .run(c.guild_id,c.clan_tag.trim().toUpperCase(),c.member_role_id,c.officer_role_id,c.leader_role_id,c.join_role_id,c.log_channel_id,c.sync_interval_mins,c.last_sync_at);
+        join_role_id=excluded.join_role_id,log_channel_id=excluded.log_channel_id,sync_interval_mins=excluded.sync_interval_mins,last_sync_at=excluded.last_sync_at`)
+        .run(c.guild_id,c.clan_tag.trim().toUpperCase(),c.member_role_id,c.officer_role_id,c.leader_role_id,c.join_role_id,c.log_channel_id,c.sync_interval_mins,
+          old ? reconcile ? null : old.last_sync_at : c.last_sync_at);
     });
   }
   updateClanLastSync(guild: string, tag: string) {

@@ -33,7 +33,7 @@ test("ratings use exact public IDs and independent ladders while preserving cach
   t.mock.method(globalThis, "fetch", async (url) => {
     calls++;
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/leaderboard/ranked");
+    assert.equal(parsed.pathname, "/public/leaderboard/ranked");
     assert.equal(parsed.searchParams.get("page"), "1");
     return response({
       "1v1": [rankedRow("player-extra", 9999), rankedRow("player", 1350, 2)],
@@ -59,10 +59,30 @@ test("ratings use exact public IDs and independent ladders while preserving cach
   assert.equal(calls, 2);
 });
 
+for (const header of ["3", "Thu, 15 Oct 2026 00:00:03 GMT", null]) test(`429 shares a cooldown across endpoints (Retry-After: ${header})`, async t => {
+  let now = Date.parse(start), calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls++;
+    return calls === 2 ? new Response(null, { status: 429, headers: header ? { "Retry-After": header } : {} })
+      : response({ username: "Player" });
+  });
+  const api = new OpenFrontApi("https://example.invalid", { now: () => now });
+  await api.getPlayerProfile("cached");
+  await assert.rejects(api.getPlayerProfile("limited"), { status: 429 });
+  assert.equal((await api.getPlayerProfile("cached")).username, "Player");
+  now += (header ? 3000 : 30_000) - 1;
+  await assert.rejects(api.getRankedLeaderboardPage(1, { fresh: true }), { status: 429 });
+  assert.equal(calls, 2);
+  now++;
+  await api.getPlayerProfile("limited");
+  assert.equal(calls, 3);
+});
+
 test("bounded leaderboard absence stays incomplete until exhaustion and later failures preserve partial ratings", async (t) => {
   const full = Array.from({ length: 50 }, (_, index) => rankedRow(`other-${index}`, 1000, index + 1));
   for (const scenario of [
     { name: "bounded absence", maxPages: 1, replies: [{ value: { "1v1": full } }], complete: false, pages: 1, ratings: [] },
+    { name: "full final page", maxPages: 3, replies: [{ value: { "1v1": full } }, { value: { "1v1": full } }], complete: true, pages: 2, ratings: [] },
     { name: "empty final page", maxPages: 2, replies: [{ value: { "1v1": full } }, { value: { "1v1": [] } }], complete: true, pages: 2, ratings: [] },
     { name: "official page bound", maxPages: 2, replies: [{ value: { "1v1": full } }, { value: { message: "Page must be between 1 and 1" }, status: 400 }], complete: true, pages: 2, ratings: [] },
     { name: "later unavailable page", maxPages: 2, replies: [{ value: { "1v1": [rankedRow("player", 1350), ...full.slice(1)] } }, { value: {}, status: 503 }], complete: false, pages: 1,
@@ -109,12 +129,14 @@ test("a leaderboard page-bound error only signals exhaustion beyond the stated m
   t.mock.method(globalThis, "fetch", async () => response({ message }, 400));
   const api = new OpenFrontApi("https://example.invalid");
   await assert.rejects(api.getRankedLeaderboardPage(2), error => error instanceof OpenFrontApiError && error.reason === "http" && error.status === 400);
-  const exhausted = await api.getRankedLeaderboardPage(4);
+  await assert.rejects(api.getRankedLeaderboardPage(3), RangeError);
+  message = "Page must be between 1 and 1";
+  const exhausted = await api.getRankedLeaderboardPage(2);
   assert.deepEqual(exhausted.ratings, []);
   assert.equal(exhausted.hasMore, false);
   for (const malformed of ["Page must be between 2 and 3", "Page must be between 1 and 0", "Page must be between 1 and 99999999999999999"]) {
     message = malformed;
-    await assert.rejects(api.getRankedLeaderboardPage(5, { fresh: true }), error => error instanceof OpenFrontApiError && error.reason === "http" && error.status === 400);
+    await assert.rejects(api.getRankedLeaderboardPage(2, { fresh: true }), error => error instanceof OpenFrontApiError && error.reason === "http" && error.status === 400);
   }
 });
 

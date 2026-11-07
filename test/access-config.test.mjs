@@ -56,6 +56,7 @@ async function open(f) {
   return { i, id: session(i.output) };
 }
 async function action(f, id, name, kind, values, overrides) {
+  if (["details", "member_role_id", "officer_role_id", "leader_role_id", "join_role_id", "log_channel_id"].includes(name)) name += ":TEST";
   const i = component(f, id, name, kind, values, overrides);
   assert.equal(await handleConfigInteraction(i), true);
   return i;
@@ -92,7 +93,7 @@ function assertComponentLimits(payload) {
   }
 }
 
-for (const legacyOrder of [false, true]) test(`a newly saved clan can be edited, saved again and removed with ${legacyOrder ? "legacy" : "current"} column order`, async t => {
+for (const legacyOrder of [false, true]) test(`a newly created clan can be edited and removed with ${legacyOrder ? "legacy" : "current"} column order`, async t => {
   const f = fixture();
   if (legacyOrder) {
     // The supported migration adds join_role_id after the original columns.
@@ -104,18 +105,16 @@ for (const legacyOrder of [false, true]) test(`a newly saved clan can be edited,
       return { ...originalColumns, join_role_id };
     });
   }
-  t.mock.method(openfrontApi, "getClanInfo", async () => ({ tag: "TEST", name: "Test", description: "" }));
   const { id } = await open(f);
   await action(f, id, "new");
-  await action(f, id, "details", "modal", [], {
+  await action(f, id, "details:new", "modal", [], {
     fields: { getTextInputValue: name => name === "tag" ? "TEST" : "10" },
   });
-  await action(f, id, "member_role_id", "role", [ids.member]);
+  await action(f, id, "member_role_id:new", "role", [ids.member]);
   const first = await action(f, id, "save");
   assert.equal(error(first), "");
   assert.ok(db.getGuildClanConfig(f.guild.id, "TEST"));
-  await action(f, id, "log_channel_id", "channel", [ids.logs]);
-  const second = await action(f, id, "save");
+  const second = await action(f, id, "log_channel_id", "channel", [ids.logs]);
   assert.equal(error(second), "", "a saved draft must compare equal regardless of SQLite column order");
   assert.equal(db.getGuildClanConfig(f.guild.id, "TEST").log_channel_id, ids.logs);
   await action(f, id, "delete");
@@ -326,16 +325,14 @@ for (const operation of ["save", "remove"]) test(`configuration ${operation} sel
   f.guild.members.fetch = async options => options ? f.user : roster;
   const { id } = await open(f);
   await action(f, id, "clan", "string", ["TEST"]);
-  if (operation === "save") await action(f, id, "officer_role_id", "role", []);
-  else await action(f, id, "delete");
-  t.mock.method(openfrontApi, "getClanInfo", async () => ({ tag: "TEST", name: "Test", description: "" }));
+  if (operation === "remove") await action(f, id, "delete");
   const prepare = db.db.prepare.bind(db.db);
   let identityReads = 0;
   t.mock.method(db.db, "prepare", sql => {
     if (/^SELECT\b/i.test(sql) && /\bFROM\s+(?:linked_users|guild_links)\b/i.test(sql)) identityReads++;
     return prepare(sql);
   });
-  const result = await action(f, id, operation);
+  const result = operation === "save" ? await action(f, id, "officer_role_id", "role", []) : await action(f, id, "remove");
   assert.equal(error(result), "");
   assert.equal(identityReads, 1, "identity reads must not grow with the roster");
   for (const memberId of [global.id, local.id, holder.id]) {
@@ -345,20 +342,22 @@ for (const operation of ["save", "remove"]) test(`configuration ${operation} sel
   for (const memberId of [approval.id, foreign.id, outside, "unlinked-450"]) assert.equal(db.getJob(f.guild.id, memberId), null);
 });
 
-test("new clan modal, role selection and save persist a validated mapping", async (t) => {
+test("new clan stays a draft until Create clan", async (t) => {
+  const upstream = t.mock.method(globalThis, "fetch", async () => { throw new Error("Unexpected OpenFront request"); });
   const f = fixture(), { id } = await open(f);
-  t.mock.method(openfrontApi, "getClanInfo", async () => ({ tag: "TEST", name: "Test", description: "" }));
   await action(f, id, "new");
   const basics = await action(f, id, "basics");
   assert.equal(error(basics), "");
   assert.ok(basics.modal, "a new clan must show a valid tag/interval modal");
   const modal = basics.modal.toJSON();
   assert.equal(modal.components.length, 2);
-  await action(f, id, "details", "modal", [], { fields: { getTextInputValue: (key) => key === "tag" ? "test" : "15" } });
+  await action(f, id, "details:new", "modal", [], { fields: { getTextInputValue: (key) => key === "tag" ? "test" : "15" } });
   await action(f, id, "roles");
-  await action(f, id, "member_role_id", "role", [ids.member]);
+  await action(f, id, "member_role_id:new", "role", [ids.member]);
+  assert.equal(db.getGuildClanConfig(f.guild.id, "TEST"), null);
   const saved = await action(f, id, "save");
   assert.equal(error(saved), "");
+  assert.equal(upstream.mock.callCount(), 0);
   const current = db.getGuildClanConfig(f.guild.id, "TEST");
   assert.equal(current.member_role_id, ids.member);
   assert.equal(current.sync_interval_mins, 15);
@@ -369,12 +368,26 @@ test("saving a clan rejects changes from another session and retains the newer c
   const f = fixture();
   db.setGuildClanConfig(savedConfig(f));
   const { id } = await open(f);
-  t.mock.method(openfrontApi, "getClanInfo", async () => ({ tag: "TEST", name: "Test", description: "" }));
   await action(f, id, "clan", "string", ["TEST"]);
   db.setGuildClanConfig(savedConfig(f, { sync_interval_mins: 30 }));
-  const stale = await action(f, id, "save");
+  const stale = await action(f, id, "details", "modal", [], { fields: { getTextInputValue: () => "30" } });
   assert.match(error(stale), /changed in another session/);
   assert.equal(db.getGuildClanConfig(f.guild.id, "TEST").sync_interval_mins, 30);
+});
+
+test("a clan edit from an old screen cannot autosave to another clan", async () => {
+  const f = fixture(), { id } = await open(f);
+  db.setGuildClanConfig(savedConfig(f));
+  db.setGuildClanConfig(savedConfig(f, { clan_tag: "NEXT" }));
+  await action(f, id, "clan", "string", ["TEST"]);
+  const form = await action(f, id, "basics");
+  await action(f, id, "clan", "string", ["NEXT"]);
+  const stale = await action(f, id, "details", "modal", [], {
+    customId: form.modal.toJSON().custom_id,
+    fields: { getTextInputValue: () => "30" },
+  });
+  assert.match(error(stale), /clan.*changed|reopen/i);
+  assert.equal(db.getGuildClanConfig(f.guild.id, "NEXT").sync_interval_mins, 10);
 });
 
 test("clan save rechecks member role after slow validation and rejects revoked access", async (t) => {
@@ -382,9 +395,8 @@ test("clan save rechecks member role after slow validation and rejects revoked a
   db.setGuildClanConfig(savedConfig(f));
   const { id } = await open(f);
   await action(f, id, "clan", "string", ["TEST"]);
-  await action(f, id, "details", "modal", [], { fields: { getTextInputValue: () => "30" } });
-  t.mock.method(openfrontApi, "getClanInfo", async () => { f.user.roles.cache.clear(); return { tag: "TEST", name: "Test", description: "" }; });
-  const denied = await action(f, id, "save");
+  t.mock.method(f.guild.roles, "fetch", async () => { f.user.roles.cache.clear(); return f.roles; });
+  const denied = await action(f, id, "details", "modal", [], { fields: { getTextInputValue: () => "30" } });
   assert.match(error(denied), /Manage Server|configuration|configured role|access role/i);
   assert.equal(db.getGuildClanConfig(f.guild.id, "TEST").sync_interval_mins, 10);
 });
@@ -436,12 +448,11 @@ test("changing the configured role during a clan save denies a user who lacks th
   db.setGuildClanConfig(savedConfig(f));
   const { id } = await open(f);
   await action(f, id, "clan", "string", ["TEST"]);
-  await action(f, id, "details", "modal", [], { fields: { getTextInputValue: () => "30" } });
-  t.mock.method(openfrontApi, "getClanInfo", async () => {
+  t.mock.method(f.guild.roles, "fetch", async () => {
     db.setManagerRole(f.guild.id, ids.replacement, 1);
-    return { tag: "TEST", name: "Test", description: "" };
+    return f.roles;
   });
-  const denied = await action(f, id, "save");
+  const denied = await action(f, id, "details", "modal", [], { fields: { getTextInputValue: () => "30" } });
   assert.match(error(denied), /Manage Server|configured role|configuration|access role/i);
   assert.equal(db.getGuildClanConfig(f.guild.id, "TEST").sync_interval_mins, 10);
 });
@@ -449,14 +460,17 @@ test("changing the configured role during a clan save denies a user who lacks th
 test("Manage Server permits configuration saves without holding the configured role", async (t) => {
   const f = fixture({ manageGuild: true });
   f.user.roles.cache.clear();
-  db.setGuildClanConfig(savedConfig(f));
+  const lastSync = "2026-11-01T00:00:00.000Z";
+  db.setGuildClanConfig(savedConfig(f, { last_sync_at: lastSync }));
   const { id } = await open(f);
   await action(f, id, "clan", "string", ["TEST"]);
-  await action(f, id, "details", "modal", [], { fields: { getTextInputValue: () => "30" } });
-  t.mock.method(openfrontApi, "getClanInfo", async () => ({ tag: "TEST", name: "Test", description: "" }));
-  const saved = await action(f, id, "save");
+  const fetchMember = f.guild.members.fetch;
+  const fetch = t.mock.method(f.guild.members, "fetch", fetchMember);
+  const saved = await action(f, id, "details", "modal", [], { fields: { getTextInputValue: () => "30" } });
   assert.equal(error(saved), "");
   assert.equal(db.getGuildClanConfig(f.guild.id, "TEST").sync_interval_mins, 30);
+  assert.equal(db.getGuildClanConfig(f.guild.id, "TEST").last_sync_at, lastSync);
+  assert.ok(fetch.mock.calls.every(({ arguments: args }) => args[0]?.user), "interval changes need no full roster");
   assert.equal(await hasClanAccess(f.guild, f.userId), false);
 });
 
@@ -467,12 +481,12 @@ test("an in-progress save blocks overlapping actions in the same menu", async (t
   await action(f, id, "clan", "string", ["TEST"]);
   let release, entered;
   const started = new Promise((resolve) => { entered = resolve; });
-  t.mock.method(openfrontApi, "getClanInfo", () => new Promise((resolve) => { release = resolve; entered(); }));
-  const saving = action(f, id, "save");
+  t.mock.method(f.guild.roles, "fetch", () => new Promise((resolve) => { release = resolve; entered(); }));
+  const saving = action(f, id, "details", "modal", [], { fields: { getTextInputValue: () => "30" } });
   await started;
   const overlapping = await action(f, id, "new");
   assert.match(error(overlapping), /change is still running/);
-  release({ tag: "TEST", name: "Test", description: "" });
+  release(f.roles);
   assert.equal(error(await saving), "");
   const afterSave = await action(f, id, "roles");
   assert.equal(error(afterSave), "", "menu lock must be released after save");
@@ -483,11 +497,10 @@ test("a menu expiring during validation cannot finish a persistent save", async 
   db.setGuildClanConfig(savedConfig(f));
   const { id } = await open(f);
   await action(f, id, "clan", "string", ["TEST"]);
-  await action(f, id, "details", "modal", [], { fields: { getTextInputValue: () => "30" } });
   let now = Date.now();
   t.mock.method(Date, "now", () => now);
-  t.mock.method(openfrontApi, "getClanInfo", async () => { now += 11 * 60_000; return { tag: "TEST", name: "Test", description: "" }; });
-  const expired = await action(f, id, "save");
+  t.mock.method(f.guild.roles, "fetch", async () => { now += 11 * 60_000; return f.roles; });
+  const expired = await action(f, id, "details", "modal", [], { fields: { getTextInputValue: () => "30" } });
   assert.match(error(expired), /menu expired/);
   assert.equal(db.getGuildClanConfig(f.guild.id, "TEST").sync_interval_mins, 10);
 });
@@ -508,12 +521,13 @@ for (const report of ['coverage', 'doctor']) {
     const { id } = await open(f);
     let now = Date.now();
     t.mock.method(Date, 'now', () => now);
-    t.mock.method(openfrontApi, 'getClanInfo', async () => {
+    db.linkGuildUser(f.guild.id, 'manager', f.userId, 'coverage-race', 'Player');
+    t.mock.method(openfrontApi, report === 'coverage' ? 'getPlayerProfile' : 'getClanSessions', async () => {
       if (change === 'access') f.user.roles.cache.clear();
       if (change === 'mapping') db.setGuildClanConfig(savedConfig(f, { member_role_id: ids.replacement }));
       if (change === 'history') db.history.saveSettings(f.guild.id, { ...db.history.getSettings(f.guild.id), player_history_enabled: 0 }, 0);
       if (change === 'expiry') now += 11 * 60_000;
-      return { tag: 'TEST', memberCount: 10 };
+      return report === 'coverage' ? { clans: [] } : { results: [], total: 0, page: 1, limit: 1 };
     });
     const result = await action(f, id, report);
     assert.equal(result.followups.some(value => value.embeds?.length), false, 'obsolete report must not be released');
@@ -527,7 +541,6 @@ for (const change of ['identity', 'departure']) test(`configuration coverage wit
   db.linkGuildUser(f.guild.id, 'manager', f.userId, 'coverage-final-auth', 'Player');
   const { id } = await open(f);
   t.mock.method(openfrontApi, 'getPlayerProfile', async () => ({ clans: [{ tag: 'TEST' }] }));
-  t.mock.method(openfrontApi, 'getClanInfo', async () => ({ tag: 'TEST', memberCount: 10 }));
   const fetch = f.guild.members.fetch;
   let checks = 0;
   t.mock.method(f.guild.members, 'fetch', async request => {
@@ -560,7 +573,7 @@ test("configuration home links focused pages and access saves are explicit", asy
   assert.ok(components(access.output).filter(c => c.type === 6).every(c => /immediately/.test(c.placeholder)));
 });
 
-for (const setting of ["log_channel_id", "history_channel"]) test(`${setting} visibly confirms staged select and clear, and discards a failed redraw`, async (t) => {
+for (const setting of ["history_channel"]) test(`${setting} visibly confirms staged select and clear, and discards a failed redraw`, async (t) => {
   const f = fixture();
   db.setGuildClanConfig(savedConfig(f));
   const { id } = await open(f);
@@ -589,31 +602,31 @@ for (const setting of ["log_channel_id", "history_channel"]) test(`${setting} vi
   assert.doesNotMatch(JSON.stringify(failures), /secret-token|webhooks|requestBody|private/);
 });
 
-for (const save of ["save", "history_save", "access", "debug_access"]) test(`${save} retains committed session state when redraw fails`, async (t) => {
+for (const save of ["log_channel_id", "history_save", "access", "debug_access"]) test(`${save} retains committed session state when redraw fails`, async (t) => {
   const f = fixture({ manageGuild: true });
   db.setGuildClanConfig(savedConfig(f));
   const { id } = await open(f);
   t.mock.method(console, "warn", () => {});
-  t.mock.method(openfrontApi, "getClanInfo", async () => ({ tag: "TEST", name: "Test" }));
-  if (save === "save") {
+  if (save === "log_channel_id") {
     await action(f, id, "clan", "string", ["TEST"]);
-    await action(f, id, "log_channel_id", "channel", [ids.logs]);
+    await action(f, id, "logs");
   } else if (save === "history_save") {
     await action(f, id, "history"); await action(f, id, "history_channel", "channel", [ids.logs]);
   }
-  const kind = save.endsWith("access") ? "role" : "button";
+  const kind = save.endsWith("access") ? "role" : save === "log_channel_id" ? "channel" : "button";
+  const value = save === "log_channel_id" ? ids.logs : ids.replacement;
   const target = save === "history_save" ? db.history : db;
-  const method = { save: "setGuildClanConfig", history_save: "saveSettings", access: "setManagerRole", debug_access: "setDebugRole" }[save];
+  const method = { log_channel_id: "setGuildClanConfig", history_save: "saveSettings", access: "setManagerRole", debug_access: "setDebugRole" }[save];
   const write = target[method].bind(target);
   let writes = 0;
   t.mock.method(target, method, (...args) => { writes++; return write(...args); });
-  const failed = await action(f, id, save, kind, [ids.replacement], {
+  const failed = await action(f, id, save, kind, [value], {
     editReply: async () => { throw Object.assign(new Error("invalid payload"), { code: 50035 }); },
   });
   assert.equal(writes, 1, "failed redraw/recovery must not repeat the committed write");
   assert.match(error(failed), /saved.*reopen/i);
-  if (save === "save") assert.equal(db.getGuildClanConfig(f.guild.id, "TEST").log_channel_id, ids.logs);
-  const again = await action(f, id, save, kind, [ids.replacement]);
+  if (save === "log_channel_id") assert.equal(db.getGuildClanConfig(f.guild.id, "TEST").log_channel_id, ids.logs);
+  const again = await action(f, id, save, kind, [value]);
   assert.equal(error(again), "", "committed snapshot/revision must survive redraw failure");
   assert.ok(again.output, "busy lock must be released");
 });

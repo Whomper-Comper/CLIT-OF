@@ -275,8 +275,6 @@ async function realConfigFixture(t) {
   db.setManagerRole(guildId, roleId);
   db.setGuildClanConfig({ guild_id: guildId, clan_tag: "TEST", member_role_id: roleId, officer_role_id: null,
     leader_role_id: null, join_role_id: null, log_channel_id: null, sync_interval_mins: 10, last_sync_at: null });
-  const { openfrontApi } = await import("../dist/api.js");
-  t.mock.method(openfrontApi, "getClanInfo", async () => ({ tag: "TEST", name: "Test" }));
   const responses = [], edits = [], order = [], fail = {};
   const message = body => ({ id: "620000000000000001", channel_id: channelId, guild_id: guildId,
     author: { id: "520000000000000001", username: "bot", discriminator: "0", bot: true },
@@ -303,7 +301,7 @@ async function realConfigFixture(t) {
   await route(slash);
   assert.equal(slash.deferred, true);
   assert.equal(responses[0].data.flags, 64);
-  const custom = action => edits.at(-1).components.flatMap(r => r.components).find(c => c.custom_id?.endsWith(`:${action}`))?.custom_id;
+  const custom = action => edits.at(-1).components.flatMap(r => r.components).find(c => c.custom_id?.split(":")[2] === action)?.custom_id;
   const send = async (action, values, explicitId) => {
     const id = explicitId ?? custom(action);
     assert.ok(id, `visible ${action} control`);
@@ -316,7 +314,7 @@ async function realConfigFixture(t) {
   return { guildId, guild, selectedChannel, changedChannel, edits, responses, order, send, custom, fail };
 }
 
-test("actual central event serializes real config channel select, change, clear and Save interactions", async t => {
+test("actual central event saves config channel selections and clears immediately", async t => {
   const f = await realConfigFixture(t);
   await f.send("clans"); await f.send("clan", ["TEST"]); await f.send("logs");
   for (const selected of [f.selectedChannel, f.changedChannel, null]) {
@@ -325,18 +323,18 @@ test("actual central event serializes real config channel select, change, clear 
     assert.equal(i.deferred, true);
     const body = f.edits.at(-1), select = body.components.flatMap(r => r.components).find(c => c.type === 8);
     assert.deepEqual(body.allowed_mentions, { parse: [] });
-    assert.match(body.embeds[0].description, /unsaved/i);
+    assert.match(body.embeds[0].description, /saved/i);
     assert.deepEqual(select.default_values ?? [], selected ? [{ id: selected, type: "channel" }] : []);
-    assert.equal(db.getGuildClanConfig(f.guildId, "TEST").log_channel_id, null);
+    assert.equal(db.getGuildClanConfig(f.guildId, "TEST").log_channel_id, selected);
+    assert.equal(f.custom("save"), undefined);
   }
   await f.send("log_channel_id", [f.changedChannel]);
-  await f.send("save");
   assert.equal(db.getGuildClanConfig(f.guildId, "TEST").log_channel_id, f.changedChannel);
   assert.match(f.edits.at(-1).embeds[0].description, /Saved/);
   assert.ok(f.responses.slice(1).every(body => body.type === 6), "normal components deferUpdate before redraw");
   assert.deepEqual(f.order.slice(-2), ["ack", "redraw"]);
-  await f.send("logs"); await f.send("log_channel_id", []); await f.send("save");
-  assert.equal(db.getGuildClanConfig(f.guildId, "TEST").log_channel_id, null, "clearing and saving removes the saved destination");
+  await f.send("log_channel_id", []);
+  assert.equal(db.getGuildClanConfig(f.guildId, "TEST").log_channel_id, null);
 });
 
 test("actual central event serializes real history channel select, change, clear and Save interactions", async t => {
@@ -357,7 +355,7 @@ test("actual central event serializes real history channel select, change, clear
   assert.equal(db.history.getSettings(f.guildId).weekly_enabled, 0);
 });
 
-test("real config redraw rejection safely preserves draft and contains a failed private recovery", async t => {
+test("real config redraw rejection preserves the saved edit and contains a failed private recovery", async t => {
   const f = await realConfigFixture(t), failures = [], centralErrors = [];
   t.mock.method(console, "warn", (...args) => failures.push(args));
   t.mock.method(console, "error", (...args) => centralErrors.push(args));
@@ -372,8 +370,10 @@ test("real config redraw rejection safely preserves draft and contains a failed 
   const recovery = f.responses.at(-1);
   assert.equal(recovery.flags, 64);
   assert.deepEqual(recovery.allowed_mentions, { parse: [] });
-  await f.send("save");
-  assert.equal(db.getGuildClanConfig(f.guildId, "TEST").log_channel_id, f.selectedChannel);
+  assert.match(recovery.content, /saved.*reopen/i);
+  assert.equal(db.getGuildClanConfig(f.guildId, "TEST").log_channel_id, f.changedChannel);
+  await f.send("log_channel_id", []);
+  assert.equal(db.getGuildClanConfig(f.guildId, "TEST").log_channel_id, null);
 });
 
 test("real config acknowledgement expiry stops work and releases the session", async t => {

@@ -148,11 +148,12 @@ test("setup validates real bot role hierarchy and rejects duplicate rank roles",
 });
 
 test("setup uses the configured interval and saves only after validation", async (t) => {
-  t.mock.method(openfrontApi, "getClanInfo", async () => ({ tag: "TEST", name: "Test", description: "" }));
+  const upstream = t.mock.method(globalThis, "fetch", async () => { throw new Error("Unexpected OpenFront request"); });
   const guild = guildFixture("setup-default");
   const i = interaction("setup", guild, { clan_tag: "TEST", member_role: { id: "member" } });
   await clanCommand.execute(i, {});
   assert.equal(db.getGuildClanConfig(guild.id, "TEST").sync_interval_mins, 25);
+  assert.equal(upstream.mock.callCount(), 0);
   const invalid = guildFixture("setup-invalid-hierarchy");
   invalid.members.fetchMe = async () => ({ permissions: { has: () => true },
     roles: { highest: { comparePositionTo: () => -1 } } });
@@ -194,7 +195,6 @@ for (const action of ["setup", "remove"]) test(`${action} selects reconciliation
   const roster = new Map([global, local, holder, approval, foreign,
     ...Array.from({ length: 451 }, (_, index) => memberFixture(guild, `unlinked-${index}`))].map(member => [member.id, member]));
   guild.members.fetch = async () => roster;
-  t.mock.method(openfrontApi, "getClanInfo", async () => ({ tag: "TEST", name: "Test", description: "" }));
   const i = interaction(action, guild, { clan_tag: "TEST", member_role: { id: "member" } });
   const prepare = db.db.prepare.bind(db.db);
   let identityReads = 0;

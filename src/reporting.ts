@@ -1,6 +1,6 @@
 import { ChannelType, EmbedBuilder, Guild, PermissionFlagsBits } from "discord.js";
 import { db, GuildClanConfig, type LinkedUser } from "./db.js";
-import { openfrontApi, OpenFrontPlayerProfile } from "./api.js";
+import { OpenFrontApiError, openfrontApi, OpenFrontPlayerProfile } from "./api.js";
 import { clanDraft, configSnapshot, draftErrors } from "./setupConfig.js";
 import { toEpochSeconds } from "./utils.js";
 import { humanMemberLinks } from "./memberLinks.js";
@@ -54,7 +54,7 @@ export async function buildCoverageReport(guild: Guild, configs: GuildClanConfig
   let next = 0;
   const deadline = Date.now() + 90_000;
   // A large guild must not create thousands of concurrent requests or exceed Discord's interaction lifetime.
-  const work = links.slice(0, 250);
+  const work = selected.items.length ? links.slice(0, 250) : [];
   await Promise.all(Array.from({ length: Math.min(5, work.length) }, async () => {
     while (Date.now() < deadline) {
       const index = next++;
@@ -68,18 +68,6 @@ export async function buildCoverageReport(guild: Guild, configs: GuildClanConfig
       outcomes.set(link.discord_id, { link, profile });
     }
   }));
-  const clanTotals: { config: GuildClanConfig; total: number | null; detail: string }[] = [];
-  for (const config of selected.items) {
-    let total: number | null = null;
-    let detail: string;
-    try {
-      const clan = await openfrontApi.getClanInfo(config.clan_tag);
-      if (clan && Number.isSafeInteger(clan.memberCount) && clan.memberCount! >= 0) total = clan.memberCount!;
-      detail = clan ? "OpenFront does not expose a public member list, so this is the minimum linked fraction of the full clan."
-        : "The configured clan was not found on OpenFront.";
-    } catch { detail = "OpenFront's total clan size is temporarily unavailable."; }
-    clanTotals.push({ config, total, detail });
-  }
   // Build every count from one final roster/link snapshot after all external requests finish.
   const members = await fetchMembers();
   const humans = [...members.values()].filter((member) => !member.user.bot);
@@ -93,26 +81,24 @@ export async function buildCoverageReport(guild: Guild, configs: GuildClanConfig
     if (outcome.profile) profiles.push(outcome.profile);
     else unavailable++;
   }
-  const unexamined = currentLinks.length - profiles.length - unavailable;
+  const unexamined = selected.items.length ? currentLinks.length - profiles.length - unavailable : 0;
   const partial = unavailable > 0 || unexamined > 0;
   const embed = new EmbedBuilder().setTitle("OpenFront link coverage").setColor(partial ? 0xf59e0b : 0x3b82f6)
     .setDescription("Counts use current human members of this Discord server. Bots are excluded.\nClan figures count confirmed current clan members linked here; people outside this Discord server are not checked.")
     .addFields({ name: "Discord Members Linked", value: countLabel(currentLinks.length, humans.length), inline: true },
-      { name: "Discord Members Unlinked", value: (humans.length - currentLinks.length).toLocaleString("en-US"), inline: true },
-      { name: "Current Clan Membership Checks", value: `${profiles.length} profiles checked successfully out of ${currentLinks.length} linked Discord members.${partial ? ` ${unavailable} unavailable; ${unexamined} not checked. Clan counts are partial.` : ""}` });
+      { name: "Discord Members Unlinked", value: (humans.length - currentLinks.length).toLocaleString("en-US"), inline: true });
+  if (selected.items.length) embed.addFields(
+    { name: "Current Clan Membership Checks", value: `${profiles.length} profiles checked successfully out of ${currentLinks.length} linked Discord members.${partial ? ` ${unavailable} unavailable; ${unexamined} not checked. Clan counts are partial.` : ""}` });
   if (!selected.items.length) embed.addFields({ name: "Clans", value: "No OpenFront clans are configured in this server." });
-  for (const {config, total, detail} of clanTotals) {
+  for (const config of selected.items) {
     const linked = profiles.filter((profile) => profile.clans!.some((clan) => clan.tag.toUpperCase() === config.clan_tag.toUpperCase())).length;
-    const figures = total === null ? `${linked} confirmed linked here / total size unavailable`
-      : linked > total ? `${linked} confirmed linked here / reported clan size ${total} (membership changed during the check)`
-        : `At least ${countLabel(linked, total)} linked here`;
-    embed.addFields({ name: `[${label(config.clan_tag)}] Clan Members Linked`, value: `${figures}\n${detail}` });
+    embed.addFields({ name: `[${label(config.clan_tag)}] Clan Members Linked`, value: `${linked} confirmed linked here. Full clan size is unavailable from the public API.` });
   }
   embed.setFooter({ text: `${selected.footer} · Public API results may be cached for up to 15 seconds.` });
   return { embeds: [embed], assertCurrent };
 }
 
-/** Read-only checks against refreshed Discord state and uncached OpenFront clan details. */
+/** Read-only Discord checks with one bounded probe of OpenFront's public clan sessions. */
 export async function buildDoctorEmbeds(guild: Guild, configs: GuildClanConfig[], options: DoctorOptions = {}): Promise<EmbedBuilder[]> {
   const selected = pageOf(configs, options.page ?? 1, 5);
   let roles, bot;
@@ -150,6 +136,22 @@ export async function buildDoctorEmbeds(guild: Guild, configs: GuildClanConfig[]
       } else general.push(`✓ Weekly recap channel: <#${history.channel_id}>; schedule zone ${history.timezone}.`);
     } catch { general.push("✗ Could not access the weekly recap channel."); problems++; }
   }
+  const sample = selected.items.find(config => /^[A-Z0-9]{2,5}$/.test(config.clan_tag));
+  if (sample) {
+    const now = Date.now();
+    try {
+      const page = await openfrontApi.getClanSessions(sample.clan_tag, {
+        start: new Date(now - 86_400_000).toISOString(), end: new Date(now).toISOString(), limit: 1,
+      }, { fresh: true });
+      general.push(page ? "✓ OpenFront's public clan sessions endpoint is reachable."
+        : "⚠ OpenFront's public clan sessions endpoint returned no resource for the sample.");
+      if (!page) problems++;
+    } catch (error) {
+      const status = error instanceof OpenFrontApiError ? error.status : undefined;
+      general.push(`✗ OpenFront's public clan sessions check failed${status ? ` (HTTP ${status})` : ""}.`);
+      problems++;
+    }
+  }
   const embed = new EmbedBuilder().setTitle("Clan configuration health").setDescription(general.join("\n"));
   for (const config of selected.items) {
     const checks: string[] = [];
@@ -175,11 +177,6 @@ export async function buildDoctorEmbeds(guild: Guild, configs: GuildClanConfig[]
         } else checks.push("✓ Log channel is available and writable.");
       } catch { checks.push("✗ Could not check the log channel; check the bot's channel access."); problems++; }
     } else checks.push("ℹ No log channel is configured.");
-    try {
-      const clan = await openfrontApi.getClanInfo(config.clan_tag, { fresh: true });
-      if (clan) checks.push("✓ OpenFront API is reachable and this clan exists.");
-      else { checks.push("✗ This clan no longer exists on OpenFront."); problems++; }
-    } catch { checks.push("✗ OpenFront API is temporarily unavailable or returned invalid clan information."); problems++; }
     const epoch = toEpochSeconds(config.last_sync_at);
     checks.push(epoch === null ? "ℹ No completed scheduled sync has been recorded." : `Last scheduled sync: <t:${epoch}:R>.`);
     if (epoch !== null && Date.now() - epoch * 1000 > Math.max(15, config.sync_interval_mins * 3) * 60_000) {

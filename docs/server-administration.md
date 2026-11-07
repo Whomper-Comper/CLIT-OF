@@ -66,10 +66,10 @@ Roles may be shared across different clans. The bot calculates earned roles acro
 2. Open **Tag / sync interval**. Enter a tag of 2–5 letters or digits without brackets; it is trimmed and uppercased. Enter an integer sync interval from 2 to 1440 minutes. New drafts use `DEFAULT_SYNC_INTERVAL_MINS`, normally 10 minutes.
 3. Open **Roles** and select Member plus optional Officer, Leader and Approval mappings. Optional selectors can be cleared. Choose **Back** to return to General.
 4. Open **Logging**, optionally select a text channel, then return or save.
-5. Review the complete draft and choose **Save**. The bot refreshes roles/permissions, verifies the OpenFront clan exists, loads server membership and checks that no other session changed this configuration. Success reports that reconciliation is queued.
+5. Review the exact tag and choose **Create clan**. The bot refreshes Discord permissions and checks for concurrent changes before saving. OpenFront's public clan statistics endpoint cannot verify a tag, so double-check its spelling in the game.
 6. Run `/clan action:doctor clan_tag:MARS`, then `/clan action:sync clan_tag:MARS` to inspect initial behavior. These slash actions require the selected config role, even if you created the configuration using Manage Server permission.
 
-Draft role/channel changes do not persist until Save. The General, Roles and Logging pages display saved/unsaved status. Back from Roles or Logging retains the draft; Cancel leaves the clan editor and discards it. The config/debug selectors on the Access page save immediately.
+An existing clan saves valid role, log channel, and interval edits immediately. Rank or approval role changes can queue reconciliation. Logging and interval changes preserve the last sync time and avoid extra reconciliation. **Cancel** discards an incomplete new clan draft.
 
 Select an existing clan on the Clans page to edit it. Its selector displays up to 25 clans per page. An existing tag cannot be renamed in place; configure the replacement tag and remove the old configuration if a tag changes. Concurrent edits are rejected rather than silently overwriting saved state. Reopen the clan and reapply the intended changes after a conflict.
 
@@ -79,7 +79,7 @@ Select an existing clan on the Clans page to edit it. Its selector displays up t
 /clan action:setup clan_tag:MARS member_role:@MarsMember officer_role:@MarsOfficer leader_role:@MarsLeader join_role:@Approved log_channel:#clan-log sync_interval:10
 ```
 
-`action:setup` requires the config role, `clan_tag` and `member_role`. It applies the same mapping validation and clan-existence check. **It replaces the whole configuration for that tag.** Omitted optional roles/log channel become empty, and an omitted interval returns to the environment default. Use the menu when changing only one setting.
+`action:setup` requires the config role, `clan_tag` and `member_role`. It applies the same tag format and Discord mapping checks. **It replaces the whole configuration for that tag.** Omitted optional roles/log channel become empty, and an omitted interval returns to the environment default. Use the menu when changing only one setting.
 
 Saved settings can be inspected privately with `/clan action:config clan_tag:MARS`. `/clan action:config` without a tag or page opens the menu; adding `page` requests saved settings instead, three clans per page. Manage Server permission or the config role permits both forms.
 
@@ -192,9 +192,9 @@ It is **not** the full OpenFront clan member list, a list of everyone holding a 
 /clan action:coverage clan_tag:MARS
 ```
 
-Coverage compares linked current human Discord members against all current human members, excluding bots. For each selected clan it compares confirmed linked members here with the public clan size when available. The full clan member list is not publicly exposed, so the fraction is a minimum confirmed linked fraction of the entire clan, not a list of identified missing accounts.
+Coverage compares linked current human Discord members against all current human members, excluding bots. For each selected clan it counts confirmed clan members linked in this server. The public API does not supply the full clan size or roster for this report.
 
-Profile checking is limited to the first 250 linked humans with a 90-second work deadline and up to five concurrent workers. Unavailable/unexamined profiles make clan counts partial. Public results may be cached up to 15 seconds; counts can change while checking, including a confirmed linked count briefly exceeding the reported clan size. Each report page covers up to 10 clans, but its Discord human-link totals cover the server.
+Profile checking is limited to the first 250 linked humans with a 90-second work deadline and up to five concurrent workers. Unavailable or unchecked profiles make clan counts partial. Public results may be cached for up to 15 seconds. Each report page covers up to 10 clans, and its Discord link totals cover the whole server.
 
 After those requests, coverage refreshes server membership and links before calculating its totals. Departed members and removed links no longer contribute; newly linked or reverified identities count as unchecked until another report. If the final membership refresh fails, no report is released.
 
@@ -214,7 +214,7 @@ Audit shows link events recorded for this server, 10 per page: actor, target, ti
 /clan action:doctor clan_tag:MARS page:1
 ```
 
-Doctor refreshes role state and bot permissions, checks normal/managed role restrictions and hierarchy, validates mapping structure, checks log/weekly channel permissions, probes uncached clan information, and reports role queue and history/Elo health. Up to five clans appear per page. It is read-only and does not repair settings, assign roles or clear queued jobs.
+Doctor refreshes role state and bot permissions, validates mappings and hierarchy, checks log and weekly channel permissions, and reports role queue and history/Elo health. For up to five clans shown on a page, it makes one uncached request to sample public clan session history. That checks the endpoint's response for the sample. Use the clan tag shown in OpenFront to verify spelling.
 
 Queued retries count as issues. A role job eligible for over 15 minutes is flagged. A saved clan timestamp older than `max(15 minutes, three configured sync intervals)` is flagged overdue. With no clans configured, API clan reachability cannot be established through this report. General status and issue counts are for the displayed page and current checks.
 
